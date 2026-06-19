@@ -17,7 +17,7 @@ use snaptext_core::{
     ocr::OcrEngine,
     pipeline::{TranslationResult, first_translated_text},
     screenshot::{ImageMeta, Screencap},
-    selection::{SelectionWatcher, normalize_selection_text},
+    selection::{SelectionEvent, SelectionWatcher, normalize_selection_text},
     translate::{TranslateRequest, TranslatorRegistry},
 };
 #[cfg(not(test))]
@@ -983,12 +983,15 @@ async fn retranslate_result_text_inner(
 }
 
 async fn translate_current_selection_inner(state: &AppState) -> Result<HistoryRecord> {
-    let selection = state
-        .selection
-        .current_selection()
-        .await?
-        .ok_or_else(|| Error::Selection("no selected text is available".to_owned()))?;
+    translate_optional_selection_inner(state, state.selection.current_selection().await?).await
+}
 
+async fn translate_optional_selection_inner(
+    state: &AppState,
+    selection: Option<SelectionEvent>,
+) -> Result<HistoryRecord> {
+    let selection =
+        selection.ok_or_else(|| Error::Selection("no selected text is available".to_owned()))?;
     translate_selection_inner(state, selection.text).await
 }
 
@@ -2079,7 +2082,7 @@ mod tests {
         )
         .expect("app state");
 
-        let err = translate_current_selection_inner(&state)
+        let err = translate_optional_selection_inner(&state, None)
             .await
             .expect_err("missing selection");
 
