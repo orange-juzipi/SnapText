@@ -54,7 +54,7 @@ export function HistoryPage() {
         ) : (
           <ol className="grid gap-3">
             {items.map((item) => (
-              <li key={item.id} className="rounded-lg border border-border bg-secondary/45 p-3">
+              <li key={item.id} className="history-record rounded-lg border border-border bg-secondary/45 p-3">
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                   <Badge>{historyItemMeta(item, labels)}</Badge>
                   <Button

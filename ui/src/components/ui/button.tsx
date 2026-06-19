@@ -4,15 +4,15 @@ import type * as React from "react";
 import { cn } from "@/lib/cn";
 
 const buttonVariants = cva(
-  "inline-flex h-9 items-center justify-center gap-2 rounded-md px-3 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-55",
+  "group/snaptext-button inline-flex h-9 items-center justify-center gap-2 rounded-md px-3 text-sm font-semibold transition-[background-color,border-color,box-shadow,color,filter,transform] duration-[var(--motion-base)] ease-[var(--ease-out-quart)] hover:-translate-y-px active:translate-y-0 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring disabled:pointer-events-none disabled:translate-y-0 disabled:scale-100 disabled:opacity-55 [&_svg]:shrink-0 [&_svg]:transition-transform [&_svg]:duration-[var(--motion-fast)] [&_svg]:ease-[var(--ease-out-quart)] hover:[&_svg]:scale-[1.05]",
   {
     variants: {
       variant: {
-        primary: "bg-primary text-primary-foreground hover:bg-primary/90",
-        secondary: "border border-border bg-secondary text-foreground hover:bg-secondary/80",
+        primary: "bg-primary text-primary-foreground hover:bg-primary/90 hover:shadow-xs",
+        secondary: "border border-border bg-secondary text-foreground hover:bg-secondary/80 hover:shadow-xs",
         ghost: "text-muted-foreground hover:bg-secondary hover:text-foreground",
         quiet: "bg-transparent text-foreground hover:bg-secondary",
-        destructive: "bg-destructive text-white hover:bg-destructive/90",
+        destructive: "bg-destructive text-white hover:bg-destructive/90 hover:shadow-xs",
       },
       size: {
         sm: "h-8 px-2.5 text-xs",

@@ -20,7 +20,7 @@ function DropdownMenuContent({
       <DropdownMenuPrimitive.Content
         sideOffset={sideOffset}
         className={cn(
-          "z-50 min-w-44 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md",
+          "snaptext-dropdown-content z-50 min-w-44 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md",
           className,
         )}
         {...props}
@@ -33,7 +33,7 @@ function DropdownMenuItem({ className, inset, ...props }: React.ComponentProps<t
   return (
     <DropdownMenuPrimitive.Item
       className={cn(
-        "relative flex h-8 cursor-default select-none items-center gap-2 rounded px-2 text-sm outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-secondary data-[disabled]:opacity-55",
+        "snaptext-dropdown-item relative flex h-8 cursor-default select-none items-center gap-2 rounded px-2 text-sm outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-secondary data-[disabled]:opacity-55",
         inset && "pl-7",
         className,
       )}
@@ -52,7 +52,7 @@ function DropdownMenuCheckboxItem({
     <DropdownMenuPrimitive.CheckboxItem
       checked={checked}
       className={cn(
-        "relative flex h-8 cursor-default select-none items-center rounded px-2 pl-7 text-sm outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-secondary data-[disabled]:opacity-55",
+        "snaptext-dropdown-item relative flex h-8 cursor-default select-none items-center rounded px-2 pl-7 text-sm outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-secondary data-[disabled]:opacity-55",
         className,
       )}
       {...props}
@@ -75,7 +75,7 @@ function DropdownMenuRadioItem({
   return (
     <DropdownMenuPrimitive.RadioItem
       className={cn(
-        "relative flex h-8 cursor-default select-none items-center rounded px-2 pl-7 text-sm outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-secondary data-[disabled]:opacity-55",
+        "snaptext-dropdown-item relative flex h-8 cursor-default select-none items-center rounded px-2 pl-7 text-sm outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-secondary data-[disabled]:opacity-55",
         className,
       )}
       {...props}
@@ -112,7 +112,7 @@ function DropdownMenuSubTrigger({
   return (
     <DropdownMenuPrimitive.SubTrigger
       className={cn(
-        "flex h-8 cursor-default select-none items-center gap-2 rounded px-2 text-sm outline-none data-[highlighted]:bg-secondary",
+        "snaptext-dropdown-item flex h-8 cursor-default select-none items-center gap-2 rounded px-2 text-sm outline-none data-[highlighted]:bg-secondary",
         inset && "pl-7",
         className,
       )}
@@ -127,7 +127,7 @@ function DropdownMenuSubTrigger({
 function DropdownMenuSubContent({ className, ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.SubContent>) {
   return (
     <DropdownMenuPrimitive.SubContent
-      className={cn("z-50 min-w-40 rounded-md border border-border bg-popover p-1 shadow-md", className)}
+      className={cn("snaptext-dropdown-content z-50 min-w-40 rounded-md border border-border bg-popover p-1 shadow-md", className)}
       {...props}
     />
   );

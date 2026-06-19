@@ -88,7 +88,7 @@ export function OverlayApp() {
           src={`data:image/png;base64,${screenshot.base64_png}`}
         />
       ) : null}
-      <div className="fixed left-3 right-3 top-3 z-10 flex min-h-10 items-center justify-between gap-3 rounded-lg border border-white/15 bg-slate-950/80 px-3 py-2 text-sm text-white">
+      <div className="overlay-status-bar fixed left-3 right-3 top-3 z-10 flex min-h-10 items-center justify-between gap-3 rounded-lg border border-white/15 bg-slate-950/80 px-3 py-2 text-sm text-white">
         <span>{status}</span>
         <Button size="sm" variant="ghost" className="text-white hover:bg-white/10" onClick={handleCancel}>
           {labels.cancel}
@@ -111,7 +111,7 @@ export function OverlayApp() {
       >
         {selection ? (
           <span
-            className="absolute block border-2 border-primary bg-primary/20"
+            className="overlay-selection-box absolute block border-2 border-primary bg-primary/20"
             style={{
               left: selection.x,
               top: selection.y,

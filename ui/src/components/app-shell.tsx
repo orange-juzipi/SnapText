@@ -73,15 +73,34 @@ export function AppShell() {
 
   useEffect(() => {
     const unlisteners: Array<() => void> = [];
-    tauriListen<TranslationResult>(events.resultTranslation, (event) => {
+    let disposed = false;
+
+    const register = <T,>(listener: Promise<() => void>) => {
+      listener
+        .then((unlisten) => {
+          // Tauri listener registration is async. If React has already cleaned
+          // this effect up, immediately detach the late listener so stale
+          // handlers cannot emit old failure toasts after a newer success.
+          if (disposed) {
+            unlisten();
+            return;
+          }
+          unlisteners.push(unlisten);
+        })
+        .catch((error) => {
+          if (!disposed) showError(errorMessage(error));
+        });
+    };
+
+    register(tauriListen<TranslationResult>(events.resultTranslation, (event) => {
       setResultFromTranslation(event.payload);
       setStatus(labels.regionTranslated);
-    }).then((unlisten) => unlisteners.push(unlisten));
-    tauriListen<HistoryRecord>(events.resultSelection, (event) => {
+    }));
+    register(tauriListen<HistoryRecord>(events.resultSelection, (event) => {
       setResultFromHistory(event.payload);
       setStatus(labels.textTranslated);
-    }).then((unlisten) => unlisteners.push(unlisten));
-    tauriListen<SelectionTextPayload>(events.selectionText, (event) => {
+    }));
+    register(tauriListen<SelectionTextPayload>(events.selectionText, (event) => {
       const sourceText = event.payload.text;
       setOcrLoading(false);
       setOcrTextInput(sourceText, "selection");
@@ -97,21 +116,21 @@ export function AppShell() {
           showError(errorMessage(error));
         })
         .finally(() => setTranslating(false));
-    }).then((unlisten) => unlisteners.push(unlisten));
-    tauriListen<SelectionFailurePayload>(events.resultSelectionFailed, (event) => {
+    }));
+    register(tauriListen<SelectionFailurePayload>(events.resultSelectionFailed, (event) => {
       setTranslating(false);
       showError(errorMessage(event.payload.message));
-    }).then((unlisten) => unlisteners.push(unlisten));
-    tauriListen(events.overlayOcrStarted, () => {
+    }));
+    register(tauriListen(events.overlayOcrStarted, () => {
       setOcrLoading(true);
       setTranslating(false);
       setStatus(labels.ocrSelectedRegion);
-    }).then((unlisten) => unlisteners.push(unlisten));
-    tauriListen(events.overlayOcrFailed, () => {
+    }));
+    register(tauriListen(events.overlayOcrFailed, () => {
       setOcrLoading(false);
       setTranslating(false);
-    }).then((unlisten) => unlisteners.push(unlisten));
-    tauriListen<OverlayOcrPayload>(events.overlayOcr, (event) => {
+    }));
+    register(tauriListen<OverlayOcrPayload>(events.overlayOcr, (event) => {
       const sourceText = event.payload.result.source_text;
       setOcrLoading(false);
       setOcrTextInput(sourceText, "screenshot");
@@ -127,11 +146,12 @@ export function AppShell() {
           showError(errorMessage(error));
         })
         .finally(() => setTranslating(false));
-    }).then((unlisten) => unlisteners.push(unlisten));
-    tauriListen<boolean>(events.resultWindowState, (event) => {
+    }));
+    register(tauriListen<boolean>(events.resultWindowState, (event) => {
       setPinned(Boolean(event.payload));
-    }).then((unlisten) => unlisteners.push(unlisten));
+    }));
     return () => {
+      disposed = true;
       unlisteners.forEach((unlisten) => unlisten());
     };
   }, [

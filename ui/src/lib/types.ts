@@ -60,17 +60,9 @@ export type OcrConfig = {
 
 export type SpeechConfig = {
   enabled: boolean;
-  provider: string;
+  english_accent: string;
   rate: number;
   volume: number;
-  coqui: CoquiSpeechConfig;
-};
-
-export type CoquiSpeechConfig = {
-  model_name: string;
-  speaker_wav?: string | null;
-  cache_dir?: string | null;
-  python?: string | null;
 };
 
 export type Region = {
@@ -140,19 +132,6 @@ export type OcrWorkerStatus = {
   paddleocr_available: boolean;
   worker_ready: boolean;
   message: string;
-};
-
-export type TtsWorkerStatus = {
-  python_available: boolean;
-  coqui_available: boolean;
-  worker_ready: boolean;
-  message: string;
-};
-
-export type TtsSynthesisResult = {
-  audio_path: string;
-  provider: string;
-  lang: string;
 };
 
 export type OcrModelStatus = {

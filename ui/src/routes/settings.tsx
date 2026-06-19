@@ -1,17 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Bolt, ClipboardCopy, Keyboard, MonitorCog, Save, ServerCog, Stethoscope, Volume2 } from "lucide-react";
+import { ArrowLeft, Keyboard, MonitorCog, Save, ServerCog, Volume2 } from "lucide-react";
 import { Link } from "@tanstack/react-router";
-import { formatCapabilitiesForClipboard } from "@/lib/format";
 import { labelsForLanguage } from "@/lib/labels";
-import { getDesktopCapabilities } from "@/lib/api";
 import {
-  useCheckOcrWorkerMutation,
-  useCheckTtsWorkerMutation,
   useConfigQuery,
   useUpdateConfigMutation,
 } from "@/lib/queries";
-import { copyText } from "@/lib/tauri";
-import type { AppConfig, DesktopCapabilityStatus } from "@/lib/types";
+import type { AppConfig } from "@/lib/types";
 import { useWorkspaceState } from "@/app/workspace-state";
 import { clientSnapTextCloudEndpoint } from "@/lib/snaptext-cloud";
 import { Badge } from "@/components/ui/badge";
@@ -22,21 +17,15 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 
-type SettingsTab = "interface" | "hotkeys" | "speech" | "provider" | "diagnostics";
+type SettingsTab = "interface" | "hotkeys" | "speech" | "provider";
 
 export function SettingsPage() {
   const configQuery = useConfigQuery();
   const updateConfig = useUpdateConfigMutation();
-  const checkOcrWorker = useCheckOcrWorkerMutation();
-  const checkTtsWorker = useCheckTtsWorkerMutation();
   const workspace = useWorkspaceState();
   const [draft, setDraft] = useState<AppConfig | null>(null);
   const [activeTab, setActiveTab] = useState<SettingsTab>("interface");
-  const [modelStatus, setModelStatus] = useState("尚未检查 OCR Worker");
-  const [ttsStatus, setTtsStatus] = useState("尚未检查 TTS Worker");
-  const [capabilities, setCapabilities] = useState<DesktopCapabilityStatus[]>(
-    [],
-  );
+  const speechEnabled = draft?.speech.enabled ?? false;
   const labels = labelsForLanguage(
     draft?.ui.language ?? configQuery.data?.ui.language,
   );
@@ -70,68 +59,6 @@ export function SettingsPage() {
       );
       setDraft(saved);
       workspace.setStatus(labels.configSaved);
-    } catch (error) {
-      workspace.showError(
-        error instanceof Error ? error.message : String(error),
-      );
-    }
-  }
-
-  async function handleCheckWorker() {
-    try {
-      const report = await checkOcrWorker.mutateAsync();
-      setModelStatus(
-        `python: ${report.python_available}, paddleocr: ${report.paddleocr_available}, worker: ${report.worker_ready}. ${report.message}`,
-      );
-      workspace.setStatus(
-        report.worker_ready
-          ? labels.ocrModelsValidated
-          : labels.ocrModelFilesMissing,
-      );
-    } catch (error) {
-      workspace.showError(
-        error instanceof Error ? error.message : String(error),
-      );
-    }
-  }
-
-  async function handleCheckTtsWorker() {
-    try {
-      const report = await checkTtsWorker.mutateAsync();
-      setTtsStatus(
-        `python: ${report.python_available}, coqui: ${report.coqui_available}, worker: ${report.worker_ready}. ${report.message}`,
-      );
-      workspace.setStatus(
-        report.worker_ready ? labels.ttsWorkerReady : labels.ttsWorkerMissing,
-      );
-    } catch (error) {
-      workspace.showError(
-        error instanceof Error ? error.message : String(error),
-      );
-    }
-  }
-
-  async function handleCapabilities() {
-    try {
-      const items = await getDesktopCapabilities();
-      setCapabilities(items);
-      workspace.setStatus(labels.desktopCapabilitiesChecked);
-    } catch (error) {
-      workspace.showError(
-        error instanceof Error ? error.message : String(error),
-      );
-    }
-  }
-
-  async function handleCopyCapabilities() {
-    const text = formatCapabilitiesForClipboard(capabilities);
-    if (!text) {
-      workspace.showError(labels.noDesktopCapabilitiesToCopy);
-      return;
-    }
-    try {
-      await copyText(text);
-      workspace.setStatus(labels.desktopCapabilitiesCopied);
     } catch (error) {
       workspace.showError(
         error instanceof Error ? error.message : String(error),
@@ -179,12 +106,6 @@ export function SettingsPage() {
             icon={<Volume2 size={16} />}
             label={labels.speech}
             onClick={() => setActiveTab("speech")}
-          />
-          <SettingsTabButton
-            active={activeTab === "diagnostics"}
-            icon={<Stethoscope size={16} />}
-            label={labels.diagnostics}
-            onClick={() => setActiveTab("diagnostics")}
           />
         </nav>
 
@@ -285,44 +206,6 @@ export function SettingsPage() {
           </section>
         ) : null}
 
-        {activeTab === "diagnostics" ? (
-          <section className="settings-block">
-          <div className="settings-actions">
-            <Button onClick={handleCheckWorker}>
-              <Bolt size={16} />
-              {labels.validateModels}
-            </Button>
-            <Button onClick={handleCheckTtsWorker}>
-              <Volume2 size={16} />
-              {labels.checkTtsWorker}
-            </Button>
-            <Button onClick={handleCapabilities}>
-              <Stethoscope size={16} />
-              {labels.checkPermissions}
-            </Button>
-            <Button onClick={handleCopyCapabilities}>
-              <ClipboardCopy size={16} />
-              {labels.copyDiagnostics}
-            </Button>
-          </div>
-          <p className="text-sm text-muted-foreground">{modelStatus}</p>
-          <p className="text-sm text-muted-foreground">{ttsStatus}</p>
-          <ul className="grid gap-2">
-            {capabilities.map((item) => (
-              <li
-                key={item.capability}
-                className="rounded-md border border-border bg-card p-2 text-sm"
-              >
-                <strong>{item.capability}</strong>
-                <p className="text-muted-foreground">
-                  {item.status} - {item.action}
-                </p>
-              </li>
-            ))}
-          </ul>
-          </section>
-        ) : null}
-
         {activeTab === "provider" ? (
           <section className="settings-block">
           <Field>
@@ -336,7 +219,7 @@ export function SettingsPage() {
                 )
               }
             >
-              <option value="snaptext_cloud">SnapText 免费源</option>
+              <option value="snaptext_cloud">SnapText 官方源</option>
               <option value="deepl">DeepL</option>
               <option value="google">Google</option>
             </Select>
@@ -360,8 +243,8 @@ export function SettingsPage() {
 
         {activeTab === "speech" ? (
           <section className="settings-block">
-          <div className="settings-grid">
-            <label className="flex min-h-9 items-center gap-2 text-sm">
+          <div className="settings-grid settings-speech-grid">
+            <label className="settings-toggle-row">
               <Switch
                 checked={draft.speech.enabled}
                 onCheckedChange={(checked) =>
@@ -374,23 +257,25 @@ export function SettingsPage() {
               {labels.speechEnabled}
             </label>
             <Field>
-              <FieldLabel>{labels.speechProvider}</FieldLabel>
+              <FieldLabel>{labels.englishAccent}</FieldLabel>
               <Select
-                value={draft.speech.provider}
+                disabled={!speechEnabled}
+                value={draft.speech.english_accent}
                 onChange={(event) =>
                   updateDraft(
                     setDraft,
-                    (next) => (next.speech.provider = event.target.value),
+                    (next) => (next.speech.english_accent = event.target.value),
                   )
                 }
               >
-                <option value="system">{labels.speechSystem}</option>
-                <option value="coqui">{labels.speechCoqui}</option>
+                <option value="american">{labels.englishAccentAmerican}</option>
+                <option value="british">{labels.englishAccentBritish}</option>
               </Select>
             </Field>
             <Field>
               <FieldLabel>{labels.speechRate}</FieldLabel>
               <Input
+                disabled={!speechEnabled}
                 type="number"
                 min="0.1"
                 max="3"
@@ -407,6 +292,7 @@ export function SettingsPage() {
             <Field>
               <FieldLabel>{labels.speechVolume}</FieldLabel>
               <Input
+                disabled={!speechEnabled}
                 type="number"
                 min="0"
                 max="1"
@@ -416,54 +302,6 @@ export function SettingsPage() {
                   updateDraft(
                     setDraft,
                     (next) => (next.speech.volume = Number(event.target.value)),
-                  )
-                }
-              />
-            </Field>
-            <Field>
-              <FieldLabel>{labels.coquiModelName}</FieldLabel>
-              <Input
-                value={draft.speech.coqui.model_name}
-                onChange={(event) =>
-                  updateDraft(
-                    setDraft,
-                    (next) => (next.speech.coqui.model_name = event.target.value),
-                  )
-                }
-              />
-            </Field>
-            <Field>
-              <FieldLabel>{labels.coquiSpeakerWav}</FieldLabel>
-              <Input
-                value={draft.speech.coqui.speaker_wav ?? ""}
-                onChange={(event) =>
-                  updateDraft(
-                    setDraft,
-                    (next) => (next.speech.coqui.speaker_wav = event.target.value),
-                  )
-                }
-              />
-            </Field>
-            <Field>
-              <FieldLabel>{labels.coquiCacheDir}</FieldLabel>
-              <Input
-                value={draft.speech.coqui.cache_dir ?? ""}
-                onChange={(event) =>
-                  updateDraft(
-                    setDraft,
-                    (next) => (next.speech.coqui.cache_dir = event.target.value),
-                  )
-                }
-              />
-            </Field>
-            <Field>
-              <FieldLabel>{labels.coquiPython}</FieldLabel>
-              <Input
-                value={draft.speech.coqui.python ?? ""}
-                onChange={(event) =>
-                  updateDraft(
-                    setDraft,
-                    (next) => (next.speech.coqui.python = event.target.value),
                   )
                 }
               />
@@ -509,18 +347,6 @@ function ProviderFields({
             }
           />
         </Field>
-        <label className="flex min-h-9 items-center gap-2 text-sm">
-          <Switch
-            checked={draft.translator.snaptext_cloud.enabled}
-            onCheckedChange={(checked) =>
-              updateDraft(
-                setDraft,
-                (next) => (next.translator.snaptext_cloud.enabled = checked),
-              )
-            }
-          />
-          启用 SnapText 免费源
-        </label>
       </div>
     );
   }
@@ -769,8 +595,6 @@ function mergeConfigForTab(tab: SettingsTab, base: AppConfig, draft: AppConfig) 
     case "speech":
       next.speech = structuredClone(draft.speech);
       break;
-    case "diagnostics":
-      break;
   }
   return next;
 }
@@ -796,8 +620,11 @@ function sanitizeConfig(config: AppConfig): AppConfig {
   next.hotkeys.screenshot = next.hotkeys.screenshot.trim();
   next.hotkeys.selection = next.hotkeys.selection.trim();
   next.translator.provider = visibleProvider(next.translator.provider.trim());
-  // SnapText 免费源地址由客户端构建配置决定，设置页不展示地址选择。
+  // SnapText 官方源地址由客户端构建配置决定，设置页不展示地址选择。
   next.translator.snaptext_cloud.endpoint = clientSnapTextCloudEndpoint();
+  // 选择并保存某个翻译服务即表示启用该服务，UI 不再提供额外开关。
+  next.translator.snaptext_cloud.enabled =
+    next.translator.provider === "snaptext_cloud";
   next.translator.snaptext_cloud.device_id =
     next.translator.snaptext_cloud.device_id.trim();
   next.translator.openai_compatible.base_url =
@@ -813,14 +640,10 @@ function sanitizeConfig(config: AppConfig): AppConfig {
   next.translator.google.api_key = optionalTrim(next.translator.google.api_key);
   next.translator.local_http.endpoint =
     next.translator.local_http.endpoint.trim();
-  next.speech.provider = next.speech.provider === "coqui" ? "coqui" : "system";
+  next.speech.english_accent =
+    next.speech.english_accent === "british" ? "british" : "american";
   next.speech.rate = clampNumber(next.speech.rate, 0.1, 3);
   next.speech.volume = clampNumber(next.speech.volume, 0, 1);
-  next.speech.coqui.model_name =
-    next.speech.coqui.model_name.trim() || defaultSpeechConfig().coqui.model_name;
-  next.speech.coqui.speaker_wav = optionalTrim(next.speech.coqui.speaker_wav);
-  next.speech.coqui.cache_dir = optionalTrim(next.speech.coqui.cache_dir);
-  next.speech.coqui.python = optionalTrim(next.speech.coqui.python);
   return next;
 }
 
@@ -834,10 +657,6 @@ function ensureSpeechDefaults(config: AppConfig): AppConfig {
   next.speech = {
     ...defaultSpeechConfig(),
     ...(next.speech ?? {}),
-    coqui: {
-      ...defaultSpeechConfig().coqui,
-      ...(next.speech?.coqui ?? {}),
-    },
   };
   return next;
 }
@@ -845,15 +664,9 @@ function ensureSpeechDefaults(config: AppConfig): AppConfig {
 function defaultSpeechConfig() {
   return {
     enabled: true,
-    provider: "system",
+    english_accent: "american",
     rate: 1,
     volume: 1,
-    coqui: {
-      model_name: "tts_models/multilingual/multi-dataset/xtts_v2",
-      speaker_wav: null,
-      cache_dir: null,
-      python: null,
-    },
   };
 }
 

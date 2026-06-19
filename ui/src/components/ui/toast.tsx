@@ -11,7 +11,7 @@ function Toast({ className, variant = "default", ...props }: ToastProps) {
   return (
     <div
       className={cn(
-        "grid min-w-72 max-w-[min(42rem,calc(100vw-2rem))] gap-1 rounded-lg border border-border bg-card p-3 text-sm shadow-lg",
+        "snaptext-toast grid min-w-72 max-w-[min(42rem,calc(100vw-2rem))] gap-1 rounded-lg border border-border bg-card p-3 text-sm shadow-lg",
         variant === "success" && "border-emerald-200 bg-emerald-50 text-emerald-950",
         variant === "destructive" && "border-red-200 bg-red-50 text-red-950",
         className,

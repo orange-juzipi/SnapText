@@ -9,7 +9,7 @@ export function formatUserError(message: string) {
   if (parsed) return parsed;
 
   if (raw.includes("local SnapText Cloud debug service is unavailable")) {
-    return "本地调试源不可用：请启动本地翻译服务，或切回线上 SnapText 免费源后重启应用。";
+    return "本地调试源不可用：请启动本地翻译服务，或切回线上 SnapText 官方源后重启应用。";
   }
 
   if (raw.includes("provider failed with HTTP")) {
@@ -32,7 +32,7 @@ function parseProviderError(message: string) {
     const detail = payload?.error?.message;
     if (typeof detail === "string") {
       if (detail.includes("localhost:11434")) {
-        return "本地调试源不可用：请启动本地翻译服务，或切回线上 SnapText 免费源后重启应用。";
+        return "本地调试源不可用：请启动本地翻译服务，或切回线上 SnapText 官方源后重启应用。";
       }
       return `翻译服务异常：${detail}`;
     }

@@ -90,7 +90,7 @@ export function translatorProviderLabel(provider?: string) {
     case "local_http":
     case undefined:
     case "":
-      return "SnapText 免费源";
+      return "SnapText 官方源";
     default:
       return provider;
   }
@@ -98,5 +98,5 @@ export function translatorProviderLabel(provider?: string) {
 
 export function translatorProviderDetailLabel(provider?: string, _endpoint?: string) {
   if (provider?.trim() !== "snaptext_cloud") return translatorProviderLabel(provider);
-  return "SnapText 免费源";
+  return "SnapText 官方源";
 }

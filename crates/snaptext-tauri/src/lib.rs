@@ -16,7 +16,7 @@ use snaptext_core::hotkey::HotkeyAction;
 use snaptext_core::selection::ensure_selection_permission;
 use snaptext_core::{
     Error, Result,
-    config::{AppConfig, Lang, ModelDir, SpeechProvider},
+    config::{AppConfig, Lang, ModelDir},
     history::{HistoryRecord, HistorySource, HistoryStore, NewHistoryRecord},
     ocr::OcrEngine,
     pipeline::{TranslationResult, first_translated_text},
@@ -62,11 +62,8 @@ const MAX_IMAGE_PAYLOAD_BYTES: usize = 25 * 1024 * 1024;
 const MAX_IMAGE_PIXELS: u64 = 24_000_000;
 const MAIN_WINDOW_HIDE_SETTLE_MS: u64 = 160;
 const OCR_WORKER_PATH: &str = "python/ocr_worker.py";
-const TTS_WORKER_PATH: &str = "python/tts_worker.py";
 const SNAPTEXT_PYTHON_ENV: &str = "SNAPTEXT_PYTHON";
-const SNAPTEXT_TTS_PYTHON_ENV: &str = "SNAPTEXT_TTS_PYTHON";
 const OCR_VENV_PYTHON: &str = ".venv-ocr/bin/python";
-const TTS_VENV_PYTHON: &str = ".venv-tts/bin/python";
 
 pub struct AppState {
     config_path: Option<PathBuf>,
@@ -183,8 +180,6 @@ pub fn run_tauri(config: AppConfig, history: HistoryStore) -> Result<()> {
             get_desktop_capabilities,
             validate_ocr_models,
             check_ocr_worker,
-            check_tts_worker,
-            synthesize_text,
             translate_image_base64,
             translate_screenshot_base64,
             translate_screenshot_region,
@@ -345,7 +340,7 @@ fn configured_hotkeys(config: &AppConfig) -> Vec<(HotkeyAction, String)> {
 
 #[cfg(not(test))]
 fn configured_hotkey_routes(config: &AppConfig) -> Result<HashMap<u32, HotkeyAction>> {
-    configured_hotkeys(&config)
+    configured_hotkeys(config)
         .into_iter()
         .map(|(action, shortcut)| {
             // Route by the plugin's stable event id. This avoids comparing user-facing
@@ -468,23 +463,6 @@ fn validate_ocr_models(state: State<'_, AppState>) -> Result<OcrModelStatus> {
 #[allow(dead_code)]
 fn check_ocr_worker(state: State<'_, AppState>) -> OcrWorkerStatus {
     check_ocr_worker_inner(state.inner())
-}
-
-#[tauri::command]
-#[allow(dead_code)]
-fn check_tts_worker(state: State<'_, AppState>) -> TtsWorkerStatus {
-    check_tts_worker_inner(state.inner())
-}
-
-#[tauri::command]
-#[allow(dead_code)]
-fn synthesize_text(
-    state: State<'_, AppState>,
-    text: String,
-    lang: String,
-    provider: Option<String>,
-) -> Result<TtsSynthesisResult> {
-    synthesize_text_inner(state.inner(), text, lang, provider)
 }
 
 #[tauri::command]
@@ -1744,235 +1722,6 @@ pub struct OcrWorkerStatus {
     pub message: String,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct TtsWorkerStatus {
-    pub python_available: bool,
-    pub coqui_available: bool,
-    pub worker_ready: bool,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct TtsSynthesisResult {
-    pub audio_path: String,
-    pub provider: String,
-    pub lang: String,
-}
-
-fn synthesize_text_inner(
-    state: &AppState,
-    text: String,
-    lang: String,
-    provider: Option<String>,
-) -> Result<TtsSynthesisResult> {
-    let text = text.trim();
-    if text.is_empty() {
-        return Err(Error::Speech("speech text cannot be empty".to_owned()));
-    }
-
-    let config = state
-        .config
-        .read()
-        .map_err(|err| Error::Config(err.to_string()))?
-        .speech
-        .clone();
-    if !config.enabled {
-        return Err(Error::Speech("speech is disabled".to_owned()));
-    }
-
-    let requested_provider = provider.unwrap_or_else(|| provider_name(&config.provider).to_owned());
-    if requested_provider != "coqui" {
-        return Err(Error::Speech(format!(
-            "native synthesis only supports coqui, got {requested_provider}"
-        )));
-    }
-
-    let worker_path = resolve_tts_worker_path(state);
-    let tempdir = tempfile::Builder::new()
-        .prefix("snaptext-tts-")
-        .tempdir()
-        .map_err(|err| Error::Speech(format!("failed to create TTS temp dir: {err}")))?;
-    let out_path = tempdir.keep().join("speech.wav");
-    run_tts_worker(state, &worker_path, text, lang.trim(), &out_path)?;
-    Ok(TtsSynthesisResult {
-        audio_path: out_path.display().to_string(),
-        provider: "coqui".to_owned(),
-        lang: lang.trim().to_owned(),
-    })
-}
-
-fn resolve_tts_worker_path(state: &AppState) -> PathBuf {
-    if let Ok(path) = std::env::var("SNAPTEXT_TTS_WORKER") {
-        let path = PathBuf::from(path);
-        if path.is_file() {
-            return path;
-        }
-    }
-    state
-        .resource_dir
-        .as_deref()
-        .map(|dir| dir.join(TTS_WORKER_PATH))
-        .filter(|path| path.is_file())
-        .unwrap_or_else(|| PathBuf::from(TTS_WORKER_PATH))
-}
-
-fn run_tts_worker(
-    state: &AppState,
-    worker_path: &Path,
-    text: &str,
-    lang: &str,
-    out_path: &Path,
-) -> Result<()> {
-    let config = state
-        .config
-        .read()
-        .map_err(|err| Error::Config(err.to_string()))?
-        .speech
-        .clone();
-    let mut command = Command::new(resolve_tts_python_command(state));
-    command
-        .arg(worker_path)
-        .arg("--text")
-        .arg(text)
-        .arg("--lang")
-        .arg(lang)
-        .arg("--out")
-        .arg(out_path)
-        .arg("--model")
-        .arg(&config.coqui.model_name);
-    if let Some(speaker_wav) = config.coqui.speaker_wav.as_deref() {
-        command.arg("--speaker-wav").arg(speaker_wav);
-    }
-    if let Some(cache_dir) = config.coqui.cache_dir.as_deref() {
-        command.arg("--cache-dir").arg(cache_dir);
-    }
-    let output = command
-        .output()
-        .map_err(|err| Error::Speech(format!("failed to start TTS worker: {err}")))?;
-    parse_tts_worker_output(output, out_path)
-}
-
-fn parse_tts_worker_output(output: std::process::Output, expected_path: &Path) -> Result<()> {
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let message = ocr_worker_error_message(&stderr, &stdout);
-        return Err(Error::Speech(format!("TTS worker failed: {message}")));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let result_json = last_json_stdout_line(&stdout)
-        .ok_or_else(|| Error::Speech("TTS worker did not return JSON output.".to_owned()))?;
-    let payload: serde_json::Value = serde_json::from_str(result_json)
-        .map_err(|err| Error::Speech(format!("TTS worker returned invalid JSON: {err}")))?;
-    let audio_path = payload
-        .get("audio_path")
-        .and_then(|value| value.as_str())
-        .ok_or_else(|| Error::Speech("TTS worker JSON omitted audio_path.".to_owned()))?;
-    if Path::new(audio_path) != expected_path {
-        return Err(Error::Speech(
-            "TTS worker returned an unexpected audio path.".to_owned(),
-        ));
-    }
-    if !expected_path.is_file() {
-        return Err(Error::Speech(
-            "TTS worker did not create the audio file.".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-fn check_tts_worker_inner(state: &AppState) -> TtsWorkerStatus {
-    let worker_path = resolve_tts_worker_path(state);
-    let python = resolve_tts_python_command(state);
-    let config = match state.config.read() {
-        Ok(config) => config.speech.clone(),
-        Err(err) => {
-            return TtsWorkerStatus {
-                python_available: false,
-                coqui_available: false,
-                worker_ready: false,
-                message: err.to_string(),
-            };
-        }
-    };
-    let mut command = Command::new(&python);
-    command
-        .arg(&worker_path)
-        .arg("--check")
-        .arg("--model")
-        .arg(&config.coqui.model_name);
-    if let Some(cache_dir) = config.coqui.cache_dir.as_deref() {
-        command.arg("--cache-dir").arg(cache_dir);
-    }
-    let output = command.output();
-
-    match output {
-        Err(err) => TtsWorkerStatus {
-            python_available: false,
-            coqui_available: false,
-            worker_ready: false,
-            message: format!("failed to start `{python}`: {err}"),
-        },
-        Ok(output) if output.status.success() => {
-            serde_json::from_slice(&output.stdout).unwrap_or(TtsWorkerStatus {
-                python_available: true,
-                coqui_available: false,
-                worker_ready: false,
-                message: String::from("TTS worker returned invalid status JSON."),
-            })
-        }
-        Ok(output) => TtsWorkerStatus {
-            python_available: true,
-            coqui_available: false,
-            worker_ready: false,
-            message: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-        },
-    }
-}
-
-fn resolve_tts_python_command(state: &AppState) -> String {
-    if let Some(python) = state
-        .config
-        .read()
-        .ok()
-        .and_then(|config| config.speech.coqui.python.clone())
-        .filter(|value| !value.trim().is_empty())
-    {
-        return python;
-    }
-    if let Some(python) = std::env::var(SNAPTEXT_TTS_PYTHON_ENV)
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-    {
-        return python;
-    }
-    if let Some(python) = discover_project_tts_python(state) {
-        return python.display().to_string();
-    }
-    resolve_python_command(state)
-}
-
-fn discover_project_tts_python(state: &AppState) -> Option<PathBuf> {
-    let from_resource_dir = state
-        .resource_dir
-        .as_deref()
-        .and_then(|dir| find_named_venv_python_from(dir, TTS_VENV_PYTHON));
-    if from_resource_dir.is_some() {
-        return from_resource_dir;
-    }
-
-    std::env::current_dir()
-        .ok()
-        .and_then(|current_dir| find_named_venv_python_from(&current_dir, TTS_VENV_PYTHON))
-}
-
-fn provider_name(provider: &SpeechProvider) -> &'static str {
-    match provider {
-        SpeechProvider::System => "system",
-        SpeechProvider::Coqui => "coqui",
-    }
-}
-
 fn get_config_inner(state: &AppState) -> Result<AppConfig> {
     state
         .config
@@ -2127,11 +1876,6 @@ fn desktop_capabilities(state: &AppState) -> Vec<DesktopCapabilityStatus> {
             status: ocr_worker_capability_status(state),
             action: ocr_worker_capability_action(state),
         },
-        DesktopCapabilityStatus {
-            capability: String::from("tts_worker"),
-            status: tts_worker_capability_status(state),
-            action: tts_worker_capability_action(state),
-        },
     ]
 }
 
@@ -2243,31 +1987,6 @@ fn ocr_worker_capability_action(state: &AppState) -> String {
     } else {
         format!(
             "{} Install the official PaddleOCR Python dependencies, for example: pip install paddleocr paddlepaddle",
-            status.message
-        )
-    }
-}
-
-fn tts_worker_capability_status(state: &AppState) -> String {
-    let status = check_tts_worker_inner(state);
-    if status.worker_ready {
-        String::from("ready")
-    } else if !status.python_available {
-        String::from("python_missing")
-    } else if !status.coqui_available {
-        String::from("coqui_missing")
-    } else {
-        String::from("error")
-    }
-}
-
-fn tts_worker_capability_action(state: &AppState) -> String {
-    let status = check_tts_worker_inner(state);
-    if status.worker_ready {
-        status.message
-    } else {
-        format!(
-            "{} Install the Coqui TTS Python dependency, for example: pip install coqui-tts",
             status.message
         )
     }
@@ -2690,7 +2409,6 @@ mod tests {
         assert!(names.contains(&"selection"));
         assert!(names.contains(&"global_hotkey"));
         assert!(names.contains(&"ocr_worker"));
-        assert!(names.contains(&"tts_worker"));
         assert!(
             !capabilities
                 .iter()
@@ -2731,87 +2449,6 @@ mod tests {
         assert!(status.python_available);
         assert!(status.paddleocr_available);
         assert!(status.worker_ready);
-    }
-
-    #[test]
-    fn check_tts_worker_accepts_fake_worker_mode() {
-        let state = AppState::new(
-            AppConfig::default(),
-            HistoryStore::in_memory().expect("history store"),
-        )
-        .expect("app state");
-        let worker = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join(TTS_WORKER_PATH);
-        unsafe {
-            std::env::set_var("SNAPTEXT_TTS_FAKE_OUTPUT", "{}");
-            std::env::set_var("SNAPTEXT_TTS_WORKER", worker);
-        }
-
-        let status = check_tts_worker_inner(&state);
-
-        unsafe {
-            std::env::remove_var("SNAPTEXT_TTS_FAKE_OUTPUT");
-            std::env::remove_var("SNAPTEXT_TTS_WORKER");
-        }
-        assert!(status.python_available);
-        assert!(status.coqui_available);
-        assert!(status.worker_ready);
-    }
-
-    #[test]
-    fn synthesize_text_rejects_empty_text() {
-        let state = AppState::new(
-            AppConfig::default(),
-            HistoryStore::in_memory().expect("history store"),
-        )
-        .expect("app state");
-
-        let err = synthesize_text_inner(&state, "  ".to_owned(), "en".to_owned(), None)
-            .expect_err("empty speech text");
-
-        assert!(err.to_string().contains("speech text cannot be empty"));
-    }
-
-    #[test]
-    fn synthesize_text_accepts_fake_worker_mode() {
-        let mut config = AppConfig::default();
-        config.speech.provider = SpeechProvider::Coqui;
-        let state = AppState::new(config, HistoryStore::in_memory().expect("history store"))
-            .expect("app state");
-        let worker = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join(TTS_WORKER_PATH);
-        unsafe {
-            std::env::set_var("SNAPTEXT_TTS_FAKE_OUTPUT", "{}");
-            std::env::set_var("SNAPTEXT_TTS_WORKER", worker);
-        }
-
-        let result = synthesize_text_inner(&state, "hello".to_owned(), "en".to_owned(), None)
-            .expect("fake synthesis");
-
-        unsafe {
-            std::env::remove_var("SNAPTEXT_TTS_FAKE_OUTPUT");
-            std::env::remove_var("SNAPTEXT_TTS_WORKER");
-        }
-        assert_eq!(result.provider, "coqui");
-        assert!(std::path::Path::new(&result.audio_path).is_file());
-    }
-
-    #[test]
-    fn parse_tts_worker_output_rejects_invalid_json() {
-        let output = std::process::Output {
-            status: success_exit_status(),
-            stdout: b"not json\n".to_vec(),
-            stderr: Vec::new(),
-        };
-        let err = parse_tts_worker_output(output, std::path::Path::new("/tmp/missing.wav"))
-            .expect_err("invalid worker JSON");
-
-        assert!(
-            err.to_string()
-                .contains("TTS worker did not return JSON output")
-        );
     }
 
     #[tokio::test]
@@ -3146,19 +2783,5 @@ mod tests {
             mac_screenshot_selection_error(Some(1), b"permission denied\n"),
             "screenshot selection failed: permission denied"
         );
-    }
-
-    #[cfg(unix)]
-    fn success_exit_status() -> std::process::ExitStatus {
-        use std::os::unix::process::ExitStatusExt;
-
-        std::process::ExitStatus::from_raw(0)
-    }
-
-    #[cfg(windows)]
-    fn success_exit_status() -> std::process::ExitStatus {
-        use std::os::windows::process::ExitStatusExt;
-
-        std::process::ExitStatus::from_raw(0)
     }
 }

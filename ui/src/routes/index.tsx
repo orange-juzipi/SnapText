@@ -1,14 +1,14 @@
-import { ArrowRight, Copy, Languages, Pin, RefreshCw, ScanText, Square, Volume2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import type * as React from "react";
+import { Copy, Languages, Pin, ScanText, Volume2 } from "lucide-react";
 import { startScreenshotOverlay, unpinResultWindow } from "@/lib/api";
-import { sourceLabel, translatorProviderDetailLabel } from "@/lib/format";
 import { labelsForLanguage } from "@/lib/labels";
 import { AUTO_TARGET_LANG, resolveSourceSpeechLang, resolveTargetLang } from "@/lib/language";
 import { errorMessage } from "@/lib/errors";
-import { speakText, stopSpeech } from "@/lib/speech";
+import { isSpeechSupported, speakText, stopSpeech } from "@/lib/speech";
 import {
   useConfigQuery,
   usePinResultMutation,
-  useRetranslateMutation,
   useTranslateTextMutation,
 } from "@/lib/queries";
 import { copyText } from "@/lib/tauri";
@@ -18,6 +18,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+
+type SpeechAccent = "american" | "british";
 
 export function WorkspacePage() {
   const configQuery = useConfigQuery();
@@ -25,8 +28,17 @@ export function WorkspacePage() {
   const workspace = useWorkspaceState();
 
   const translateTextMutation = useTranslateTextMutation();
-  const retranslateMutation = useRetranslateMutation();
   const pinMutation = usePinResultMutation();
+  const [activeSpeechKey, setActiveSpeechKey] = useState<string | null>(null);
+  const speechReady =
+    Boolean(configQuery.data) && isSpeechSupported(configQuery.data?.speech);
+
+  useEffect(() => {
+    if (speechReady || !activeSpeechKey) return;
+    // 语音配置关闭后立即停止当前朗读，避免系统朗读继续播放。
+    stopSpeech();
+    setActiveSpeechKey(null);
+  }, [activeSpeechKey, speechReady]);
 
   async function handleTranslateText() {
     if (!workspace.textInput.trim()) {
@@ -62,26 +74,6 @@ export function WorkspacePage() {
     }
   }
 
-  async function handleRetranslate() {
-    if (!workspace.lastRequest) {
-      workspace.showError(labels.noSourceTextForRetranslation);
-      return;
-    }
-    try {
-      workspace.setTranslating(true);
-      const record = await retranslateMutation.mutateAsync({
-        ...workspace.lastRequest,
-        target_lang: resolveTargetLang(workspace.lastRequest.source_text, workspace.targetLang),
-      });
-      workspace.setResultSnapshot(record);
-      workspace.setStatus(labels.resultRetranslated);
-    } catch (error) {
-      workspace.showError(errorMessage(error));
-    } finally {
-      workspace.setTranslating(false);
-    }
-  }
-
   async function handleCopyResult() {
     if (!workspace.snapshot.result.trim()) {
       workspace.showError(labels.noResultToCopy);
@@ -96,17 +88,80 @@ export function WorkspacePage() {
     }
   }
 
-  async function handleSpeak(text: string, lang: string) {
+  async function handleSpeak(text: string, lang: string, key: string, accent?: SpeechAccent) {
     if (!text.trim()) {
       workspace.showError(labels.noSpeechText);
       return;
     }
+    if (!speechReady) {
+      workspace.showError(
+        configQuery.data?.speech.enabled === false
+          ? labels.speechDisabled
+          : labels.speechUnsupported,
+      );
+      return;
+    }
+    if (activeSpeechKey === key) {
+      stopSpeech();
+      setActiveSpeechKey(null);
+      return;
+    }
     try {
-      await speakText({ text, lang, config: configQuery.data?.speech });
+      setActiveSpeechKey(key);
+      await speakText({
+        text,
+        lang,
+        config: configQuery.data?.speech,
+        englishAccent: accent,
+        onEnd: () => setActiveSpeechKey((current) => (current === key ? null : current)),
+        onError: () => setActiveSpeechKey((current) => (current === key ? null : current)),
+      });
       workspace.setStatus(labels.speechStarted);
     } catch (error) {
+      setActiveSpeechKey((current) => (current === key ? null : current));
       workspace.showError(errorMessage(error));
     }
+  }
+
+  function renderSpeechButtons(text: string, lang: string, scope: "source" | "translation", label: string) {
+    const disabled = !speechReady || !text.trim();
+    const tooltipLabel = !text.trim()
+      ? labels.noSpeechText
+      : configQuery.data?.speech.enabled === false
+        ? labels.speechEnableToPlay
+        : !speechReady
+          ? labels.speechUnsupported
+          : label;
+    if (lang === "en") {
+      return (
+        <>
+          <SpeechButton
+            active={activeSpeechKey === `${scope}:american`}
+            accentLabel="美"
+            ariaLabel={disabled ? tooltipLabel : `${label}：美式发音`}
+            disabled={disabled}
+            tooltipLabel={disabled ? tooltipLabel : undefined}
+            onClick={() => handleSpeak(text, lang, `${scope}:american`, "american")}
+          />
+          <SpeechButton
+            active={activeSpeechKey === `${scope}:british`}
+            accentLabel="英"
+            ariaLabel={disabled ? tooltipLabel : `${label}：英式发音`}
+            disabled={disabled}
+            tooltipLabel={disabled ? tooltipLabel : undefined}
+            onClick={() => handleSpeak(text, lang, `${scope}:british`, "british")}
+          />
+        </>
+      );
+    }
+    return (
+      <SpeechButton
+        active={activeSpeechKey === `${scope}:default`}
+        ariaLabel={tooltipLabel}
+        disabled={disabled}
+        onClick={() => handleSpeak(text, lang, `${scope}:default`)}
+      />
+    );
   }
 
   async function handleTogglePin() {
@@ -133,28 +188,29 @@ export function WorkspacePage() {
     <section className="workspace-grid">
       <section className="workspace-panel">
         <div className="workspace-panel-toolbar">
-          <Badge variant="primary">Source</Badge>
-          <div className="workspace-actions">
-            <Button
-              onClick={() => handleSpeak(workspace.textInput, resolveSourceSpeechLang(workspace.textInput))}
-              variant="secondary"
-              aria-label={labels.playSource}
+          <div className="workspace-badge-row">
+            <Badge variant="primary">Source</Badge>
+            <IconTooltipButton
+              disabled={pinMutation.isPending}
+              label={workspace.pinned ? labels.unpin : labels.pin}
+              onClick={handleTogglePin}
             >
-              <Volume2 size={16} />
-              {labels.playSource}
-            </Button>
-            <Button onClick={stopSpeech} variant="secondary" aria-label={labels.stopSpeech}>
-              <Square size={16} />
-            </Button>
-            <Button onClick={handleStartOverlay} variant="secondary">
+              <Pin size={16} />
+            </IconTooltipButton>
+          </div>
+          <div className="workspace-actions">
+            {renderSpeechButtons(
+              workspace.textInput,
+              resolveSourceSpeechLang(workspace.textInput),
+              "source",
+              labels.playSource,
+            )}
+            <IconTooltipButton label={labels.startOverlay} onClick={handleStartOverlay}>
               <ScanText size={16} />
-              {labels.startOverlay}
-            </Button>
-            <Button onClick={handleTranslateText} variant="primary">
+            </IconTooltipButton>
+            <IconTooltipButton label={labels.translateText} onClick={handleTranslateText} variant="primary">
               <Languages size={16} />
-              {labels.translateText}
-              <ArrowRight size={15} />
-            </Button>
+            </IconTooltipButton>
           </div>
         </div>
         <Textarea
@@ -179,13 +235,6 @@ export function WorkspacePage() {
         <div className="workspace-panel-toolbar">
           <div className="workspace-badge-row">
             <Badge variant="success">Translation</Badge>
-            <span className="workspace-source-label">
-              {sourceLabel(workspace.snapshot.sourceKind, labels)} ·{" "}
-              {translatorProviderDetailLabel(
-                configQuery.data?.translator.provider,
-                configQuery.data?.translator.snaptext_cloud.endpoint,
-              )}
-            </span>
             <Select
               className="workspace-target-select"
               value={workspace.targetLang}
@@ -204,32 +253,15 @@ export function WorkspacePage() {
             </Select>
           </div>
           <div className="workspace-actions">
-            <Button
-              onClick={() => handleSpeak(workspace.snapshot.result, workspace.snapshot.targetLang || workspace.targetLang)}
-              variant="secondary"
-              aria-label={labels.playTranslation}
-            >
-              <Volume2 size={16} />
-              {labels.playTranslation}
-            </Button>
-            {workspace.lastRequest ? (
-              <Button
-                disabled={workspace.translating || retranslateMutation.isPending}
-                onClick={handleRetranslate}
-                variant="secondary"
-              >
-                <RefreshCw size={16} />
-                {labels.retranslate}
-              </Button>
-            ) : null}
-            <Button onClick={handleCopyResult} variant="primary">
+            {renderSpeechButtons(
+              workspace.snapshot.result,
+              workspace.snapshot.targetLang || workspace.targetLang,
+              "translation",
+              labels.playTranslation,
+            )}
+            <IconTooltipButton label={labels.copy} onClick={handleCopyResult} variant="primary">
               <Copy size={16} />
-              {labels.copy}
-            </Button>
-            <Button disabled={pinMutation.isPending} onClick={handleTogglePin} variant="secondary">
-              <Pin size={16} />
-              {workspace.pinned ? labels.unpin : labels.pin}
-            </Button>
+            </IconTooltipButton>
           </div>
         </div>
         <Textarea
@@ -245,6 +277,72 @@ export function WorkspacePage() {
   function setTextResult(record: HistoryRecord) {
     workspace.setResultFromHistory(record);
   }
+}
+
+function SpeechButton({
+  active,
+  accentLabel,
+  ariaLabel,
+  disabled,
+  onClick,
+  tooltipLabel,
+}: {
+  active: boolean;
+  accentLabel?: string;
+  ariaLabel: string;
+  disabled: boolean;
+  onClick: () => void;
+  tooltipLabel?: string;
+}) {
+  return (
+    <IconTooltipButton
+      onClick={onClick}
+      label={tooltipLabel ?? ariaLabel}
+      variant={active ? "primary" : "secondary"}
+      size={accentLabel ? "sm" : "icon"}
+      disabled={disabled}
+    >
+      <Volume2 size={16} />
+      {accentLabel ? <span>{accentLabel}</span> : null}
+    </IconTooltipButton>
+  );
+}
+
+function IconTooltipButton({
+  children,
+  disabled,
+  label,
+  onClick,
+  size = "icon",
+  variant = "secondary",
+}: {
+  children: React.ReactNode;
+  disabled?: boolean;
+  label: string;
+  onClick: () => void;
+  size?: React.ComponentProps<typeof Button>["size"];
+  variant?: React.ComponentProps<typeof Button>["variant"];
+}) {
+  const button = (
+    <Button
+      aria-label={label}
+      disabled={disabled}
+      onClick={onClick}
+      size={size}
+      variant={variant}
+    >
+      {children}
+    </Button>
+  );
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        {disabled ? <span className="inline-flex cursor-not-allowed">{button}</span> : button}
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  );
 }
 
 function isScreenshotSelectionCancelled(error: unknown) {

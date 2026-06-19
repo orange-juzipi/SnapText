@@ -172,48 +172,32 @@ pub struct LocalHttpConfig {
 #[serde(rename_all = "snake_case")]
 pub struct SpeechConfig {
     pub enabled: bool,
-    pub provider: SpeechProvider,
+    #[serde(default = "default_english_accent")]
+    pub english_accent: EnglishAccent,
     pub rate: f32,
     pub volume: f32,
-    pub coqui: CoquiSpeechConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum SpeechProvider {
-    System,
-    Coqui,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CoquiSpeechConfig {
-    pub model_name: String,
-    pub speaker_wav: Option<String>,
-    pub cache_dir: Option<String>,
-    pub python: Option<String>,
+pub enum EnglishAccent {
+    American,
+    British,
 }
 
 impl Default for SpeechConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            provider: SpeechProvider::System,
+            english_accent: EnglishAccent::American,
             rate: 1.0,
             volume: 1.0,
-            coqui: CoquiSpeechConfig::default(),
         }
     }
 }
 
-impl Default for CoquiSpeechConfig {
-    fn default() -> Self {
-        Self {
-            model_name: "tts_models/multilingual/multi-dataset/xtts_v2".to_owned(),
-            speaker_wav: None,
-            cache_dir: None,
-            python: None,
-        }
-    }
+fn default_english_accent() -> EnglishAccent {
+    EnglishAccent::American
 }
 
 impl Default for AppConfig {
@@ -226,8 +210,8 @@ impl Default for AppConfig {
                 result_panel_dock: ResultPanelDock::Cursor,
             },
             hotkeys: HotkeyConfig {
-                screenshot: "CmdOrCtrl+Shift+T".to_owned(),
-                selection: "CmdOrCtrl+Shift+D".to_owned(),
+                screenshot: "Alt+W".to_owned(),
+                selection: "Alt+E".to_owned(),
             },
             translator: TranslatorConfig {
                 provider: TranslatorProvider::SnapTextCloud,
@@ -537,12 +521,6 @@ fn validate_speech_config(config: &SpeechConfig) -> Result<()> {
             "speech volume must be between 0.0 and 1.0".to_owned(),
         ));
     }
-    if matches!(config.provider, SpeechProvider::Coqui) && config.coqui.model_name.trim().is_empty()
-    {
-        return Err(Error::Config(
-            "Coqui speech model name cannot be empty".to_owned(),
-        ));
-    }
     Ok(())
 }
 
@@ -577,21 +555,7 @@ fn normalize_model_dir(model_dir: ModelDir) -> ModelDir {
 fn normalize_speech_config(mut config: SpeechConfig) -> SpeechConfig {
     config.rate = config.rate.clamp(0.1, 3.0);
     config.volume = config.volume.clamp(0.0, 1.0);
-    config.coqui.model_name = config.coqui.model_name.trim().to_owned();
-    if config.coqui.model_name.is_empty() {
-        config.coqui.model_name = CoquiSpeechConfig::default().model_name;
-    }
-    trim_optional_path_like(&mut config.coqui.speaker_wav);
-    trim_optional_path_like(&mut config.coqui.cache_dir);
-    trim_optional_path_like(&mut config.coqui.python);
     config
-}
-
-fn trim_optional_path_like(value: &mut Option<String>) {
-    *value = value
-        .take()
-        .map(|text| text.trim().to_owned())
-        .filter(|text| !text.is_empty());
 }
 
 fn normalize_translator_provider(provider: TranslatorProvider) -> TranslatorProvider {
@@ -645,15 +609,11 @@ mod tests {
     fn default_config_has_plan_hotkeys() {
         let config = AppConfig::default();
 
-        assert_eq!(config.hotkeys.screenshot, "CmdOrCtrl+Shift+T");
-        assert_eq!(config.hotkeys.selection, "CmdOrCtrl+Shift+D");
+        assert_eq!(config.hotkeys.screenshot, "Alt+W");
+        assert_eq!(config.hotkeys.selection, "Alt+E");
         assert_eq!(config.target_lang, Lang("zh_cn".to_owned()));
         assert_eq!(config.ui.language, UiLanguage::ZhCn);
-        assert_eq!(config.speech.provider, SpeechProvider::System);
-        assert_eq!(
-            config.speech.coqui.model_name,
-            CoquiSpeechConfig::default().model_name
-        );
+        assert_eq!(config.speech.english_accent, EnglishAccent::American);
         assert_eq!(
             config.translator.snaptext_cloud.endpoint,
             snaptext_cloud_production_endpoint()
@@ -686,8 +646,6 @@ mod tests {
         config.ocr.model_dir = ModelDir::Custom(PathBuf::from(" ./models "));
         config.speech.rate = 4.0;
         config.speech.volume = -1.0;
-        config.speech.coqui.model_name = " test-model ".to_owned();
-        config.speech.coqui.speaker_wav = Some(" ./voice.wav ".to_owned());
 
         let normalized = config.normalized_for_save();
 
@@ -710,11 +668,6 @@ mod tests {
         );
         assert_eq!(normalized.speech.rate, 3.0);
         assert_eq!(normalized.speech.volume, 0.0);
-        assert_eq!(normalized.speech.coqui.model_name, "test-model");
-        assert_eq!(
-            normalized.speech.coqui.speaker_wav.as_deref(),
-            Some("./voice.wav")
-        );
     }
 
     #[test]
@@ -748,14 +701,9 @@ ocr:
   use_gpu: false
 speech:
   enabled: true
-  provider: coqui
+  english_accent: british
   rate: 1.5
   volume: 0.8
-  coqui:
-    model_name: " test-model "
-    speaker_wav: " ./voice.wav "
-    cache_dir: " ./tts-cache "
-    python: " python3 "
 "#;
         std::fs::write(&config_path, yaml).expect("write config");
 
@@ -778,14 +726,9 @@ speech:
             loaded.ocr.model_dir,
             ModelDir::Custom(PathBuf::from("./models"))
         );
-        assert_eq!(loaded.speech.provider, SpeechProvider::Coqui);
+        assert_eq!(loaded.speech.english_accent, EnglishAccent::British);
         assert_eq!(loaded.speech.rate, 1.5);
         assert_eq!(loaded.speech.volume, 0.8);
-        assert_eq!(loaded.speech.coqui.model_name, "test-model");
-        assert_eq!(
-            loaded.speech.coqui.speaker_wav.as_deref(),
-            Some("./voice.wav")
-        );
 
         loaded.save(Some(config_path.clone())).expect("save config");
         let saved = std::fs::read_to_string(config_path).expect("saved config");
@@ -796,8 +739,7 @@ speech:
         assert!(saved.contains("selection: Alt+F8"));
         assert!(saved.contains("api_key: sk-test"));
         assert!(saved.contains("model: gpt-test"));
-        assert!(saved.contains("provider: coqui"));
-        assert!(saved.contains("model_name: test-model"));
+        assert!(saved.contains("english_accent: british"));
         assert!(!saved.contains("\" fr \""));
         assert!(!saved.contains("\" sk-test \""));
     }
@@ -1004,7 +946,7 @@ ocr:
     #[test]
     fn validate_rejects_duplicate_hotkeys() {
         let mut config = AppConfig::default();
-        config.hotkeys.selection = "  cmdorctrl+shift+t  ".to_owned();
+        config.hotkeys.selection = "  alt+w  ".to_owned();
 
         let err = config.validate().expect_err("duplicate hotkey");
 

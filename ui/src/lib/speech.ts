@@ -1,21 +1,20 @@
-import { synthesizeText } from "@/lib/api";
 import type { SpeechConfig } from "@/lib/types";
 
 type SpeakTextInput = {
   text: string;
   lang: string;
   config?: SpeechConfig;
+  englishAccent?: string;
+  onEnd?: () => void;
+  onError?: () => void;
 };
-
-let activeAudio: HTMLAudioElement | null = null;
 
 export function isSpeechSupported(config?: SpeechConfig) {
   if (config?.enabled === false) return false;
-  if (config?.provider === "coqui") return true;
   return typeof window !== "undefined" && "speechSynthesis" in window && "SpeechSynthesisUtterance" in window;
 }
 
-export async function speakText({ text, lang, config }: SpeakTextInput) {
+export async function speakText({ text, lang, config, englishAccent, onEnd, onError }: SpeakTextInput) {
   const source = text.trim();
   if (!source) {
     throw new Error("没有可播放的文本");
@@ -25,45 +24,33 @@ export async function speakText({ text, lang, config }: SpeakTextInput) {
   }
 
   stopSpeech();
-  if (config?.provider === "coqui") {
-    try {
-      await speakWithCoqui(source, lang, config);
-      return;
-    } catch (error) {
-      // Coqui 是可选本地引擎；失败时退回系统朗读，避免 UI 整体不可用。
-      if (!canUseSystemSpeech()) throw error;
-    }
-  }
-  speakWithSystem(source, lang, config);
+  speakWithSystem(source, lang, config, englishAccent, onEnd, onError);
 }
 
 export function stopSpeech() {
-  if (activeAudio) {
-    activeAudio.pause();
-    activeAudio.src = "";
-    activeAudio = null;
-  }
   if (canUseSystemSpeech()) {
     window.speechSynthesis.cancel();
   }
 }
 
-async function speakWithCoqui(text: string, lang: string, config: SpeechConfig) {
-  const result = await synthesizeText(text, lang, "coqui");
-  const audio = new Audio(pathToAudioUrl(result.audio_path));
-  audio.volume = clamp(config.volume, 0, 1);
-  activeAudio = audio;
-  await audio.play();
-}
-
-function speakWithSystem(text: string, lang: string, config?: SpeechConfig) {
+function speakWithSystem(
+  text: string,
+  lang: string,
+  config?: SpeechConfig,
+  englishAccent?: string,
+  onEnd?: () => void,
+  onError?: () => void,
+) {
   if (!canUseSystemSpeech()) {
     throw new Error("当前环境不支持系统朗读");
   }
   const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = snapTextLangToSpeechLang(lang);
+  // English has separate US/UK voice choices; other languages keep the app language mapping.
+  utterance.lang = snapTextLangToSpeechLang(lang, englishAccent ?? config?.english_accent);
   utterance.rate = clamp(config?.rate ?? 1, 0.1, 3);
   utterance.volume = clamp(config?.volume ?? 1, 0, 1);
+  utterance.onend = () => onEnd?.();
+  utterance.onerror = () => onError?.();
   const voice = bestVoiceForLang(utterance.lang);
   if (voice) utterance.voice = voice;
   window.speechSynthesis.speak(utterance);
@@ -82,17 +69,14 @@ function canUseSystemSpeech() {
   return typeof window !== "undefined" && "speechSynthesis" in window && "SpeechSynthesisUtterance" in window;
 }
 
-function pathToAudioUrl(path: string) {
-  const normalized = path.startsWith("/") ? path : `/${path}`;
-  return `file://${encodeURI(normalized)}`;
-}
-
-export function snapTextLangToSpeechLang(lang: string) {
+export function snapTextLangToSpeechLang(lang: string, englishAccent = "american") {
   const value = lang.trim().toLowerCase();
+  if (value === "en") {
+    return englishAccent === "british" ? "en-GB" : "en-US";
+  }
   return (
     {
       zh_cn: "zh-CN",
-      en: "en-US",
       ja: "ja-JP",
       ko: "ko-KR",
       fr: "fr-FR",

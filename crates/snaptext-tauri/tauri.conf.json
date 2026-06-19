@@ -15,9 +15,9 @@
     "windows": [
       {
         "title": "",
-        "width": 960,
+        "width": 1280,
         "height": 640,
-        "minWidth": 720,
+        "minWidth": 980,
         "minHeight": 520,
         "resizable": true
       }

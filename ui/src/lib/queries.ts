@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   checkOcrWorker,
-  checkTtsWorker,
   clearHistory,
   getConfig,
   getDesktopCapabilities,
@@ -96,12 +95,6 @@ export function useClearHistoryMutation() {
 export function useCheckOcrWorkerMutation() {
   return useMutation({
     mutationFn: checkOcrWorker,
-  });
-}
-
-export function useCheckTtsWorkerMutation() {
-  return useMutation({
-    mutationFn: checkTtsWorker,
   });
 }
 

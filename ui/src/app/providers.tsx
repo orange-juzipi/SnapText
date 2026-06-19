@@ -4,12 +4,15 @@ import type { ReactNode } from "react";
 import { queryClient } from "@/app/query-client";
 import { WorkspaceStateProvider } from "@/app/workspace-state";
 import { useConfigQuery } from "@/lib/queries";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 export function AppProviders({ children }: { children: ReactNode }) {
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeSync />
-      <WorkspaceStateProvider>{children}</WorkspaceStateProvider>
+      <TooltipProvider delayDuration={250}>
+        <WorkspaceStateProvider>{children}</WorkspaceStateProvider>
+      </TooltipProvider>
     </QueryClientProvider>
   );
 }

@@ -11,8 +11,6 @@ import type {
   ScreenshotPayload,
   TranslationRequest,
   TranslationResult,
-  TtsSynthesisResult,
-  TtsWorkerStatus,
 } from "@/lib/types";
 
 export const events = {
@@ -46,14 +44,6 @@ export function clearHistory() {
 
 export function checkOcrWorker() {
   return tauriInvoke<OcrWorkerStatus>("check_ocr_worker");
-}
-
-export function checkTtsWorker() {
-  return tauriInvoke<TtsWorkerStatus>("check_tts_worker");
-}
-
-export function synthesizeText(text: string, lang: string, provider?: string) {
-  return tauriInvoke<TtsSynthesisResult>("synthesize_text", { text, lang, provider });
 }
 
 export function validateOcrModels() {
