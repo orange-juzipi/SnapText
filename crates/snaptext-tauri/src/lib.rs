@@ -33,7 +33,9 @@ use tauri::{
 use tauri_plugin_global_shortcut::ShortcutState;
 
 const OVERLAY_TRANSLATION_EVENT: &str = "snaptext://overlay-translation";
+#[cfg(target_os = "macos")]
 const OVERLAY_OCR_STARTED_EVENT: &str = "snaptext://overlay-ocr-started";
+#[cfg(target_os = "macos")]
 const OVERLAY_OCR_FAILED_EVENT: &str = "snaptext://overlay-ocr-failed";
 const OVERLAY_OCR_EVENT: &str = "snaptext://overlay-ocr";
 const RESULT_TRANSLATION_EVENT: &str = "snaptext://result-translation";
@@ -489,14 +491,14 @@ async fn start_webview_screenshot_overlay_inner(
     state: &AppState,
 ) -> Result<ScreenshotPayload> {
     let restore_main_window = main_window_is_visible(app);
-    hide_main_window(&app)?;
+    hide_main_window(app)?;
     // macOS may not remove the window from the compositor immediately after hide().
     // Waiting briefly prevents the overlay screenshot from capturing SnapText itself.
     tokio::time::sleep(Duration::from_millis(MAIN_WINDOW_HIDE_SETTLE_MS)).await;
     let payload = match screenshot_full_inner(state).await {
         Ok(payload) => payload,
         Err(err) => {
-            restore_main_window_if_needed(&app, restore_main_window)?;
+            restore_main_window_if_needed(app, restore_main_window)?;
             return Err(err);
         }
     };
@@ -512,7 +514,7 @@ async fn start_webview_screenshot_overlay_inner(
         });
     }
 
-    show_overlay_window(&app)?;
+    show_overlay_window(app)?;
     Ok(payload)
 }
 
@@ -757,12 +759,14 @@ fn emit_selection_record(app: &AppHandle, record: &HistoryRecord) {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn emit_overlay_ocr_started(app: &AppHandle, region: snaptext_core::ocr::BBox) {
     if let Err(err) = app.emit_to(MAIN_WINDOW_LABEL, OVERLAY_OCR_STARTED_EVENT, region) {
         tracing::warn!(error = %err, "failed to emit overlay OCR started");
     }
 }
 
+#[cfg(target_os = "macos")]
 fn emit_overlay_ocr_failed(app: &AppHandle, region: snaptext_core::ocr::BBox) {
     if let Err(err) = app.emit_to(MAIN_WINDOW_LABEL, OVERLAY_OCR_FAILED_EVENT, region) {
         tracing::warn!(error = %err, "failed to emit overlay OCR failure");
@@ -1077,6 +1081,7 @@ async fn ocr_overlay_selection_inner(
     ocr_dynamic_image_inner(state, cropped)
 }
 
+#[cfg(target_os = "macos")]
 fn payload_to_full_region(payload: &ScreenshotPayload) -> snaptext_core::ocr::BBox {
     snaptext_core::ocr::BBox {
         x: 0,
