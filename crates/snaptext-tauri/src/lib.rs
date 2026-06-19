@@ -2690,6 +2690,7 @@ mod tests {
         assert!(names.contains(&"selection"));
         assert!(names.contains(&"global_hotkey"));
         assert!(names.contains(&"ocr_worker"));
+        assert!(names.contains(&"tts_worker"));
         assert!(
             !capabilities
                 .iter()
@@ -2730,6 +2731,87 @@ mod tests {
         assert!(status.python_available);
         assert!(status.paddleocr_available);
         assert!(status.worker_ready);
+    }
+
+    #[test]
+    fn check_tts_worker_accepts_fake_worker_mode() {
+        let state = AppState::new(
+            AppConfig::default(),
+            HistoryStore::in_memory().expect("history store"),
+        )
+        .expect("app state");
+        let worker = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(TTS_WORKER_PATH);
+        unsafe {
+            std::env::set_var("SNAPTEXT_TTS_FAKE_OUTPUT", "{}");
+            std::env::set_var("SNAPTEXT_TTS_WORKER", worker);
+        }
+
+        let status = check_tts_worker_inner(&state);
+
+        unsafe {
+            std::env::remove_var("SNAPTEXT_TTS_FAKE_OUTPUT");
+            std::env::remove_var("SNAPTEXT_TTS_WORKER");
+        }
+        assert!(status.python_available);
+        assert!(status.coqui_available);
+        assert!(status.worker_ready);
+    }
+
+    #[test]
+    fn synthesize_text_rejects_empty_text() {
+        let state = AppState::new(
+            AppConfig::default(),
+            HistoryStore::in_memory().expect("history store"),
+        )
+        .expect("app state");
+
+        let err = synthesize_text_inner(&state, "  ".to_owned(), "en".to_owned(), None)
+            .expect_err("empty speech text");
+
+        assert!(err.to_string().contains("speech text cannot be empty"));
+    }
+
+    #[test]
+    fn synthesize_text_accepts_fake_worker_mode() {
+        let mut config = AppConfig::default();
+        config.speech.provider = SpeechProvider::Coqui;
+        let state = AppState::new(config, HistoryStore::in_memory().expect("history store"))
+            .expect("app state");
+        let worker = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(TTS_WORKER_PATH);
+        unsafe {
+            std::env::set_var("SNAPTEXT_TTS_FAKE_OUTPUT", "{}");
+            std::env::set_var("SNAPTEXT_TTS_WORKER", worker);
+        }
+
+        let result = synthesize_text_inner(&state, "hello".to_owned(), "en".to_owned(), None)
+            .expect("fake synthesis");
+
+        unsafe {
+            std::env::remove_var("SNAPTEXT_TTS_FAKE_OUTPUT");
+            std::env::remove_var("SNAPTEXT_TTS_WORKER");
+        }
+        assert_eq!(result.provider, "coqui");
+        assert!(std::path::Path::new(&result.audio_path).is_file());
+    }
+
+    #[test]
+    fn parse_tts_worker_output_rejects_invalid_json() {
+        let output = std::process::Output {
+            status: success_exit_status(),
+            stdout: b"not json\n".to_vec(),
+            stderr: Vec::new(),
+        };
+        let err = parse_tts_worker_output(output, std::path::Path::new("/tmp/missing.wav"))
+            .expect_err("invalid worker JSON");
+
+        assert!(
+            err.to_string()
+                .contains("TTS worker did not return JSON output")
+        );
     }
 
     #[tokio::test]
@@ -3064,5 +3146,19 @@ mod tests {
             mac_screenshot_selection_error(Some(1), b"permission denied\n"),
             "screenshot selection failed: permission denied"
         );
+    }
+
+    #[cfg(unix)]
+    fn success_exit_status() -> std::process::ExitStatus {
+        use std::os::unix::process::ExitStatusExt;
+
+        std::process::ExitStatus::from_raw(0)
+    }
+
+    #[cfg(windows)]
+    fn success_exit_status() -> std::process::ExitStatus {
+        use std::os::windows::process::ExitStatusExt;
+
+        std::process::ExitStatus::from_raw(0)
     }
 }
