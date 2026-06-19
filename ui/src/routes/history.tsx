@@ -1,9 +1,8 @@
 import { useNavigate } from "@tanstack/react-router";
-import { Copy, FileText, RotateCw, Trash2 } from "lucide-react";
-import { formatHistoryForClipboard, historyItemMeta } from "@/lib/format";
+import { FileText, RotateCw, Trash2 } from "lucide-react";
+import { historyItemMeta } from "@/lib/format";
 import { labelsForLanguage } from "@/lib/labels";
 import { useClearHistoryMutation, useConfigQuery, useHistoryQuery } from "@/lib/queries";
-import { copyText } from "@/lib/tauri";
 import { useWorkspaceState } from "@/app/workspace-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,20 +16,6 @@ export function HistoryPage() {
   const workspace = useWorkspaceState();
   const navigate = useNavigate();
   const items = historyQuery.data ?? [];
-
-  async function handleCopy() {
-    const text = formatHistoryForClipboard(items);
-    if (!text) {
-      workspace.showError(labels.noHistoryToCopy);
-      return;
-    }
-    try {
-      await copyText(text);
-      workspace.setStatus(labels.historyCopied);
-    } catch (error) {
-      workspace.showError(error instanceof Error ? error.message : String(error));
-    }
-  }
 
   async function handleClear() {
     try {
@@ -52,10 +37,6 @@ export function HistoryPage() {
           <Button onClick={() => historyQuery.refetch()}>
             <RotateCw size={16} />
             {labels.refresh}
-          </Button>
-          <Button onClick={handleCopy}>
-            <Copy size={16} />
-            {labels.copyHistory}
           </Button>
           <Button onClick={handleClear} variant="destructive">
             <Trash2 size={16} />

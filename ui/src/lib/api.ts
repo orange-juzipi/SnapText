@@ -7,11 +7,12 @@ import type {
   OcrTextResult,
   OcrWorkerStatus,
   OverlayTranslationPayload,
-  PinnedResultPayload,
   Region,
   ScreenshotPayload,
   TranslationRequest,
   TranslationResult,
+  TtsSynthesisResult,
+  TtsWorkerStatus,
 } from "@/lib/types";
 
 export const events = {
@@ -21,6 +22,8 @@ export const events = {
   overlayOcr: "snaptext://overlay-ocr",
   resultTranslation: "snaptext://result-translation",
   resultSelection: "snaptext://result-selection",
+  selectionText: "snaptext://selection-text",
+  resultSelectionFailed: "snaptext://result-selection-failed",
   resultSnapshot: "snaptext://result-snapshot",
   resultWindowState: "snaptext://result-window-state",
 } as const;
@@ -43,6 +46,14 @@ export function clearHistory() {
 
 export function checkOcrWorker() {
   return tauriInvoke<OcrWorkerStatus>("check_ocr_worker");
+}
+
+export function checkTtsWorker() {
+  return tauriInvoke<TtsWorkerStatus>("check_tts_worker");
+}
+
+export function synthesizeText(text: string, lang: string, provider?: string) {
+  return tauriInvoke<TtsSynthesisResult>("synthesize_text", { text, lang, provider });
 }
 
 export function validateOcrModels() {
@@ -125,8 +136,8 @@ export function retranslateResultText(request: TranslationRequest) {
   });
 }
 
-export function pinResultWindow(payload: PinnedResultPayload) {
-  return tauriInvoke<void>("pin_result_window", { payload });
+export function pinResultWindow() {
+  return tauriInvoke<void>("pin_result_window");
 }
 
 export function unpinResultWindow() {

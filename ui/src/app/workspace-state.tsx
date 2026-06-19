@@ -19,6 +19,7 @@ type WorkspaceState = {
   status: string;
   toasts: AppToast[];
   setStatus: (status: string) => void;
+  showToast: (title: string, description?: string, variant?: AppToast["variant"]) => void;
   showError: (message: string, title?: string) => void;
   dismissToast: (id: string) => void;
   setTextInput: (value: string) => void;
@@ -56,7 +57,7 @@ export function WorkspaceStateProvider({ children }: { children: ReactNode }) {
   const [snapshot, setSnapshot] = useState<WorkspaceSnapshot>(emptySnapshot);
   const [textInput, setTextInput] = useState("");
   const [ocrLoading, setOcrLoading] = useState(false);
-  const [targetLang, setTargetLang] = useState("en");
+  const [targetLang, setTargetLang] = useState("auto");
   const [translating, setTranslating] = useState(false);
   const [pinned, setPinned] = useState(false);
   const [lastRequest, setLastRequest] = useState<TranslationRequest | null>(null);
@@ -67,20 +68,20 @@ export function WorkspaceStateProvider({ children }: { children: ReactNode }) {
     setToasts((current) => current.filter((toast) => toast.id !== id));
   }, []);
 
-  const showError = useCallback((message: string, title = "操作失败") => {
+  const showToast = useCallback((title: string, description?: string, variant: AppToast["variant"] = "default") => {
     const id = crypto.randomUUID();
-    // Error details belong in toast, not the compact header status badge.
-    setToasts((current) => [
-      ...current.slice(-2),
-      {
-        id,
-        title,
-        description: message,
-        variant: "destructive",
-      },
-    ]);
+    setToasts((current) => {
+      const nextToast = { id, title, description, variant };
+      const deduped = current.filter((toast) => toast.title !== title || toast.description !== description);
+      return [...deduped.slice(-1), nextToast];
+    });
     window.setTimeout(() => dismissToast(id), 5000);
   }, [dismissToast]);
+
+  const showError = useCallback((message: string, title = "操作失败") => {
+    // Error details belong in toast, not the compact header status badge.
+    showToast(title, message, "destructive");
+  }, [showToast]);
 
   const setResultSnapshot = useCallback(
     (result: { source: string; source_text: string; translated_text: string; target_lang: string }) => {
@@ -105,7 +106,6 @@ export function WorkspaceStateProvider({ children }: { children: ReactNode }) {
       targetLang: "",
     });
     setLastRequest({ source, source_text: sourceText });
-    setPinned(false);
   }, []);
 
   const setResultFromHistory = useCallback(
@@ -137,6 +137,7 @@ export function WorkspaceStateProvider({ children }: { children: ReactNode }) {
       status,
       toasts,
       setStatus,
+      showToast,
       showError,
       dismissToast,
       setTextInput,
@@ -160,6 +161,7 @@ export function WorkspaceStateProvider({ children }: { children: ReactNode }) {
       setResultFromHistory,
       setResultFromTranslation,
       setResultSnapshot,
+      showToast,
       showError,
       snapshot,
       status,

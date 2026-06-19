@@ -41,6 +41,26 @@ fn current_selection_impl() -> Result<Option<SelectionEvent>> {
     Ok(None)
 }
 
+#[cfg(target_os = "macos")]
+pub fn selection_permission_status() -> &'static str {
+    macos::selection_permission_status()
+}
+
+#[cfg(target_os = "macos")]
+pub fn ensure_selection_permission() -> Result<()> {
+    macos::ensure_selection_permission()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn selection_permission_status() -> &'static str {
+    "available"
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn ensure_selection_permission() -> Result<()> {
+    Ok(())
+}
+
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows", test))]
 fn selection_event_from_text(
     text: impl AsRef<str>,
@@ -83,10 +103,16 @@ pub fn normalize_selection_text(text: impl AsRef<str>) -> String {
 
 #[cfg(target_os = "macos")]
 mod macos {
-    use std::ptr;
+    use std::{
+        process::{Command, Stdio},
+        ptr, thread,
+        time::Duration,
+    };
 
     use core_foundation::{
         base::{CFType, TCFType},
+        boolean::CFBoolean,
+        dictionary::CFDictionary,
         string::CFString,
     };
     use core_foundation_sys::{
@@ -95,19 +121,32 @@ mod macos {
         string::CFStringRef,
     };
     use objc2::rc::Retained;
-    use objc2_app_kit::NSWorkspace;
+    use objc2_app_kit::{NSPasteboard, NSWorkspace};
     use objc2_foundation::NSString;
 
     use super::{SelectionEvent, selection_event_from_text};
     use crate::{Error, Result};
 
     type AXUIElementRef = *const core::ffi::c_void;
+    type CGEventRef = *mut core::ffi::c_void;
+    type CGEventSourceRef = *mut core::ffi::c_void;
+    type CGEventFlags = u64;
+    type CGEventSourceStateID = u32;
+    type CGEventTapLocation = u32;
+    type CGKeyCode = u16;
     type AXError = i32;
     type Boolean = u8;
 
     const K_AX_ERROR_SUCCESS: AXError = 0;
     const K_AX_ERROR_NO_VALUE: AXError = -25212;
     const K_AX_ERROR_ATTRIBUTE_UNSUPPORTED: AXError = -25205;
+    const K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE: CGEventSourceStateID = 1;
+    const K_CG_HID_EVENT_TAP: CGEventTapLocation = 0;
+    const K_CG_EVENT_FLAG_MASK_COMMAND: CGEventFlags = 1 << 20;
+    const CLIPBOARD_COPY_SETTLE_MS: u64 = 80;
+    const CLIPBOARD_COPY_ATTEMPTS: usize = 6;
+    const AX_TRUSTED_CHECK_OPTION_PROMPT: &str = "AXTrustedCheckOptionPrompt";
+    const KEY_CODE_C: CGKeyCode = 8;
 
     #[link(name = "ApplicationServices", kind = "framework")]
     unsafe extern "C" {
@@ -118,13 +157,59 @@ mod macos {
             attribute: CFStringRef,
             value: *mut CFTypeRef,
         ) -> AXError;
+        fn CGEventSourceCreate(state_id: CGEventSourceStateID) -> CGEventSourceRef;
+        fn CGEventCreateKeyboardEvent(
+            source: CGEventSourceRef,
+            virtual_key: CGKeyCode,
+            key_down: bool,
+        ) -> CGEventRef;
+        fn CGEventSetFlags(event: CGEventRef, flags: CGEventFlags);
+        fn CGEventPost(tap: CGEventTapLocation, event: CGEventRef);
     }
 
     pub fn current_selection() -> Result<Option<SelectionEvent>> {
-        if !is_accessibility_trusted() {
-            return Ok(None);
+        ensure_accessibility_permission(false)?;
+        let app_bundle_id = frontmost_bundle_identifier();
+        if is_accessibility_trusted()
+            && let Some(event) = current_accessibility_selection(app_bundle_id.clone())?
+        {
+            return Ok(Some(event));
         }
 
+        current_clipboard_selection(app_bundle_id)
+    }
+
+    pub fn selection_permission_status() -> &'static str {
+        if is_accessibility_trusted() {
+            "authorized"
+        } else {
+            "requires_accessibility_permission"
+        }
+    }
+
+    pub fn ensure_selection_permission() -> Result<()> {
+        ensure_accessibility_permission(true)
+    }
+
+    fn ensure_accessibility_permission(prompt: bool) -> Result<()> {
+        if is_accessibility_trusted() {
+            return Ok(());
+        }
+        if prompt {
+            let prompt_key = CFString::new(AX_TRUSTED_CHECK_OPTION_PROMPT);
+            let prompt_value = CFBoolean::true_value();
+            let options = CFDictionary::from_CFType_pairs(&[(prompt_key, prompt_value)]);
+            unsafe { AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef()) };
+        }
+
+        Err(Error::Selection(
+            "Accessibility permission is required before reading selected text".to_owned(),
+        ))
+    }
+
+    fn current_accessibility_selection(
+        app_bundle_id: Option<String>,
+    ) -> Result<Option<SelectionEvent>> {
         let system = unsafe { AXUIElementCreateSystemWide() };
         if system.is_null() {
             return Err(Error::Selection(
@@ -147,11 +232,124 @@ mod macos {
             .downcast::<CFString>()
             .map(|value| value.to_string())
             .unwrap_or_default();
-        let app_bundle_id = frontmost_bundle_identifier();
 
         // Keep macOS Accessibility output consistent with Linux and Windows
         // selection readers before the text enters the translation pipeline.
         Ok(selection_event_from_text(selected_text, app_bundle_id))
+    }
+
+    fn current_clipboard_selection(
+        app_bundle_id: Option<String>,
+    ) -> Result<Option<SelectionEvent>> {
+        let previous_clipboard = read_clipboard_text().ok();
+        let previous_change_count = clipboard_change_count();
+        copy_frontmost_selection()?;
+
+        if !wait_for_clipboard_change(previous_change_count) {
+            return Ok(None);
+        }
+
+        let selected_text = read_clipboard_text()?;
+
+        if let Some(previous) = previous_clipboard {
+            // Cmd+C is the pragmatic fallback for apps that do not expose AXSelectedText.
+            // Restore the plain-text clipboard so the fallback is less disruptive.
+            if let Err(err) = write_clipboard_text(&previous) {
+                tracing::warn!(error = %err, "failed to restore clipboard after selection fallback");
+            }
+        }
+
+        Ok(selection_event_from_text(selected_text, app_bundle_id))
+    }
+
+    fn clipboard_change_count() -> isize {
+        let pasteboard = NSPasteboard::generalPasteboard();
+        pasteboard.changeCount()
+    }
+
+    fn wait_for_clipboard_change(previous_change_count: isize) -> bool {
+        for _ in 0..CLIPBOARD_COPY_ATTEMPTS {
+            thread::sleep(Duration::from_millis(CLIPBOARD_COPY_SETTLE_MS));
+            if clipboard_change_count() != previous_change_count {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn copy_frontmost_selection() -> Result<()> {
+        // Send Cmd+C from the SnapText process instead of delegating through
+        // osascript; macOS blocks System Events key injection separately.
+        let source = unsafe { CGEventSourceCreate(K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE) };
+        if source.is_null() {
+            return Err(Error::Selection(
+                "failed to create macOS keyboard event source".to_owned(),
+            ));
+        }
+
+        let key_down = unsafe { CGEventCreateKeyboardEvent(source, KEY_CODE_C, true) };
+        let key_up = unsafe { CGEventCreateKeyboardEvent(source, KEY_CODE_C, false) };
+
+        if key_down.is_null() || key_up.is_null() {
+            release_cf_object(key_down);
+            release_cf_object(key_up);
+            release_cf_object(source);
+            return Err(Error::Selection(
+                "failed to create macOS copy keyboard event".to_owned(),
+            ));
+        }
+
+        unsafe {
+            CGEventSetFlags(key_down, K_CG_EVENT_FLAG_MASK_COMMAND);
+            CGEventSetFlags(key_up, K_CG_EVENT_FLAG_MASK_COMMAND);
+            CGEventPost(K_CG_HID_EVENT_TAP, key_down);
+            CGEventPost(K_CG_HID_EVENT_TAP, key_up);
+        }
+
+        release_cf_object(key_down);
+        release_cf_object(key_up);
+        release_cf_object(source);
+        Ok(())
+    }
+
+    fn read_clipboard_text() -> Result<String> {
+        let output = Command::new("pbpaste")
+            .output()
+            .map_err(|err| Error::Selection(format!("failed to read clipboard: {err}")))?;
+
+        if output.status.success() {
+            return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        Err(Error::Selection(if stderr.is_empty() {
+            "failed to read clipboard".to_owned()
+        } else {
+            format!("failed to read clipboard: {stderr}")
+        }))
+    }
+
+    fn write_clipboard_text(text: &str) -> Result<()> {
+        let mut child = Command::new("pbcopy")
+            .stdin(Stdio::piped())
+            .spawn()
+            .map_err(|err| Error::Selection(format!("failed to restore clipboard: {err}")))?;
+
+        if let Some(stdin) = child.stdin.as_mut() {
+            use std::io::Write as _;
+            stdin
+                .write_all(text.as_bytes())
+                .map_err(|err| Error::Selection(format!("failed to restore clipboard: {err}")))?;
+        }
+
+        let status = child
+            .wait()
+            .map_err(|err| Error::Selection(format!("failed to restore clipboard: {err}")))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(Error::Selection("failed to restore clipboard".to_owned()))
+        }
     }
 
     fn frontmost_bundle_identifier() -> Option<String> {
@@ -191,6 +389,12 @@ mod macos {
     fn release_ax_element(element: AXUIElementRef) {
         if !element.is_null() {
             unsafe { CFRelease(element.cast()) };
+        }
+    }
+
+    fn release_cf_object(object: *const core::ffi::c_void) {
+        if !object.is_null() {
+            unsafe { CFRelease(object) };
         }
     }
 }

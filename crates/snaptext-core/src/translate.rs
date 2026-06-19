@@ -532,6 +532,17 @@ impl JsonStatusExt for reqwest::Response {
 }
 
 fn http_status_error(status: StatusCode, body: String) -> Error {
+    if let Ok(value) = serde_json::from_str::<Value>(&body)
+        && let Some(message) = value.pointer("/error/message").and_then(Value::as_str)
+    {
+        if message.contains("localhost:11434") {
+            return Error::Translate(
+                "local SnapText Cloud debug service is unavailable".to_owned(),
+            );
+        }
+        return Error::Translate(format!("provider failed with HTTP {status}: {message}"));
+    }
+
     Error::Translate(format!("HTTP {status}: {body}"))
 }
 

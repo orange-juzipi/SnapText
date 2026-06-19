@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import { ArrowLeft, Bolt, ClipboardCopy, Keyboard, MonitorCog, Save, ServerCog, Stethoscope } from "lucide-react";
+import { Link } from "@tanstack/react-router";
 import { formatCapabilitiesForClipboard } from "@/lib/format";
 import { labelsForLanguage } from "@/lib/labels";
 import { getDesktopCapabilities } from "@/lib/api";
@@ -13,17 +15,13 @@ import { useWorkspaceState } from "@/app/workspace-state";
 import { clientSnapTextCloudEndpoint } from "@/lib/snaptext-cloud";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+
+type SettingsTab = "interface" | "hotkeys" | "provider" | "diagnostics";
 
 export function SettingsPage() {
   const configQuery = useConfigQuery();
@@ -31,6 +29,7 @@ export function SettingsPage() {
   const checkOcrWorker = useCheckOcrWorkerMutation();
   const workspace = useWorkspaceState();
   const [draft, setDraft] = useState<AppConfig | null>(null);
+  const [activeTab, setActiveTab] = useState<SettingsTab>("interface");
   const [modelStatus, setModelStatus] = useState("尚未检查 OCR Worker");
   const [capabilities, setCapabilities] = useState<DesktopCapabilityStatus[]>(
     [],
@@ -40,18 +39,15 @@ export function SettingsPage() {
   );
   const hasUnsavedChanges = useMemo(() => {
     if (!draft || !configQuery.data) return false;
-    return (
-      JSON.stringify(sanitizeConfig(draft)) !==
-      JSON.stringify(sanitizeConfig(configQuery.data))
-    );
-  }, [configQuery.data, draft]);
+    return hasTabUnsavedChanges(activeTab, draft, configQuery.data);
+  }, [activeTab, configQuery.data, draft]);
 
   useEffect(() => {
     if (configQuery.data) setDraft(configQuery.data);
   }, [configQuery.data]);
 
   const providerConfig = useMemo(
-    () => draft?.translator.provider ?? "openai_compatible",
+    () => visibleProvider(draft?.translator.provider),
     [draft],
   );
 
@@ -63,10 +59,12 @@ export function SettingsPage() {
     );
   }
 
-  async function handleSave() {
+  async function handleSave(tab: SettingsTab) {
     if (!draft) return;
     try {
-      const saved = await updateConfig.mutateAsync(sanitizeConfig(draft));
+      const saved = await updateConfig.mutateAsync(
+        sanitizeConfig(mergeConfigForTab(tab, configQuery.data ?? draft, draft)),
+      );
       setDraft(saved);
       workspace.setStatus(labels.configSaved);
     } catch (error) {
@@ -123,16 +121,51 @@ export function SettingsPage() {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{labels.settings}</CardTitle>
-        <CardDescription>
-          调整界面、快捷键、OCR Worker 和翻译服务。
-        </CardDescription>
+    <Card className="settings-card">
+      <CardHeader className="settings-header">
+        <div className="settings-title-row">
+          <Button asChild variant="ghost" size="icon" aria-label="返回主页">
+            <Link to="/">
+              <ArrowLeft size={17} />
+            </Link>
+          </Button>
+          <CardTitle>{labels.settings}</CardTitle>
+        </div>
+        <Badge variant={hasUnsavedChanges ? "primary" : "default"}>
+          {hasUnsavedChanges ? labels.unsavedChanges : labels.saved}
+        </Badge>
       </CardHeader>
-      <CardContent className="grid gap-4">
-        <section className="settings-block">
-          <SectionTitle title="界面" detail={labels.targetLanguage} />
+      <CardContent className="settings-shell">
+        <nav className="settings-tab-list" aria-label={labels.settings}>
+          <SettingsTabButton
+            active={activeTab === "interface"}
+            icon={<MonitorCog size={16} />}
+            label="界面"
+            onClick={() => setActiveTab("interface")}
+          />
+          <SettingsTabButton
+            active={activeTab === "hotkeys"}
+            icon={<Keyboard size={16} />}
+            label="快捷键"
+            onClick={() => setActiveTab("hotkeys")}
+          />
+          <SettingsTabButton
+            active={activeTab === "provider"}
+            icon={<ServerCog size={16} />}
+            label={labels.provider}
+            onClick={() => setActiveTab("provider")}
+          />
+          <SettingsTabButton
+            active={activeTab === "diagnostics"}
+            icon={<Stethoscope size={16} />}
+            label={labels.diagnostics}
+            onClick={() => setActiveTab("diagnostics")}
+          />
+        </nav>
+
+        <div className="settings-tab-panel">
+        {activeTab === "interface" ? (
+          <section className="settings-block">
           <div className="settings-grid">
             <Field>
               <FieldLabel>{labels.interfaceLanguage}</FieldLabel>
@@ -148,18 +181,6 @@ export function SettingsPage() {
                 <option value="zh_cn">中文</option>
                 <option value="en">English</option>
               </Select>
-            </Field>
-            <Field>
-              <FieldLabel>{labels.targetLanguage}</FieldLabel>
-              <Input
-                value={draft.target_lang}
-                onChange={(event) =>
-                  updateDraft(
-                    setDraft,
-                    (next) => (next.target_lang = event.target.value),
-                  )
-                }
-              />
             </Field>
             <Field>
               <FieldLabel>{labels.theme}</FieldLabel>
@@ -193,65 +214,65 @@ export function SettingsPage() {
               </Select>
             </Field>
           </div>
-        </section>
+          <SettingsSaveRow
+            disabled={!hasUnsavedChanges || updateConfig.isPending}
+            labels={labels}
+            loading={updateConfig.isPending}
+            onSave={() => handleSave("interface")}
+          />
+          </section>
+        ) : null}
 
-        <section className="settings-block">
-          <SectionTitle title="快捷键" detail={labels.screenshotHotkey} />
+        {activeTab === "hotkeys" ? (
+          <section className="settings-block">
           <div className="settings-grid">
             <Field>
               <FieldLabel>{labels.screenshotHotkey}</FieldLabel>
-              <Input
+              <HotkeyInput
                 value={draft.hotkeys.screenshot}
-                onChange={(event) =>
+                onChange={(value) =>
                   updateDraft(
                     setDraft,
-                    (next) => (next.hotkeys.screenshot = event.target.value),
+                    (next) => (next.hotkeys.screenshot = value),
                   )
                 }
               />
             </Field>
             <Field>
               <FieldLabel>{labels.selectionHotkey}</FieldLabel>
-              <Input
+              <HotkeyInput
                 value={draft.hotkeys.selection}
-                onChange={(event) =>
+                onChange={(value) =>
                   updateDraft(
                     setDraft,
-                    (next) => (next.hotkeys.selection = event.target.value),
+                    (next) => (next.hotkeys.selection = value),
                   )
                 }
               />
             </Field>
           </div>
-        </section>
-
-        <section className="settings-block">
-          <SectionTitle
-            title={labels.saveSettings}
-            detail={hasUnsavedChanges ? labels.unsavedChanges : labels.saved}
+          <SettingsSaveRow
+            disabled={!hasUnsavedChanges || updateConfig.isPending}
+            labels={labels}
+            loading={updateConfig.isPending}
+            onSave={() => handleSave("hotkeys")}
           />
-          <div className="settings-save-row">
-            <p className="text-sm text-muted-foreground">
-              {labels.saveSettingsHint}
-            </p>
-            <Button
-              onClick={handleSave}
-              variant="primary"
-              disabled={!hasUnsavedChanges || updateConfig.isPending}
-            >
-              {updateConfig.isPending ? labels.saving : labels.save}
-            </Button>
-          </div>
-        </section>
+          </section>
+        ) : null}
 
-        <section className="settings-block">
-          <SectionTitle title={labels.diagnostics} detail="Tools" />
+        {activeTab === "diagnostics" ? (
+          <section className="settings-block">
           <div className="settings-actions">
-            <Button onClick={handleCheckWorker}>{labels.validateModels}</Button>
+            <Button onClick={handleCheckWorker}>
+              <Bolt size={16} />
+              {labels.validateModels}
+            </Button>
             <Button onClick={handleCapabilities}>
+              <Stethoscope size={16} />
               {labels.checkPermissions}
             </Button>
             <Button onClick={handleCopyCapabilities}>
+              <ClipboardCopy size={16} />
               {labels.copyDiagnostics}
             </Button>
           </div>
@@ -269,13 +290,11 @@ export function SettingsPage() {
               </li>
             ))}
           </ul>
-        </section>
+          </section>
+        ) : null}
 
-        <section className="settings-block">
-          <SectionTitle title={labels.provider} detail="Provider" />
-          <p className="text-sm text-muted-foreground">
-            {labels.providerSaveHint}
-          </p>
+        {activeTab === "provider" ? (
+          <section className="settings-block">
           <Field>
             <FieldLabel>{labels.provider}</FieldLabel>
             <Select
@@ -288,10 +307,8 @@ export function SettingsPage() {
               }
             >
               <option value="snaptext_cloud">SnapText 免费源</option>
-              <option value="openai_compatible">OpenAI-compatible</option>
               <option value="deepl">DeepL</option>
               <option value="google">Google</option>
-              <option value="local_http">Local HTTP</option>
             </Select>
           </Field>
           <ProviderFields
@@ -302,7 +319,15 @@ export function SettingsPage() {
           {hasUnsavedChanges ? (
             <Badge variant="primary">{labels.unsavedChanges}</Badge>
           ) : null}
-        </section>
+          <SettingsSaveRow
+            disabled={!hasUnsavedChanges || updateConfig.isPending}
+            labels={labels}
+            loading={updateConfig.isPending}
+            onSave={() => handleSave("provider")}
+          />
+          </section>
+        ) : null}
+        </div>
       </CardContent>
     </Card>
   );
@@ -349,30 +374,6 @@ function ProviderFields({
       </div>
     );
   }
-  if (provider === "openai_compatible") {
-    return (
-      <div className="settings-grid">
-        <ProviderInput
-          draft={draft}
-          setDraft={setDraft}
-          path="openai_base_url"
-          label="OpenAI base URL"
-        />
-        <ProviderInput
-          draft={draft}
-          setDraft={setDraft}
-          path="openai_api_key"
-          label="OpenAI API key"
-        />
-        <ProviderInput
-          draft={draft}
-          setDraft={setDraft}
-          path="openai_model"
-          label="OpenAI model"
-        />
-      </div>
-    );
-  }
   if (provider === "deepl") {
     return (
       <div className="settings-grid">
@@ -409,27 +410,10 @@ function ProviderFields({
       </div>
     );
   }
-  return (
-    <Field>
-      <FieldLabel>Local HTTP endpoint</FieldLabel>
-      <Input
-        value={draft.translator.local_http.endpoint}
-        onChange={(event) =>
-          updateDraft(
-            setDraft,
-            (next) =>
-              (next.translator.local_http.endpoint = event.target.value),
-          )
-        }
-      />
-    </Field>
-  );
+  return null;
 }
 
 type ProviderInputPath =
-  | "openai_base_url"
-  | "openai_api_key"
-  | "openai_model"
   | "deepl_base_url"
   | "deepl_api_key"
   | "google_base_url"
@@ -464,12 +448,6 @@ function ProviderInput({
 
 function providerValue(config: AppConfig, path: ProviderInputPath) {
   switch (path) {
-    case "openai_base_url":
-      return config.translator.openai_compatible.base_url;
-    case "openai_api_key":
-      return config.translator.openai_compatible.api_key ?? "";
-    case "openai_model":
-      return config.translator.openai_compatible.model;
     case "deepl_base_url":
       return config.translator.deepl.base_url;
     case "deepl_api_key":
@@ -487,15 +465,6 @@ function setProviderValue(
   value: string,
 ) {
   switch (path) {
-    case "openai_base_url":
-      config.translator.openai_compatible.base_url = value;
-      break;
-    case "openai_api_key":
-      config.translator.openai_compatible.api_key = value;
-      break;
-    case "openai_model":
-      config.translator.openai_compatible.model = value;
-      break;
     case "deepl_base_url":
       config.translator.deepl.base_url = value;
       break;
@@ -511,13 +480,146 @@ function setProviderValue(
   }
 }
 
-function SectionTitle({ title, detail }: { title: string; detail: string }) {
+function SettingsSaveRow({
+  disabled,
+  labels,
+  loading,
+  onSave,
+}: {
+  disabled: boolean;
+  labels: ReturnType<typeof labelsForLanguage>;
+  loading: boolean;
+  onSave: () => void;
+}) {
   return (
-    <div className="flex items-center justify-between gap-3">
-      <strong>{title}</strong>
-      <Badge>{detail}</Badge>
-    </div>
+    <section className="settings-save-row settings-save-bar">
+      <Button onClick={onSave} variant="primary" disabled={disabled}>
+        <Save size={16} />
+        {loading ? labels.saving : labels.save}
+      </Button>
+    </section>
   );
+}
+
+function SettingsTabButton({
+  active,
+  icon,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className={active ? "settings-tab is-active" : "settings-tab"}
+      onClick={onClick}
+      type="button"
+    >
+      {icon}
+      {label}
+    </button>
+  );
+}
+
+function HotkeyInput({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <Input
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      onKeyDown={(event) => {
+        event.preventDefault();
+        const shortcut = shortcutFromKeyboardEvent(event);
+        if (shortcut) onChange(shortcut);
+      }}
+      placeholder="按下快捷键"
+    />
+  );
+}
+
+function shortcutFromKeyboardEvent(event: React.KeyboardEvent<HTMLInputElement>) {
+  const key = normalizeShortcutKey(event.key, event.code);
+  const modifiers = [
+    event.metaKey || event.ctrlKey ? "CmdOrCtrl" : "",
+    event.altKey ? "Alt" : "",
+    event.shiftKey ? "Shift" : "",
+  ].filter(Boolean);
+
+  if (!key || key === "Control" || key === "Meta" || key === "Alt" || key === "Shift") {
+    return "";
+  }
+  return [...modifiers, key].join("+");
+}
+
+function normalizeShortcutKey(key: string, code: string) {
+  const physicalKey = normalizeShortcutCode(code);
+  if (physicalKey) return physicalKey;
+  if (!key || key === "Dead" || key === "Process" || key === "Unidentified") {
+    return "";
+  }
+  if (key === " ") return "Space";
+  if (key.length === 1) return key.toUpperCase();
+  return key;
+}
+
+function normalizeShortcutCode(code: string) {
+  if (code.startsWith("Key")) return code.slice(3).toUpperCase();
+  if (code.startsWith("Digit")) return code.slice(5);
+  if (code.startsWith("Numpad")) return code.slice(6);
+  if (/^F\d{1,2}$/.test(code)) return code;
+  const specialKeys: Record<string, string> = {
+    Backquote: "`",
+    Backslash: "\\",
+    BracketLeft: "[",
+    BracketRight: "]",
+    Comma: ",",
+    Equal: "=",
+    Minus: "-",
+    Period: ".",
+    Quote: "'",
+    Semicolon: ";",
+    Slash: "/",
+    Space: "Space",
+  };
+  return specialKeys[code] ?? "";
+}
+
+function visibleProvider(provider?: string) {
+  return provider === "deepl" || provider === "google" || provider === "snaptext_cloud"
+    ? provider
+    : "snaptext_cloud";
+}
+
+function hasTabUnsavedChanges(tab: SettingsTab, draft: AppConfig, saved: AppConfig) {
+  const next = sanitizeConfig(mergeConfigForTab(tab, saved, draft));
+  const current = sanitizeConfig(saved);
+  return JSON.stringify(next) !== JSON.stringify(current);
+}
+
+function mergeConfigForTab(tab: SettingsTab, base: AppConfig, draft: AppConfig) {
+  const next = structuredClone(base);
+  switch (tab) {
+    case "interface":
+      next.ui = structuredClone(draft.ui);
+      break;
+    case "hotkeys":
+      next.hotkeys = structuredClone(draft.hotkeys);
+      break;
+    case "provider":
+      next.translator = structuredClone(draft.translator);
+      break;
+    case "diagnostics":
+      break;
+  }
+  return next;
 }
 
 function updateDraft(
@@ -540,7 +642,7 @@ function sanitizeConfig(config: AppConfig): AppConfig {
   next.ui.result_panel_dock = next.ui.result_panel_dock.trim();
   next.hotkeys.screenshot = next.hotkeys.screenshot.trim();
   next.hotkeys.selection = next.hotkeys.selection.trim();
-  next.translator.provider = next.translator.provider.trim();
+  next.translator.provider = visibleProvider(next.translator.provider.trim());
   // SnapText 免费源地址由客户端构建配置决定，设置页不展示地址选择。
   next.translator.snaptext_cloud.endpoint = clientSnapTextCloudEndpoint();
   next.translator.snaptext_cloud.device_id =

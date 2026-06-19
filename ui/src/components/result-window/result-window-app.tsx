@@ -1,10 +1,12 @@
-import { Copy, RefreshCw, X } from "lucide-react";
+import { Copy, RefreshCw, Square, Volume2, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { events, retranslateResultText, unpinResultWindow } from "@/lib/api";
+import { events, getConfig, retranslateResultText, unpinResultWindow } from "@/lib/api";
 import { sourceLabel, targetLangLabel } from "@/lib/format";
 import { labelsForLanguage } from "@/lib/labels";
+import { resolveSourceSpeechLang } from "@/lib/language";
+import { speakText, stopSpeech } from "@/lib/speech";
 import { copyText, tauriListen } from "@/lib/tauri";
-import type { HistoryRecord, PinnedResultPayload, TranslationRequest, TranslationResult } from "@/lib/types";
+import type { AppConfig, HistoryRecord, PinnedResultPayload, TranslationRequest, TranslationResult } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldLabel } from "@/components/ui/field";
@@ -19,6 +21,7 @@ export function ResultWindowApp() {
   const [targetLang, setTargetLang] = useState("");
   const [lastRequest, setLastRequest] = useState<TranslationRequest | null>(null);
   const [status, setStatus] = useState(labels.pinnedResultWindow);
+  const [config, setConfig] = useState<AppConfig | null>(null);
 
   useEffect(() => {
     const unlisteners: Array<() => void> = [];
@@ -35,6 +38,12 @@ export function ResultWindowApp() {
       setStatus(labels.textTranslated);
     }).then((unlisten) => unlisteners.push(unlisten));
     return () => unlisteners.forEach((unlisten) => unlisten());
+  }, []);
+
+  useEffect(() => {
+    getConfig()
+      .then(setConfig)
+      .catch((error) => setStatus(error instanceof Error ? error.message : String(error)));
   }, []);
 
   function applySnapshot(snapshot: PinnedResultPayload) {
@@ -74,6 +83,19 @@ export function ResultWindowApp() {
     }
   }
 
+  async function handleSpeak(text: string, lang: string) {
+    if (!text.trim()) {
+      setStatus(labels.noSpeechText);
+      return;
+    }
+    try {
+      await speakText({ text, lang, config: config?.speech });
+      setStatus(labels.speechStarted);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   async function handleRetranslate() {
     if (!lastRequest) {
       setStatus(labels.noSourceTextForRetranslation);
@@ -106,6 +128,17 @@ export function ResultWindowApp() {
             <p className="mt-1 text-sm text-muted-foreground">{status}</p>
           </div>
           <div className="flex flex-wrap gap-2">
+            <Button size="sm" onClick={() => handleSpeak(sourceText, resolveSourceSpeechLang(sourceText))}>
+              <Volume2 size={15} />
+              {labels.playSource}
+            </Button>
+            <Button size="sm" onClick={() => handleSpeak(result, targetLang)}>
+              <Volume2 size={15} />
+              {labels.playTranslation}
+            </Button>
+            <Button size="sm" onClick={stopSpeech} aria-label={labels.stopSpeech}>
+              <Square size={15} />
+            </Button>
             <Button size="sm" onClick={handleRetranslate}>
               <RefreshCw size={15} />
               {labels.retranslate}

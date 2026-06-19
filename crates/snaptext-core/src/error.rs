@@ -13,6 +13,8 @@ pub enum Error {
     Screenshot(String),
     #[error("selection failed: {0}")]
     Selection(String),
+    #[error("speech failed: {0}")]
+    Speech(String),
     #[error("history failed: {0}")]
     History(String),
     #[error("config failed: {0}")]

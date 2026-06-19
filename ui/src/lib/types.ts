@@ -4,6 +4,7 @@ export type AppConfig = {
   hotkeys: HotkeyConfig;
   translator: TranslatorConfig;
   ocr: OcrConfig;
+  speech: SpeechConfig;
 };
 
 export type UiConfig = {
@@ -57,6 +58,21 @@ export type OcrConfig = {
   use_gpu: boolean;
 };
 
+export type SpeechConfig = {
+  enabled: boolean;
+  provider: string;
+  rate: number;
+  volume: number;
+  coqui: CoquiSpeechConfig;
+};
+
+export type CoquiSpeechConfig = {
+  model_name: string;
+  speaker_wav?: string | null;
+  cache_dir?: string | null;
+  python?: string | null;
+};
+
 export type Region = {
   x: number;
   y: number;
@@ -71,6 +87,15 @@ export type HistoryRecord = {
   source_text: string;
   target_lang: string;
   translated_text: string;
+};
+
+export type SelectionFailurePayload = {
+  message: string;
+};
+
+export type SelectionTextPayload = {
+  text: string;
+  app_bundle_id?: string | null;
 };
 
 export type ScreenshotPayload = {
@@ -115,6 +140,19 @@ export type OcrWorkerStatus = {
   paddleocr_available: boolean;
   worker_ready: boolean;
   message: string;
+};
+
+export type TtsWorkerStatus = {
+  python_available: boolean;
+  coqui_available: boolean;
+  worker_ready: boolean;
+  message: string;
+};
+
+export type TtsSynthesisResult = {
+  audio_path: string;
+  provider: string;
+  lang: string;
 };
 
 export type OcrModelStatus = {

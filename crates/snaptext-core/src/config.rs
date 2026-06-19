@@ -6,7 +6,7 @@ use url::Url;
 
 use crate::{Error, Result};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub struct AppConfig {
     pub target_lang: Lang,
@@ -14,6 +14,8 @@ pub struct AppConfig {
     pub hotkeys: HotkeyConfig,
     pub translator: TranslatorConfig,
     pub ocr: OcrConfig,
+    #[serde(default)]
+    pub speech: SpeechConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -166,10 +168,58 @@ pub struct LocalHttpConfig {
     pub endpoint: Url,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub struct SpeechConfig {
+    pub enabled: bool,
+    pub provider: SpeechProvider,
+    pub rate: f32,
+    pub volume: f32,
+    pub coqui: CoquiSpeechConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SpeechProvider {
+    System,
+    Coqui,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CoquiSpeechConfig {
+    pub model_name: String,
+    pub speaker_wav: Option<String>,
+    pub cache_dir: Option<String>,
+    pub python: Option<String>,
+}
+
+impl Default for SpeechConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            provider: SpeechProvider::System,
+            rate: 1.0,
+            volume: 1.0,
+            coqui: CoquiSpeechConfig::default(),
+        }
+    }
+}
+
+impl Default for CoquiSpeechConfig {
+    fn default() -> Self {
+        Self {
+            model_name: "tts_models/multilingual/multi-dataset/xtts_v2".to_owned(),
+            speaker_wav: None,
+            cache_dir: None,
+            python: None,
+        }
+    }
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            target_lang: Lang("en".to_owned()),
+            target_lang: Lang("zh_cn".to_owned()),
             ui: UiConfig {
                 theme: Theme::System,
                 language: UiLanguage::ZhCn,
@@ -180,7 +230,7 @@ impl Default for AppConfig {
                 selection: "CmdOrCtrl+Shift+D".to_owned(),
             },
             translator: TranslatorConfig {
-                provider: TranslatorProvider::OpenAiCompatible,
+                provider: TranslatorProvider::SnapTextCloud,
                 snaptext_cloud: SnapTextCloudConfig {
                     endpoint: default_snaptext_cloud_endpoint(),
                     device_id: default_snaptext_cloud_device_id(),
@@ -212,6 +262,7 @@ impl Default for AppConfig {
                 model_dir: ModelDir::Bundled("bundled".to_owned()),
                 use_gpu: false,
             },
+            speech: SpeechConfig::default(),
         }
     }
 }
@@ -250,6 +301,7 @@ impl AppConfig {
         validate_hotkey_conflicts(&self.hotkeys)?;
         validate_translator_config(&self.translator)?;
         validate_model_dir(&self.ocr.model_dir)?;
+        validate_speech_config(&self.speech)?;
         Ok(())
     }
 
@@ -257,6 +309,7 @@ impl AppConfig {
         self.target_lang.0 = self.target_lang.0.trim().to_owned();
         self.hotkeys.screenshot = self.hotkeys.screenshot.trim().to_owned();
         self.hotkeys.selection = self.hotkeys.selection.trim().to_owned();
+        self.translator.provider = normalize_translator_provider(self.translator.provider);
         self.translator.snaptext_cloud.device_id =
             normalize_device_id(self.translator.snaptext_cloud.device_id);
         self.translator.openai_compatible.model =
@@ -265,6 +318,7 @@ impl AppConfig {
         trim_optional_secret(&mut self.translator.deepl.api_key);
         trim_optional_secret(&mut self.translator.google.api_key);
         self.ocr.model_dir = normalize_model_dir(self.ocr.model_dir);
+        self.speech = normalize_speech_config(self.speech);
         self
     }
 }
@@ -420,11 +474,16 @@ fn is_supported_hotkey_key(value: &str) -> bool {
 }
 
 fn validate_translator_config(config: &TranslatorConfig) -> Result<()> {
-    validate_snaptext_cloud_config(&config.snaptext_cloud)?;
-    validate_openai_config(&config.openai_compatible)?;
-    validate_deepl_config(&config.deepl)?;
-    validate_google_config(&config.google)?;
-    validate_local_http_config(&config.local_http)?;
+    match config.provider {
+        TranslatorProvider::SnapTextCloud => {
+            validate_snaptext_cloud_config(&config.snaptext_cloud)?
+        }
+        TranslatorProvider::DeepL => validate_deepl_config(&config.deepl)?,
+        TranslatorProvider::Google => validate_google_config(&config.google)?,
+        // These providers are kept only so older config files can deserialize.
+        // UI and runtime normalization migrate them to SnapText Cloud.
+        TranslatorProvider::OpenAiCompatible | TranslatorProvider::LocalHttp => {}
+    }
     Ok(())
 }
 
@@ -438,24 +497,12 @@ fn validate_snaptext_cloud_config(config: &SnapTextCloudConfig) -> Result<()> {
     Ok(())
 }
 
-fn validate_openai_config(config: &OpenAiCompatibleConfig) -> Result<()> {
-    ensure_http_url("OpenAI base URL", &config.base_url)?;
-    if config.model.trim().is_empty() {
-        return Err(Error::Config("OpenAI model cannot be empty".to_owned()));
-    }
-    Ok(())
-}
-
 fn validate_deepl_config(config: &DeepLConfig) -> Result<()> {
     ensure_http_url("DeepL base URL", &config.base_url)
 }
 
 fn validate_google_config(config: &GoogleConfig) -> Result<()> {
     ensure_http_url("Google base URL", &config.base_url)
-}
-
-fn validate_local_http_config(config: &LocalHttpConfig) -> Result<()> {
-    ensure_http_url("Local HTTP endpoint", &config.endpoint)
 }
 
 fn validate_model_dir(model_dir: &ModelDir) -> Result<()> {
@@ -476,6 +523,26 @@ fn validate_model_dir(model_dir: &ModelDir) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn validate_speech_config(config: &SpeechConfig) -> Result<()> {
+    if !(0.1..=3.0).contains(&config.rate) {
+        return Err(Error::Config(
+            "speech rate must be between 0.1 and 3.0".to_owned(),
+        ));
+    }
+    if !(0.0..=1.0).contains(&config.volume) {
+        return Err(Error::Config(
+            "speech volume must be between 0.0 and 1.0".to_owned(),
+        ));
+    }
+    if matches!(config.provider, SpeechProvider::Coqui) && config.coqui.model_name.trim().is_empty()
+    {
+        return Err(Error::Config(
+            "Coqui speech model name cannot be empty".to_owned(),
+        ));
+    }
     Ok(())
 }
 
@@ -504,6 +571,35 @@ fn normalize_model_dir(model_dir: ModelDir) -> ModelDir {
                 ModelDir::Custom(path)
             }
         }
+    }
+}
+
+fn normalize_speech_config(mut config: SpeechConfig) -> SpeechConfig {
+    config.rate = config.rate.clamp(0.1, 3.0);
+    config.volume = config.volume.clamp(0.0, 1.0);
+    config.coqui.model_name = config.coqui.model_name.trim().to_owned();
+    if config.coqui.model_name.is_empty() {
+        config.coqui.model_name = CoquiSpeechConfig::default().model_name;
+    }
+    trim_optional_path_like(&mut config.coqui.speaker_wav);
+    trim_optional_path_like(&mut config.coqui.cache_dir);
+    trim_optional_path_like(&mut config.coqui.python);
+    config
+}
+
+fn trim_optional_path_like(value: &mut Option<String>) {
+    *value = value
+        .take()
+        .map(|text| text.trim().to_owned())
+        .filter(|text| !text.is_empty());
+}
+
+fn normalize_translator_provider(provider: TranslatorProvider) -> TranslatorProvider {
+    match provider {
+        TranslatorProvider::OpenAiCompatible | TranslatorProvider::LocalHttp => {
+            TranslatorProvider::SnapTextCloud
+        }
+        provider => provider,
     }
 }
 
@@ -551,8 +647,13 @@ mod tests {
 
         assert_eq!(config.hotkeys.screenshot, "CmdOrCtrl+Shift+T");
         assert_eq!(config.hotkeys.selection, "CmdOrCtrl+Shift+D");
-        assert_eq!(config.target_lang, Lang("en".to_owned()));
+        assert_eq!(config.target_lang, Lang("zh_cn".to_owned()));
         assert_eq!(config.ui.language, UiLanguage::ZhCn);
+        assert_eq!(config.speech.provider, SpeechProvider::System);
+        assert_eq!(
+            config.speech.coqui.model_name,
+            CoquiSpeechConfig::default().model_name
+        );
         assert_eq!(
             config.translator.snaptext_cloud.endpoint,
             snaptext_cloud_production_endpoint()
@@ -583,6 +684,10 @@ mod tests {
         config.translator.deepl.api_key = Some(" \n ".to_owned());
         config.translator.google.api_key = Some(" google-key ".to_owned());
         config.ocr.model_dir = ModelDir::Custom(PathBuf::from(" ./models "));
+        config.speech.rate = 4.0;
+        config.speech.volume = -1.0;
+        config.speech.coqui.model_name = " test-model ".to_owned();
+        config.speech.coqui.speaker_wav = Some(" ./voice.wav ".to_owned());
 
         let normalized = config.normalized_for_save();
 
@@ -602,6 +707,13 @@ mod tests {
         assert_eq!(
             normalized.ocr.model_dir,
             ModelDir::Custom(PathBuf::from("./models"))
+        );
+        assert_eq!(normalized.speech.rate, 3.0);
+        assert_eq!(normalized.speech.volume, 0.0);
+        assert_eq!(normalized.speech.coqui.model_name, "test-model");
+        assert_eq!(
+            normalized.speech.coqui.speaker_wav.as_deref(),
+            Some("./voice.wav")
         );
     }
 
@@ -634,12 +746,26 @@ translator:
 ocr:
   model_dir: " ./models "
   use_gpu: false
+speech:
+  enabled: true
+  provider: coqui
+  rate: 1.5
+  volume: 0.8
+  coqui:
+    model_name: " test-model "
+    speaker_wav: " ./voice.wav "
+    cache_dir: " ./tts-cache "
+    python: " python3 "
 "#;
         std::fs::write(&config_path, yaml).expect("write config");
 
         let loaded = AppConfig::load_or_default(Some(config_path.clone())).expect("load config");
 
         assert_eq!(loaded.target_lang, Lang("fr".to_owned()));
+        assert_eq!(
+            loaded.translator.provider,
+            TranslatorProvider::SnapTextCloud
+        );
         assert_eq!(loaded.hotkeys.screenshot, "CmdOrCtrl+Shift+T");
         assert_eq!(loaded.hotkeys.selection, "Alt+F8");
         assert_eq!(loaded.translator.openai_compatible.model, "gpt-test");
@@ -652,17 +778,62 @@ ocr:
             loaded.ocr.model_dir,
             ModelDir::Custom(PathBuf::from("./models"))
         );
+        assert_eq!(loaded.speech.provider, SpeechProvider::Coqui);
+        assert_eq!(loaded.speech.rate, 1.5);
+        assert_eq!(loaded.speech.volume, 0.8);
+        assert_eq!(loaded.speech.coqui.model_name, "test-model");
+        assert_eq!(
+            loaded.speech.coqui.speaker_wav.as_deref(),
+            Some("./voice.wav")
+        );
 
         loaded.save(Some(config_path.clone())).expect("save config");
         let saved = std::fs::read_to_string(config_path).expect("saved config");
 
         assert!(saved.contains("target_lang: fr"));
+        assert!(saved.contains("provider: snaptext_cloud"));
         assert!(saved.contains("screenshot: CmdOrCtrl+Shift+T"));
         assert!(saved.contains("selection: Alt+F8"));
         assert!(saved.contains("api_key: sk-test"));
         assert!(saved.contains("model: gpt-test"));
+        assert!(saved.contains("provider: coqui"));
+        assert!(saved.contains("model_name: test-model"));
         assert!(!saved.contains("\" fr \""));
         assert!(!saved.contains("\" sk-test \""));
+    }
+
+    #[test]
+    fn legacy_config_without_speech_uses_default_speech_config() {
+        let yaml = r#"
+target_lang: en
+ui:
+  theme: system
+  result_panel_dock: cursor
+hotkeys:
+  screenshot: CmdOrCtrl+Shift+T
+  selection: CmdOrCtrl+Shift+D
+translator:
+  provider: snaptext_cloud
+  openai_compatible:
+    base_url: https://api.openai.com/v1
+    api_key:
+    model: gpt-4o-mini
+  deepl:
+    api_key:
+    base_url: https://api-free.deepl.com/v2
+  google:
+    api_key:
+    base_url: https://translation.googleapis.com/language/translate/v2
+  local_http:
+    endpoint: http://127.0.0.1:8080/translate
+ocr:
+  model_dir: bundled
+  use_gpu: false
+"#;
+
+        let config: AppConfig = serde_yaml::from_str(yaml).expect("legacy config");
+
+        assert_eq!(config.speech, SpeechConfig::default());
     }
 
     #[test]
@@ -726,6 +897,23 @@ ocr:
         assert_eq!(
             serde_yaml::to_string(&provider).expect("serialize provider"),
             "snaptext_cloud\n"
+        );
+    }
+
+    #[test]
+    fn normalized_config_migrates_removed_translator_providers() {
+        let mut openai_config = AppConfig::default();
+        openai_config.translator.provider = TranslatorProvider::OpenAiCompatible;
+        let mut local_config = AppConfig::default();
+        local_config.translator.provider = TranslatorProvider::LocalHttp;
+
+        assert_eq!(
+            openai_config.normalized_for_save().translator.provider,
+            TranslatorProvider::SnapTextCloud
+        );
+        assert_eq!(
+            local_config.normalized_for_save().translator.provider,
+            TranslatorProvider::SnapTextCloud
         );
     }
 
@@ -827,26 +1015,14 @@ ocr:
     }
 
     #[test]
-    fn validate_rejects_empty_openai_model() {
+    fn validate_ignores_removed_provider_fields_when_not_selected() {
         let mut config = AppConfig::default();
         config.translator.openai_compatible.model = " ".to_owned();
-
-        let err = config.validate().expect_err("empty model");
-
-        assert!(err.to_string().contains("OpenAI model cannot be empty"));
-    }
-
-    #[test]
-    fn validate_rejects_non_http_local_endpoint() {
-        let mut config = AppConfig::default();
         config.translator.local_http.endpoint =
             Url::parse("file:///tmp/translate").expect("valid file url");
 
-        let err = config.validate().expect_err("invalid endpoint scheme");
-
-        assert!(
-            err.to_string()
-                .contains("Local HTTP endpoint must use http or https")
-        );
+        config
+            .validate()
+            .expect("removed provider fields are inert");
     }
 }

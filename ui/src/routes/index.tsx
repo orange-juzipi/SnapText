@@ -1,6 +1,10 @@
-import { Copy, Pin, RefreshCw, X } from "lucide-react";
+import { ArrowRight, Copy, Languages, Pin, RefreshCw, ScanText, Square, Volume2 } from "lucide-react";
 import { startScreenshotOverlay, unpinResultWindow } from "@/lib/api";
+import { sourceLabel, translatorProviderDetailLabel } from "@/lib/format";
 import { labelsForLanguage } from "@/lib/labels";
+import { AUTO_TARGET_LANG, resolveSourceSpeechLang, resolveTargetLang } from "@/lib/language";
+import { errorMessage } from "@/lib/errors";
+import { speakText, stopSpeech } from "@/lib/speech";
 import {
   useConfigQuery,
   usePinResultMutation,
@@ -12,9 +16,6 @@ import type { HistoryRecord } from "@/lib/types";
 import { useWorkspaceState } from "@/app/workspace-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Field, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -32,7 +33,7 @@ export function WorkspacePage() {
       workspace.showError(labels.textInputRequired);
       return;
     }
-    const targetLang = normalizedTargetLang(workspace.targetLang);
+    const targetLang = resolveTargetLang(workspace.textInput, workspace.targetLang);
     try {
       workspace.setTranslating(true);
       const record = await translateTextMutation.mutateAsync({
@@ -53,6 +54,10 @@ export function WorkspacePage() {
       await startScreenshotOverlay();
       workspace.setStatus(labels.startOverlay);
     } catch (error) {
+      if (isScreenshotSelectionCancelled(error)) {
+        workspace.setStatus(labels.ready);
+        return;
+      }
       workspace.showError(errorMessage(error));
     }
   }
@@ -66,7 +71,7 @@ export function WorkspacePage() {
       workspace.setTranslating(true);
       const record = await retranslateMutation.mutateAsync({
         ...workspace.lastRequest,
-        target_lang: normalizedTargetLang(workspace.targetLang),
+        target_lang: resolveTargetLang(workspace.lastRequest.source_text, workspace.targetLang),
       });
       workspace.setResultSnapshot(record);
       workspace.setStatus(labels.resultRetranslated);
@@ -85,6 +90,20 @@ export function WorkspacePage() {
     try {
       await copyText(workspace.snapshot.result);
       workspace.setStatus(labels.resultCopied);
+      workspace.showToast(labels.resultCopied, undefined, "success");
+    } catch (error) {
+      workspace.showError(errorMessage(error));
+    }
+  }
+
+  async function handleSpeak(text: string, lang: string) {
+    if (!text.trim()) {
+      workspace.showError(labels.noSpeechText);
+      return;
+    }
+    try {
+      await speakText({ text, lang, config: configQuery.data?.speech });
+      workspace.setStatus(labels.speechStarted);
     } catch (error) {
       workspace.showError(errorMessage(error));
     }
@@ -101,17 +120,8 @@ export function WorkspacePage() {
       }
       return;
     }
-    if (!workspace.snapshot.result.trim() || !workspace.snapshot.sourceText.trim()) {
-      workspace.showError(labels.noResultToPin);
-      return;
-    }
     try {
-      await pinMutation.mutateAsync({
-        source: workspace.snapshot.sourceKind,
-        source_text: workspace.snapshot.sourceText,
-        translated_text: workspace.snapshot.result,
-        target_lang: workspace.snapshot.targetLang,
-      });
+      await pinMutation.mutateAsync();
       workspace.setPinned(true);
       workspace.setStatus(labels.resultPinned);
     } catch (error) {
@@ -120,77 +130,90 @@ export function WorkspacePage() {
   }
 
   return (
-    <section className="grid gap-4">
-      <Card className="workspace-card">
-        <CardContent className="workspace-content">
-          <section className="rounded-lg border border-border bg-secondary/45 p-3">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <Badge variant="primary">TEXT</Badge>
-              <div className="flex flex-wrap gap-2">
-                <Button onClick={handleTranslateText} variant="primary">
-                  {labels.translateText}
-                </Button>
-                <Button onClick={handleStartOverlay}>{labels.startOverlay}</Button>
-              </div>
-            </div>
-            <div className="mb-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_12rem] md:items-end">
-              <Field>
-                <FieldLabel>{labels.sourceText}</FieldLabel>
-                <Input value={labels.autoDetectLanguage} readOnly />
-              </Field>
-              <Field>
-                <FieldLabel>{labels.targetLanguage}</FieldLabel>
-                <Select
-                  value={workspace.targetLang}
-                  onChange={(event) => workspace.setTargetLang(event.target.value)}
-                >
-                  <option value="en">English</option>
-                  <option value="zh_cn">中文</option>
-                  <option value="ja">日本語</option>
-                  <option value="ko">한국어</option>
-                  <option value="fr">Français</option>
-                  <option value="de">Deutsch</option>
-                  <option value="es">Español</option>
-                  <option value="ru">Русский</option>
-                </Select>
-              </Field>
-            </div>
-            <Textarea
-              className="h-24 min-h-0 bg-card"
-              value={workspace.ocrLoading ? "" : workspace.textInput}
-              onChange={(event) => workspace.setTextInput(event.target.value)}
-              placeholder={workspace.ocrLoading ? labels.ocrSelectedRegion : labels.textInputPlaceholder}
-              disabled={workspace.ocrLoading}
-            />
-          </section>
+    <section className="workspace-grid">
+      <section className="workspace-panel">
+        <div className="workspace-panel-toolbar">
+          <Badge variant="primary">Source</Badge>
+          <div className="workspace-actions">
+            <Button
+              onClick={() => handleSpeak(workspace.textInput, resolveSourceSpeechLang(workspace.textInput))}
+              variant="secondary"
+              aria-label={labels.playSource}
+            >
+              <Volume2 size={16} />
+              {labels.playSource}
+            </Button>
+            <Button onClick={stopSpeech} variant="secondary" aria-label={labels.stopSpeech}>
+              <Square size={16} />
+            </Button>
+            <Button onClick={handleStartOverlay} variant="secondary">
+              <ScanText size={16} />
+              {labels.startOverlay}
+            </Button>
+            <Button onClick={handleTranslateText} variant="primary">
+              <Languages size={16} />
+              {labels.translateText}
+              <ArrowRight size={15} />
+            </Button>
+          </div>
+        </div>
+        <Textarea
+          className="workspace-textarea bg-control"
+          value={workspace.ocrLoading ? "" : workspace.textInput}
+          onChange={(event) => workspace.setTextInput(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) {
+              return;
+            }
+            event.preventDefault();
+            if (!workspace.translating && !translateTextMutation.isPending) {
+              void handleTranslateText();
+            }
+          }}
+          placeholder={workspace.ocrLoading ? labels.ocrSelectedRegion : labels.textInputPlaceholder}
+          disabled={workspace.ocrLoading}
+        />
+      </section>
 
-          <section className="rounded-lg border border-border bg-card p-3">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-              <Badge variant="success">RESULT</Badge>
-              <div className="flex flex-wrap gap-2">
-                <Button onClick={handleCopyResult} variant="primary">
-                  <Copy size={16} />
-                  {labels.copy}
-                </Button>
-                <Button onClick={handleTogglePin}>
-                  <Pin size={16} />
-                  {workspace.pinned ? labels.unpin : labels.pin}
-                </Button>
-                <Button onClick={workspace.clearResult} variant="ghost">
-                  <X size={16} />
-                  {labels.close}
-                </Button>
-              </div>
-            </div>
-            <Textarea
-              className="h-24 min-h-0 bg-background text-[15px]"
-              value={workspace.translating ? "" : workspace.snapshot.result}
-              readOnly
-              placeholder={workspace.translating ? labels.translating : labels.translationPlaceholder}
-            />
+      <section className="workspace-panel">
+        <div className="workspace-panel-toolbar">
+          <div className="workspace-badge-row">
+            <Badge variant="success">Translation</Badge>
+            <span className="workspace-source-label">
+              {sourceLabel(workspace.snapshot.sourceKind, labels)} ·{" "}
+              {translatorProviderDetailLabel(
+                configQuery.data?.translator.provider,
+                configQuery.data?.translator.snaptext_cloud.endpoint,
+              )}
+            </span>
+            <Select
+              className="workspace-target-select"
+              value={workspace.targetLang}
+              onChange={(event) => workspace.setTargetLang(event.target.value)}
+              aria-label={labels.targetLanguage}
+            >
+              <option value={AUTO_TARGET_LANG}>{labels.autoDetectLanguage}</option>
+              <option value="en">English</option>
+              <option value="zh_cn">中文</option>
+              <option value="ja">日本語</option>
+              <option value="ko">한국어</option>
+              <option value="fr">Français</option>
+              <option value="de">Deutsch</option>
+              <option value="es">Español</option>
+              <option value="ru">Русский</option>
+            </Select>
+          </div>
+          <div className="workspace-actions">
+            <Button
+              onClick={() => handleSpeak(workspace.snapshot.result, workspace.snapshot.targetLang || workspace.targetLang)}
+              variant="secondary"
+              aria-label={labels.playTranslation}
+            >
+              <Volume2 size={16} />
+              {labels.playTranslation}
+            </Button>
             {workspace.lastRequest ? (
               <Button
-                className="mt-3"
                 disabled={workspace.translating || retranslateMutation.isPending}
                 onClick={handleRetranslate}
                 variant="secondary"
@@ -199,9 +222,23 @@ export function WorkspacePage() {
                 {labels.retranslate}
               </Button>
             ) : null}
-          </section>
-        </CardContent>
-      </Card>
+            <Button onClick={handleCopyResult} variant="primary">
+              <Copy size={16} />
+              {labels.copy}
+            </Button>
+            <Button disabled={pinMutation.isPending} onClick={handleTogglePin} variant="secondary">
+              <Pin size={16} />
+              {workspace.pinned ? labels.unpin : labels.pin}
+            </Button>
+          </div>
+        </div>
+        <Textarea
+          className="workspace-textarea bg-background text-[15px]"
+          value={workspace.translating ? "" : workspace.snapshot.result}
+          readOnly
+          placeholder={workspace.translating ? labels.translating : labels.translationPlaceholder}
+        />
+      </section>
     </section>
   );
 
@@ -210,10 +247,6 @@ export function WorkspacePage() {
   }
 }
 
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function normalizedTargetLang(value: string) {
-  return value.trim() || "en";
+function isScreenshotSelectionCancelled(error: unknown) {
+  return errorMessage(error).includes("screenshot selection produced no image; status=0");
 }

@@ -1,3 +1,5 @@
+#[cfg(not(test))]
+use std::collections::HashMap;
 use std::{
     io::Cursor,
     path::{Path, PathBuf},
@@ -10,27 +12,32 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::{DynamicImage, ImageFormat, RgbaImage};
 #[cfg(not(test))]
 use snaptext_core::hotkey::HotkeyAction;
+#[cfg(not(test))]
+use snaptext_core::selection::ensure_selection_permission;
 use snaptext_core::{
     Error, Result,
-    config::{AppConfig, Lang, ModelDir},
+    config::{AppConfig, Lang, ModelDir, SpeechProvider},
     history::{HistoryRecord, HistorySource, HistoryStore, NewHistoryRecord},
     ocr::OcrEngine,
     pipeline::{TranslationResult, first_translated_text},
     screenshot::{ImageMeta, Screencap},
-    selection::{SelectionEvent, SelectionWatcher, normalize_selection_text},
+    selection::{
+        SelectionEvent, SelectionWatcher, normalize_selection_text, selection_permission_status,
+    },
     translate::{TranslateRequest, TranslatorRegistry},
 };
-#[cfg(not(test))]
+#[cfg(all(not(test), not(target_os = "macos")))]
+use tauri::WebviewUrl;
+#[cfg(all(not(test), not(target_os = "macos")))]
 use tauri::webview::WebviewWindowBuilder;
 use tauri::{AppHandle, Emitter, Manager, State};
 #[cfg(not(test))]
 use tauri::{
-    WebviewUrl,
     menu::{Menu, MenuItemBuilder},
     tray::TrayIconBuilder,
 };
 #[cfg(not(test))]
-use tauri_plugin_global_shortcut::ShortcutState;
+use tauri_plugin_global_shortcut::{Shortcut, ShortcutState};
 
 const OVERLAY_TRANSLATION_EVENT: &str = "snaptext://overlay-translation";
 #[cfg(target_os = "macos")]
@@ -40,12 +47,14 @@ const OVERLAY_OCR_FAILED_EVENT: &str = "snaptext://overlay-ocr-failed";
 const OVERLAY_OCR_EVENT: &str = "snaptext://overlay-ocr";
 const RESULT_TRANSLATION_EVENT: &str = "snaptext://result-translation";
 const RESULT_SELECTION_EVENT: &str = "snaptext://result-selection";
-const RESULT_SNAPSHOT_EVENT: &str = "snaptext://result-snapshot";
+#[cfg(not(test))]
+const SELECTION_TEXT_EVENT: &str = "snaptext://selection-text";
+#[cfg(not(test))]
+const RESULT_SELECTION_FAILED_EVENT: &str = "snaptext://result-selection-failed";
 const RESULT_WINDOW_STATE_EVENT: &str = "snaptext://result-window-state";
 const MAIN_WINDOW_LABEL: &str = "main";
 #[cfg(not(target_os = "macos"))]
 const OVERLAY_WINDOW_LABEL: &str = "overlay";
-const RESULT_WINDOW_LABEL: &str = "result";
 const TRAY_SHOW: &str = "show";
 const TRAY_HIDE: &str = "hide";
 const TRAY_QUIT: &str = "quit";
@@ -53,8 +62,11 @@ const MAX_IMAGE_PAYLOAD_BYTES: usize = 25 * 1024 * 1024;
 const MAX_IMAGE_PIXELS: u64 = 24_000_000;
 const MAIN_WINDOW_HIDE_SETTLE_MS: u64 = 160;
 const OCR_WORKER_PATH: &str = "python/ocr_worker.py";
+const TTS_WORKER_PATH: &str = "python/tts_worker.py";
 const SNAPTEXT_PYTHON_ENV: &str = "SNAPTEXT_PYTHON";
+const SNAPTEXT_TTS_PYTHON_ENV: &str = "SNAPTEXT_TTS_PYTHON";
 const OCR_VENV_PYTHON: &str = ".venv-ocr/bin/python";
+const TTS_VENV_PYTHON: &str = ".venv-tts/bin/python";
 
 pub struct AppState {
     config_path: Option<PathBuf>,
@@ -66,6 +78,10 @@ pub struct AppState {
     selection: SelectionWatcher,
     pending_overlay: Mutex<Option<OverlaySession>>,
     translator: RwLock<TranslatorRegistry>,
+    #[cfg(test)]
+    fake_translated_text: Mutex<Option<String>>,
+    #[cfg(not(test))]
+    hotkey_routes: RwLock<HashMap<u32, HotkeyAction>>,
 }
 
 #[derive(Debug, Clone)]
@@ -101,6 +117,8 @@ impl AppState {
         config_path: Option<PathBuf>,
         resource_dir: Option<PathBuf>,
     ) -> Result<Self> {
+        let config = config.normalized_for_save();
+        config.validate()?;
         let ocr = OcrEngine::new(resolve_model_dir(&config, resource_dir.as_deref()))?;
         let translator = TranslatorRegistry::new(config.translator.clone());
         Ok(Self {
@@ -113,6 +131,10 @@ impl AppState {
             selection: SelectionWatcher::new()?,
             pending_overlay: Mutex::new(None),
             translator: RwLock::new(translator),
+            #[cfg(test)]
+            fake_translated_text: Mutex::new(None),
+            #[cfg(not(test))]
+            hotkey_routes: RwLock::new(HashMap::new()),
         })
     }
 }
@@ -120,7 +142,7 @@ impl AppState {
 #[cfg(not(test))]
 pub fn run_tauri(config: AppConfig, history: HistoryStore) -> Result<()> {
     let hotkeys = configured_hotkeys(&config);
-    let hotkey_routes = hotkeys.clone();
+    let hotkey_routes = configured_hotkey_routes(&config)?;
 
     tauri::Builder::default()
         .plugin(
@@ -132,15 +154,19 @@ pub fn run_tauri(config: AppConfig, history: HistoryStore) -> Result<()> {
                         return;
                     }
 
-                    let pressed = shortcut.to_string();
-                    let Some((action, _)) = hotkey_routes
-                        .iter()
-                        .find(|(_, configured)| configured == pressed.as_str())
-                    else {
+                    let action = app
+                        .try_state::<AppState>()
+                        .and_then(|state| hotkey_action_for_event_id(state.inner(), event.id));
+                    let Some(action) = action else {
+                        tracing::warn!(
+                            shortcut = %shortcut,
+                            id = event.id,
+                            "global hotkey event did not match current config"
+                        );
                         return;
                     };
 
-                    handle_global_hotkey(app.clone(), *action);
+                    handle_global_hotkey(app.clone(), action);
                 })
                 .build(),
         )
@@ -157,6 +183,8 @@ pub fn run_tauri(config: AppConfig, history: HistoryStore) -> Result<()> {
             get_desktop_capabilities,
             validate_ocr_models,
             check_ocr_worker,
+            check_tts_worker,
+            synthesize_text,
             translate_image_base64,
             translate_screenshot_base64,
             translate_screenshot_region,
@@ -174,12 +202,12 @@ pub fn run_tauri(config: AppConfig, history: HistoryStore) -> Result<()> {
         ])
         .setup(|app| {
             let resource_dir = app.handle().path().resource_dir().ok();
-            app.manage(AppState::with_resource_dir(
-                config,
-                history,
-                resource_dir.clone(),
-            )?);
-            setup_result_window(app.handle())?;
+            let app_state = AppState::with_resource_dir(config, history, resource_dir.clone())?;
+            *app_state
+                .hotkey_routes
+                .write()
+                .map_err(|err| Error::Config(err.to_string()))? = hotkey_routes;
+            app.manage(app_state);
             setup_tray(app.handle())?;
 
             let state = app.state::<AppState>();
@@ -264,32 +292,6 @@ fn setup_overlay_window(_app: &AppHandle) -> Result<()> {
 }
 
 #[cfg(not(test))]
-fn setup_result_window(app: &AppHandle) -> Result<()> {
-    if app.get_webview_window(RESULT_WINDOW_LABEL).is_some() {
-        return Ok(());
-    }
-
-    WebviewWindowBuilder::new(
-        app,
-        RESULT_WINDOW_LABEL,
-        WebviewUrl::App("index.html".into()),
-    )
-    .initialization_script("window.__SNAPTEXT_WINDOW = 'result';")
-    .title("SnapText Result")
-    .visible(false)
-    .decorations(false)
-    .always_on_top(true)
-    .skip_taskbar(false)
-    .focused(false)
-    .inner_size(420.0, 280.0)
-    .min_inner_size(320.0, 200.0)
-    .build()
-    .map_err(|err| Error::Config(err.to_string()))?;
-
-    Ok(())
-}
-
-#[cfg(not(test))]
 fn handle_tray_action(app: &AppHandle, action: Option<TrayAction>) {
     match action {
         Some(TrayAction::Show) => {
@@ -342,20 +344,40 @@ fn configured_hotkeys(config: &AppConfig) -> Vec<(HotkeyAction, String)> {
 }
 
 #[cfg(not(test))]
+fn configured_hotkey_routes(config: &AppConfig) -> Result<HashMap<u32, HotkeyAction>> {
+    configured_hotkeys(&config)
+        .into_iter()
+        .map(|(action, shortcut)| {
+            // Route by the plugin's stable event id. This avoids comparing user-facing
+            // accelerator text with the plugin's canonical display string.
+            let shortcut = shortcut
+                .parse::<Shortcut>()
+                .map_err(|err| Error::Config(err.to_string()))?;
+            Ok((shortcut.id(), action))
+        })
+        .collect()
+}
+
+#[cfg(not(test))]
+fn hotkey_action_for_event_id(state: &AppState, id: u32) -> Option<HotkeyAction> {
+    state.hotkey_routes.read().ok()?.get(&id).copied()
+}
+
+#[cfg(not(test))]
 fn handle_global_hotkey(app: AppHandle, action: HotkeyAction) {
+    tracing::info!(?action, "global hotkey action triggered");
     tauri::async_runtime::spawn(async move {
         let state = app.state::<AppState>();
         let result = match action {
             HotkeyAction::Screenshot => start_screenshot_overlay_inner(&app, state.inner())
                 .await
                 .map(|_| ()),
-            HotkeyAction::Selection => match translate_current_selection_inner(state.inner()).await
-            {
-                Ok(record) => {
-                    emit_selection_record(&app, &record);
-                    Ok(())
+            HotkeyAction::Selection => match current_selection_text_inner(state.inner()).await {
+                Ok(payload) => show_main_window(&app).map(|_| emit_selection_text(&app, &payload)),
+                Err(err) => {
+                    emit_selection_failure(&app, &err);
+                    Err(err)
                 }
-                Err(err) => Err(err),
             },
         };
 
@@ -363,6 +385,33 @@ fn handle_global_hotkey(app: AppHandle, action: HotkeyAction) {
             tracing::warn!(error = %err, "global hotkey action failed");
         }
     });
+}
+
+#[cfg(not(test))]
+fn refresh_global_hotkeys(app: &AppHandle, config: &AppConfig) -> Result<()> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+    let routes = configured_hotkey_routes(config)?;
+    let manager = app.global_shortcut();
+    manager
+        .unregister_all()
+        .map_err(|err| Error::Config(err.to_string()))?;
+    for (_, shortcut) in configured_hotkeys(config) {
+        manager
+            .register(shortcut.as_str())
+            .map_err(|err| Error::Config(err.to_string()))?;
+    }
+    let state = app.state::<AppState>();
+    *state
+        .hotkey_routes
+        .write()
+        .map_err(|err| Error::Config(err.to_string()))? = routes;
+    Ok(())
+}
+
+#[cfg(test)]
+fn refresh_global_hotkeys(_app: &AppHandle, _config: &AppConfig) -> Result<()> {
+    Ok(())
 }
 
 #[cfg(test)]
@@ -399,8 +448,14 @@ fn get_config(state: State<'_, AppState>) -> Result<AppConfig> {
 
 #[tauri::command]
 #[allow(dead_code)]
-fn update_config(state: State<'_, AppState>, config: AppConfig) -> Result<AppConfig> {
-    update_config_inner(state.inner(), config)
+fn update_config(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    config: AppConfig,
+) -> Result<AppConfig> {
+    let config = update_config_inner(state.inner(), config)?;
+    refresh_global_hotkeys(&app, &config)?;
+    Ok(config)
 }
 
 #[tauri::command]
@@ -413,6 +468,23 @@ fn validate_ocr_models(state: State<'_, AppState>) -> Result<OcrModelStatus> {
 #[allow(dead_code)]
 fn check_ocr_worker(state: State<'_, AppState>) -> OcrWorkerStatus {
     check_ocr_worker_inner(state.inner())
+}
+
+#[tauri::command]
+#[allow(dead_code)]
+fn check_tts_worker(state: State<'_, AppState>) -> TtsWorkerStatus {
+    check_tts_worker_inner(state.inner())
+}
+
+#[tauri::command]
+#[allow(dead_code)]
+fn synthesize_text(
+    state: State<'_, AppState>,
+    text: String,
+    lang: String,
+    provider: Option<String>,
+) -> Result<TtsSynthesisResult> {
+    synthesize_text_inner(state.inner(), text, lang, provider)
 }
 
 #[tauri::command]
@@ -698,17 +770,8 @@ fn close_overlay(app: AppHandle, state: State<'_, AppState>) -> Result<()> {
 
 #[tauri::command]
 #[allow(dead_code)]
-fn pin_result_window(app: AppHandle, payload: PinnedResultPayload) -> Result<()> {
-    validate_pinned_result_payload(&payload)?;
-    let window = app
-        .get_webview_window(RESULT_WINDOW_LABEL)
-        .ok_or_else(|| Error::Config("result window is not available".to_owned()))?;
-    window
-        .show()
-        .and_then(|_| window.set_focus())
-        .map_err(|err| Error::Config(err.to_string()))?;
-    app.emit_to(RESULT_WINDOW_LABEL, RESULT_SNAPSHOT_EVENT, payload)
-        .map_err(|err| Error::Config(err.to_string()))?;
+fn pin_result_window(app: AppHandle) -> Result<()> {
+    set_main_window_always_on_top(&app, true)?;
     emit_result_window_state(&app, true)?;
     Ok(())
 }
@@ -716,13 +779,18 @@ fn pin_result_window(app: AppHandle, payload: PinnedResultPayload) -> Result<()>
 #[tauri::command]
 #[allow(dead_code)]
 fn unpin_result_window(app: AppHandle) -> Result<()> {
-    if let Some(window) = app.get_webview_window(RESULT_WINDOW_LABEL) {
-        window
-            .hide()
-            .map_err(|err| Error::Config(err.to_string()))?;
-    }
+    set_main_window_always_on_top(&app, false)?;
     emit_result_window_state(&app, false)?;
     Ok(())
+}
+
+fn set_main_window_always_on_top(app: &AppHandle, always_on_top: bool) -> Result<()> {
+    let window = app
+        .get_webview_window(MAIN_WINDOW_LABEL)
+        .ok_or_else(|| Error::Config("main window is not available".to_owned()))?;
+    window
+        .set_always_on_top(always_on_top)
+        .map_err(|err| Error::Config(err.to_string()))
 }
 
 fn emit_result_window_state(app: &AppHandle, pinned: bool) -> Result<()> {
@@ -733,20 +801,13 @@ fn emit_result_window_state(app: &AppHandle, pinned: bool) -> Result<()> {
     Ok(())
 }
 
-fn result_window_state_targets() -> [&'static str; 2] {
-    [MAIN_WINDOW_LABEL, RESULT_WINDOW_LABEL]
+fn result_window_state_targets() -> [&'static str; 1] {
+    [MAIN_WINDOW_LABEL]
 }
 
 fn emit_result_translation(app: &AppHandle, result: &TranslationResult) {
     if let Err(err) = app.emit_to(MAIN_WINDOW_LABEL, RESULT_TRANSLATION_EVENT, result.clone()) {
         tracing::warn!(error = %err, "failed to emit result translation to main window");
-    }
-    if let Err(err) = app.emit_to(
-        RESULT_WINDOW_LABEL,
-        RESULT_TRANSLATION_EVENT,
-        result.clone(),
-    ) {
-        tracing::warn!(error = %err, "failed to emit result translation to result window");
     }
 }
 
@@ -754,9 +815,34 @@ fn emit_selection_record(app: &AppHandle, record: &HistoryRecord) {
     if let Err(err) = app.emit_to(MAIN_WINDOW_LABEL, RESULT_SELECTION_EVENT, record.clone()) {
         tracing::warn!(error = %err, "failed to emit selection result to main window");
     }
-    if let Err(err) = app.emit_to(RESULT_WINDOW_LABEL, RESULT_SELECTION_EVENT, record.clone()) {
-        tracing::warn!(error = %err, "failed to emit selection result to result window");
+}
+
+#[cfg(not(test))]
+fn emit_selection_text(app: &AppHandle, payload: &SelectionTextPayload) {
+    if let Err(err) = app.emit_to(MAIN_WINDOW_LABEL, SELECTION_TEXT_EVENT, payload.clone()) {
+        tracing::warn!(error = %err, "failed to emit selection text to main window");
     }
+}
+
+#[cfg(not(test))]
+fn emit_selection_failure(app: &AppHandle, error: &Error) {
+    let payload = SelectionFailurePayload {
+        message: selection_failure_message(error),
+    };
+    if let Err(err) = app.emit_to(MAIN_WINDOW_LABEL, RESULT_SELECTION_FAILED_EVENT, payload) {
+        tracing::warn!(error = %err, "failed to emit selection failure to main window");
+    }
+}
+
+fn selection_failure_message(error: &Error) -> String {
+    let message = error.to_string();
+    if message.contains("Accessibility permission is required") {
+        return "需要先授权系统辅助功能权限。请在系统设置 -> 隐私与安全性 -> 辅助功能 中允许 SnapText，然后重新使用划词。".to_owned();
+    }
+    if message.contains("no selected text is available") {
+        return "未读取到选中文本，请先选中文本后再使用划词。".to_owned();
+    }
+    message
 }
 
 #[cfg(target_os = "macos")]
@@ -802,14 +888,6 @@ fn history_record_to_translation_result(record: &HistoryRecord) -> TranslationRe
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct PinnedResultPayload {
-    pub source: String,
-    pub source_text: String,
-    pub translated_text: String,
-    pub target_lang: String,
-}
-
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct OverlayTranslationPayload {
     pub result: TranslationResult,
@@ -822,25 +900,15 @@ pub struct OverlayOcrPayload {
     pub region: snaptext_core::ocr::BBox,
 }
 
-fn validate_pinned_result_payload(payload: &PinnedResultPayload) -> Result<()> {
-    parse_history_source(&payload.source)?;
-    if payload.source_text.trim().is_empty() {
-        return Err(Error::Config(
-            "pinned result source text cannot be empty".to_owned(),
-        ));
-    }
-    if payload.translated_text.trim().is_empty() {
-        return Err(Error::Config(
-            "pinned result translated text cannot be empty".to_owned(),
-        ));
-    }
-    if payload.target_lang.trim().is_empty() {
-        return Err(Error::Config(
-            "pinned result target language cannot be empty".to_owned(),
-        ));
-    }
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct SelectionFailurePayload {
+    pub message: String,
+}
 
-    Ok(())
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct SelectionTextPayload {
+    pub text: String,
+    pub app_bundle_id: Option<String>,
 }
 
 async fn translate_text_inner(
@@ -888,7 +956,7 @@ async fn translate_text_with_source_inner(
         source: None,
         target: target_lang.clone(),
     };
-    let translated_text = translate_first_text_for_history(translator, request).await?;
+    let translated_text = translate_first_text_for_history(state, translator, request).await?;
 
     let history = state
         .history
@@ -913,11 +981,12 @@ fn ensure_supported_target_lang_for_translation(target_lang: &Lang) -> Result<()
 }
 
 async fn translate_first_text_for_history(
+    _state: &AppState,
     translator: TranslatorRegistry,
     request: TranslateRequest,
 ) -> Result<String> {
     #[cfg(test)]
-    if let Some(translated_text) = take_fake_translated_text() {
+    if let Some(translated_text) = take_fake_translated_text(_state) {
         snaptext_core::translate::validate_translate_request(&request)?;
         return Ok(translated_text);
     }
@@ -988,6 +1057,24 @@ async fn retranslate_result_text_inner(
 
 async fn translate_current_selection_inner(state: &AppState) -> Result<HistoryRecord> {
     translate_optional_selection_inner(state, state.selection.current_selection().await?).await
+}
+
+#[cfg(not(test))]
+async fn current_selection_text_inner(state: &AppState) -> Result<SelectionTextPayload> {
+    ensure_selection_permission()?;
+    selection_text_payload_from_optional(state.selection.current_selection().await?)
+}
+
+fn selection_text_payload_from_optional(
+    selection: Option<SelectionEvent>,
+) -> Result<SelectionTextPayload> {
+    let selection =
+        selection.ok_or_else(|| Error::Selection("no selected text is available".to_owned()))?;
+    let text = normalize_selection_text_for_translation(selection.text)?;
+    Ok(SelectionTextPayload {
+        text,
+        app_bundle_id: selection.app_bundle_id,
+    })
 }
 
 async fn translate_optional_selection_inner(
@@ -1533,8 +1620,12 @@ fn discover_project_ocr_python(state: &AppState) -> Option<PathBuf> {
 }
 
 fn find_ocr_venv_python_from(start: &Path) -> Option<PathBuf> {
+    find_named_venv_python_from(start, OCR_VENV_PYTHON)
+}
+
+fn find_named_venv_python_from(start: &Path, marker: &str) -> Option<PathBuf> {
     for dir in start.ancestors() {
-        let python = dir.join(OCR_VENV_PYTHON);
+        let python = dir.join(marker);
         if python.is_file() {
             return Some(python);
         }
@@ -1591,16 +1682,17 @@ fn strip_ansi_escape_codes(input: &str) -> String {
 }
 
 #[cfg(test)]
-static FAKE_TRANSLATED_TEXT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
-
-#[cfg(test)]
-fn set_fake_translated_text(value: impl Into<String>) {
-    *FAKE_TRANSLATED_TEXT.lock().expect("fake translator lock") = Some(value.into());
+fn set_fake_translated_text(state: &AppState, value: impl Into<String>) {
+    *state
+        .fake_translated_text
+        .lock()
+        .expect("fake translator lock") = Some(value.into());
 }
 
 #[cfg(test)]
-fn take_fake_translated_text() -> Option<String> {
-    FAKE_TRANSLATED_TEXT
+fn take_fake_translated_text(state: &AppState) -> Option<String> {
+    state
+        .fake_translated_text
         .lock()
         .expect("fake translator lock")
         .take()
@@ -1650,6 +1742,235 @@ pub struct OcrWorkerStatus {
     pub paddleocr_available: bool,
     pub worker_ready: bool,
     pub message: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct TtsWorkerStatus {
+    pub python_available: bool,
+    pub coqui_available: bool,
+    pub worker_ready: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct TtsSynthesisResult {
+    pub audio_path: String,
+    pub provider: String,
+    pub lang: String,
+}
+
+fn synthesize_text_inner(
+    state: &AppState,
+    text: String,
+    lang: String,
+    provider: Option<String>,
+) -> Result<TtsSynthesisResult> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err(Error::Speech("speech text cannot be empty".to_owned()));
+    }
+
+    let config = state
+        .config
+        .read()
+        .map_err(|err| Error::Config(err.to_string()))?
+        .speech
+        .clone();
+    if !config.enabled {
+        return Err(Error::Speech("speech is disabled".to_owned()));
+    }
+
+    let requested_provider = provider.unwrap_or_else(|| provider_name(&config.provider).to_owned());
+    if requested_provider != "coqui" {
+        return Err(Error::Speech(format!(
+            "native synthesis only supports coqui, got {requested_provider}"
+        )));
+    }
+
+    let worker_path = resolve_tts_worker_path(state);
+    let tempdir = tempfile::Builder::new()
+        .prefix("snaptext-tts-")
+        .tempdir()
+        .map_err(|err| Error::Speech(format!("failed to create TTS temp dir: {err}")))?;
+    let out_path = tempdir.keep().join("speech.wav");
+    run_tts_worker(state, &worker_path, text, lang.trim(), &out_path)?;
+    Ok(TtsSynthesisResult {
+        audio_path: out_path.display().to_string(),
+        provider: "coqui".to_owned(),
+        lang: lang.trim().to_owned(),
+    })
+}
+
+fn resolve_tts_worker_path(state: &AppState) -> PathBuf {
+    if let Ok(path) = std::env::var("SNAPTEXT_TTS_WORKER") {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return path;
+        }
+    }
+    state
+        .resource_dir
+        .as_deref()
+        .map(|dir| dir.join(TTS_WORKER_PATH))
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| PathBuf::from(TTS_WORKER_PATH))
+}
+
+fn run_tts_worker(
+    state: &AppState,
+    worker_path: &Path,
+    text: &str,
+    lang: &str,
+    out_path: &Path,
+) -> Result<()> {
+    let config = state
+        .config
+        .read()
+        .map_err(|err| Error::Config(err.to_string()))?
+        .speech
+        .clone();
+    let mut command = Command::new(resolve_tts_python_command(state));
+    command
+        .arg(worker_path)
+        .arg("--text")
+        .arg(text)
+        .arg("--lang")
+        .arg(lang)
+        .arg("--out")
+        .arg(out_path)
+        .arg("--model")
+        .arg(&config.coqui.model_name);
+    if let Some(speaker_wav) = config.coqui.speaker_wav.as_deref() {
+        command.arg("--speaker-wav").arg(speaker_wav);
+    }
+    if let Some(cache_dir) = config.coqui.cache_dir.as_deref() {
+        command.arg("--cache-dir").arg(cache_dir);
+    }
+    let output = command
+        .output()
+        .map_err(|err| Error::Speech(format!("failed to start TTS worker: {err}")))?;
+    parse_tts_worker_output(output, out_path)
+}
+
+fn parse_tts_worker_output(output: std::process::Output, expected_path: &Path) -> Result<()> {
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let message = ocr_worker_error_message(&stderr, &stdout);
+        return Err(Error::Speech(format!("TTS worker failed: {message}")));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let result_json = last_json_stdout_line(&stdout)
+        .ok_or_else(|| Error::Speech("TTS worker did not return JSON output.".to_owned()))?;
+    let payload: serde_json::Value = serde_json::from_str(result_json)
+        .map_err(|err| Error::Speech(format!("TTS worker returned invalid JSON: {err}")))?;
+    let audio_path = payload
+        .get("audio_path")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| Error::Speech("TTS worker JSON omitted audio_path.".to_owned()))?;
+    if Path::new(audio_path) != expected_path {
+        return Err(Error::Speech(
+            "TTS worker returned an unexpected audio path.".to_owned(),
+        ));
+    }
+    if !expected_path.is_file() {
+        return Err(Error::Speech(
+            "TTS worker did not create the audio file.".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn check_tts_worker_inner(state: &AppState) -> TtsWorkerStatus {
+    let worker_path = resolve_tts_worker_path(state);
+    let python = resolve_tts_python_command(state);
+    let config = match state.config.read() {
+        Ok(config) => config.speech.clone(),
+        Err(err) => {
+            return TtsWorkerStatus {
+                python_available: false,
+                coqui_available: false,
+                worker_ready: false,
+                message: err.to_string(),
+            };
+        }
+    };
+    let mut command = Command::new(&python);
+    command
+        .arg(&worker_path)
+        .arg("--check")
+        .arg("--model")
+        .arg(&config.coqui.model_name);
+    if let Some(cache_dir) = config.coqui.cache_dir.as_deref() {
+        command.arg("--cache-dir").arg(cache_dir);
+    }
+    let output = command.output();
+
+    match output {
+        Err(err) => TtsWorkerStatus {
+            python_available: false,
+            coqui_available: false,
+            worker_ready: false,
+            message: format!("failed to start `{python}`: {err}"),
+        },
+        Ok(output) if output.status.success() => {
+            serde_json::from_slice(&output.stdout).unwrap_or(TtsWorkerStatus {
+                python_available: true,
+                coqui_available: false,
+                worker_ready: false,
+                message: String::from("TTS worker returned invalid status JSON."),
+            })
+        }
+        Ok(output) => TtsWorkerStatus {
+            python_available: true,
+            coqui_available: false,
+            worker_ready: false,
+            message: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        },
+    }
+}
+
+fn resolve_tts_python_command(state: &AppState) -> String {
+    if let Some(python) = state
+        .config
+        .read()
+        .ok()
+        .and_then(|config| config.speech.coqui.python.clone())
+        .filter(|value| !value.trim().is_empty())
+    {
+        return python;
+    }
+    if let Some(python) = std::env::var(SNAPTEXT_TTS_PYTHON_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    {
+        return python;
+    }
+    if let Some(python) = discover_project_tts_python(state) {
+        return python.display().to_string();
+    }
+    resolve_python_command(state)
+}
+
+fn discover_project_tts_python(state: &AppState) -> Option<PathBuf> {
+    let from_resource_dir = state
+        .resource_dir
+        .as_deref()
+        .and_then(|dir| find_named_venv_python_from(dir, TTS_VENV_PYTHON));
+    if from_resource_dir.is_some() {
+        return from_resource_dir;
+    }
+
+    std::env::current_dir()
+        .ok()
+        .and_then(|current_dir| find_named_venv_python_from(&current_dir, TTS_VENV_PYTHON))
+}
+
+fn provider_name(provider: &SpeechProvider) -> &'static str {
+    match provider {
+        SpeechProvider::System => "system",
+        SpeechProvider::Coqui => "coqui",
+    }
 }
 
 fn get_config_inner(state: &AppState) -> Result<AppConfig> {
@@ -1806,6 +2127,11 @@ fn desktop_capabilities(state: &AppState) -> Vec<DesktopCapabilityStatus> {
             status: ocr_worker_capability_status(state),
             action: ocr_worker_capability_action(state),
         },
+        DesktopCapabilityStatus {
+            capability: String::from("tts_worker"),
+            status: tts_worker_capability_status(state),
+            action: tts_worker_capability_action(state),
+        },
     ]
 }
 
@@ -1856,7 +2182,7 @@ fn platform_screenshot_action() -> String {
 fn platform_selection_status() -> String {
     #[cfg(target_os = "macos")]
     {
-        String::from("requires_accessibility_permission")
+        String::from(selection_permission_status())
     }
     #[cfg(target_os = "windows")]
     {
@@ -1922,6 +2248,31 @@ fn ocr_worker_capability_action(state: &AppState) -> String {
     }
 }
 
+fn tts_worker_capability_status(state: &AppState) -> String {
+    let status = check_tts_worker_inner(state);
+    if status.worker_ready {
+        String::from("ready")
+    } else if !status.python_available {
+        String::from("python_missing")
+    } else if !status.coqui_available {
+        String::from("coqui_missing")
+    } else {
+        String::from("error")
+    }
+}
+
+fn tts_worker_capability_action(state: &AppState) -> String {
+    let status = check_tts_worker_inner(state);
+    if status.worker_ready {
+        status.message
+    } else {
+        format!(
+            "{} Install the Coqui TTS Python dependency, for example: pip install coqui-tts",
+            status.message
+        )
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct ScreenshotPayload {
     pub meta: ImageMeta,
@@ -1949,6 +2300,7 @@ impl ScreenshotPayload {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use snaptext_core::config::TranslatorProvider;
 
     #[tokio::test]
     async fn translate_selection_rejects_empty_text() {
@@ -2006,7 +2358,7 @@ mod tests {
             HistoryStore::in_memory().expect("history store"),
         )
         .expect("app state");
-        set_fake_translated_text("bonjour");
+        set_fake_translated_text(&state, "bonjour");
 
         let record = translate_text_inner(&state, " hello ".to_owned(), None)
             .await
@@ -2048,11 +2400,10 @@ mod tests {
 
     #[tokio::test]
     async fn translate_selection_reports_provider_errors() {
-        let state = AppState::new(
-            AppConfig::default(),
-            HistoryStore::in_memory().expect("history store"),
-        )
-        .expect("app state");
+        let mut config = AppConfig::default();
+        config.translator.provider = TranslatorProvider::DeepL;
+        let state = AppState::new(config, HistoryStore::in_memory().expect("history store"))
+            .expect("app state");
 
         let err = translate_selection_inner(&state, "hello".to_owned())
             .await
@@ -2092,6 +2443,33 @@ mod tests {
             .expect_err("missing selection");
 
         assert!(err.to_string().contains("no selected text is available"));
+    }
+
+    #[test]
+    fn selection_text_payload_normalizes_selected_text() {
+        let payload = selection_text_payload_from_optional(Some(SelectionEvent {
+            text: "\0 hello \r\n world \t".to_owned(),
+            app_bundle_id: Some("com.example.editor".to_owned()),
+        }))
+        .expect("selection payload");
+
+        assert_eq!(payload.text, "hello\nworld");
+        assert_eq!(payload.app_bundle_id.as_deref(), Some("com.example.editor"));
+    }
+
+    #[test]
+    fn selection_failure_message_separates_permission_and_empty_selection() {
+        let permission_message = selection_failure_message(&Error::Selection(
+            "Accessibility permission is required before reading selected text".to_owned(),
+        ));
+        assert!(permission_message.contains("授权系统辅助功能权限"));
+        assert!(!permission_message.contains("未读取到选中文本"));
+
+        let empty_message = selection_failure_message(&Error::Selection(
+            "no selected text is available".to_owned(),
+        ));
+        assert!(empty_message.contains("请先选中文本"));
+        assert!(!empty_message.contains("辅助功能权限"));
     }
 
     #[tokio::test]
@@ -2152,6 +2530,22 @@ mod tests {
         assert_eq!(updated.target_lang.0, "ja");
         assert_eq!(loaded.target_lang.0, "ja");
         assert_eq!(get_config_inner(&state).expect("state config"), config);
+    }
+
+    #[test]
+    fn app_state_migrates_removed_translator_providers() {
+        let mut config = AppConfig::default();
+        config.translator.provider = TranslatorProvider::LocalHttp;
+        let state = AppState::new(config, HistoryStore::in_memory().expect("history store"))
+            .expect("app state");
+
+        assert_eq!(
+            get_config_inner(&state)
+                .expect("state config")
+                .translator
+                .provider,
+            TranslatorProvider::SnapTextCloud
+        );
     }
 
     #[test]
@@ -2465,58 +2859,8 @@ mod tests {
     }
 
     #[test]
-    fn pinned_result_payload_validation_rejects_empty_or_unknown_fields() {
-        let valid = PinnedResultPayload {
-            source: String::from("selection"),
-            source_text: String::from("hello"),
-            translated_text: String::from("bonjour"),
-            target_lang: String::from("fr"),
-        };
-        validate_pinned_result_payload(&valid).expect("valid pinned result payload");
-
-        let mut empty_source_text = valid.clone();
-        empty_source_text.source_text = String::from(" \n");
-        assert!(
-            validate_pinned_result_payload(&empty_source_text)
-                .expect_err("empty source text")
-                .to_string()
-                .contains("source text cannot be empty")
-        );
-
-        let mut empty_translation = valid.clone();
-        empty_translation.translated_text = String::from("\t");
-        assert!(
-            validate_pinned_result_payload(&empty_translation)
-                .expect_err("empty translation")
-                .to_string()
-                .contains("translated text cannot be empty")
-        );
-
-        let mut empty_target_lang = valid.clone();
-        empty_target_lang.target_lang = String::from(" \n");
-        assert!(
-            validate_pinned_result_payload(&empty_target_lang)
-                .expect_err("empty target language")
-                .to_string()
-                .contains("target language cannot be empty")
-        );
-
-        let mut unknown_source = valid.clone();
-        unknown_source.source = String::from("clipboard");
-        assert!(
-            validate_pinned_result_payload(&unknown_source)
-                .expect_err("unknown source")
-                .to_string()
-                .contains("unsupported history source")
-        );
-    }
-
-    #[test]
-    fn result_window_state_targets_include_main_and_result_windows() {
-        assert_eq!(
-            result_window_state_targets(),
-            [MAIN_WINDOW_LABEL, RESULT_WINDOW_LABEL]
-        );
+    fn result_window_state_targets_include_main_window_only() {
+        assert_eq!(result_window_state_targets(), [MAIN_WINDOW_LABEL]);
     }
 
     #[test]

@@ -14,7 +14,7 @@
     "macOSPrivateApi": true,
     "windows": [
       {
-        "title": "SnapText",
+        "title": "",
         "width": 960,
         "height": 640,
         "minWidth": 720,
