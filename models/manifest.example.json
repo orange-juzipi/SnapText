@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "name": "PP-OCRv6 multilingual ONNX assets for SnapText",
+  "source_note": "Replace placeholder URLs and SHA-256 values with the exact official or internal mirror assets selected for release.",
+  "files": {
+    "det.onnx": {
+      "url": "https://example.com/path/to/det.onnx",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "cls.onnx": {
+      "url": "https://example.com/path/to/cls.onnx",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "rec.onnx": {
+      "url": "https://example.com/path/to/rec.onnx",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "rec_dict.txt": {
+      "url": "https://example.com/path/to/rec_dict.txt",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  }
+}

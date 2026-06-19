@@ -1,0 +1,39 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/snaptext-core",
+    "crates/snaptext-tauri",
+]
+
+[workspace.package]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://example.invalid/snaptext"
+rust-version = "1.96"
+
+[workspace.dependencies]
+async-trait = "0.1"
+base64 = "0.22"
+directories = "6"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+ort = "2.0.0-rc.12"
+tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
+tauri-plugin-global-shortcut = "2"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = { version = "2", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+xcap = "0.9.6"
+ndarray = "0.17"
+core-foundation = "0.10"
+core-foundation-sys = "0.8"
+objc2 = "0.6"
+objc2-app-kit = "0.3"
+objc2-foundation = "0.3"
