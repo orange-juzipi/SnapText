@@ -14,6 +14,8 @@ use image::{DynamicImage, ImageFormat, RgbaImage};
 use snaptext_core::hotkey::HotkeyAction;
 #[cfg(not(test))]
 use snaptext_core::selection::ensure_selection_permission;
+#[cfg(target_os = "macos")]
+use snaptext_core::selection::selection_permission_status;
 use snaptext_core::{
     Error, Result,
     config::{AppConfig, Lang, ModelDir},
@@ -21,9 +23,7 @@ use snaptext_core::{
     ocr::OcrEngine,
     pipeline::{TranslationResult, first_translated_text},
     screenshot::{ImageMeta, Screencap},
-    selection::{
-        SelectionEvent, SelectionWatcher, normalize_selection_text, selection_permission_status,
-    },
+    selection::{SelectionEvent, SelectionWatcher, normalize_selection_text},
     translate::{TranslateRequest, TranslatorRegistry},
 };
 #[cfg(all(not(test), not(target_os = "macos")))]

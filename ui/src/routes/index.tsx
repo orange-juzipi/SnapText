@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type * as React from "react";
 import { Copy, Languages, Pin, ScanText, Volume2 } from "lucide-react";
 import { startScreenshotOverlay, unpinResultWindow } from "@/lib/api";
+import { translatorProviderDetailLabel } from "@/lib/format";
 import { labelsForLanguage } from "@/lib/labels";
 import { AUTO_TARGET_LANG, resolveSourceSpeechLang, resolveTargetLang } from "@/lib/language";
 import { errorMessage } from "@/lib/errors";
@@ -194,6 +195,7 @@ export function WorkspacePage() {
               disabled={pinMutation.isPending}
               label={workspace.pinned ? labels.unpin : labels.pin}
               onClick={handleTogglePin}
+              variant={workspace.pinned ? "primary" : "secondary"}
             >
               <Pin size={16} />
             </IconTooltipButton>
@@ -235,6 +237,12 @@ export function WorkspacePage() {
         <div className="workspace-panel-toolbar">
           <div className="workspace-badge-row">
             <Badge variant="success">Translation</Badge>
+            <span className="workspace-provider-label">
+              {translatorProviderDetailLabel(
+                configQuery.data?.translator.provider,
+                configQuery.data?.translator.snaptext_cloud.endpoint,
+              )}
+            </span>
             <Select
               className="workspace-target-select"
               value={workspace.targetLang}
