@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -121,6 +122,12 @@ def release_gates(args: argparse.Namespace) -> list[Gate]:
 def run_gate(gate: Gate) -> tuple[bool, str]:
     print(f"\n==> {gate.name}: {gate.description}", flush=True)
     print(f"$ {' '.join(gate.command)}", flush=True)
+    if os.environ.get("SNAPTEXT_RELEASE_GATE_TEST_STUB") == "1":
+        # Keep the self-test deterministic without running heavyweight external
+        # release checks such as bundle, signing, and real model validation.
+        if gate.external:
+            return False, f"stubbed {gate.name} gate failure"
+        return True, "stubbed static gate pass"
     completed = subprocess.run(
         gate.command,
         cwd=ROOT,

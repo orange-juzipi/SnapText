@@ -3,11 +3,14 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+DIRTY_SENTINEL = ROOT / ".snaptext-release-gate-dirty-self-test"
+STUB_ENV = {**os.environ, "SNAPTEXT_RELEASE_GATE_TEST_STUB": "1"}
 
 
 def run_gate(*args: str) -> subprocess.CompletedProcess[str]:
@@ -24,6 +27,7 @@ def run_gate_real(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["python3", "scripts/release_gate.py", *args],
         cwd=ROOT,
+        env=STUB_ENV,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -62,6 +66,15 @@ def current_git_head() -> str:
         check=True,
     )
     return result.stdout.strip()
+
+
+def run_with_temporary_dirty_worktree(*args: str) -> subprocess.CompletedProcess[str]:
+    """Create an untracked sentinel so clean-worktree validation is deterministic."""
+    DIRTY_SENTINEL.write_text("temporary release gate self-test sentinel\n", encoding="utf-8")
+    try:
+        return run_gate_real(*args)
+    finally:
+        DIRTY_SENTINEL.unlink(missing_ok=True)
 
 
 def main() -> int:
@@ -148,7 +161,7 @@ def main() -> int:
     missing_commit = run_gate_real("--skip-static", "--allow-missing-external")
     assert_failure_contains(missing_commit, "the following arguments are required: --release-commit")
 
-    dirty_worktree = run_gate_real(
+    dirty_worktree = run_with_temporary_dirty_worktree(
         "--release-commit",
         head,
         "--skip-static",
@@ -193,6 +206,10 @@ def main() -> int:
     assert_contains(
         summary_single_platform.stdout,
         "native desktop bundle artifacts are still missing:",
+    )
+    assert_contains(
+        summary_single_platform.stdout,
+        "stubbed desktop_bundles gate failure",
     )
 
     bad_version = run_gate_real(
