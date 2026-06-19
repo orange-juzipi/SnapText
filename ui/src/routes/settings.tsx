@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Bolt, ClipboardCopy, Keyboard, MonitorCog, Save, ServerCog, Stethoscope } from "lucide-react";
+import { ArrowLeft, Bolt, ClipboardCopy, Keyboard, MonitorCog, Save, ServerCog, Stethoscope, Volume2 } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { formatCapabilitiesForClipboard } from "@/lib/format";
 import { labelsForLanguage } from "@/lib/labels";
 import { getDesktopCapabilities } from "@/lib/api";
 import {
   useCheckOcrWorkerMutation,
+  useCheckTtsWorkerMutation,
   useConfigQuery,
   useUpdateConfigMutation,
 } from "@/lib/queries";
@@ -21,16 +22,18 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 
-type SettingsTab = "interface" | "hotkeys" | "provider" | "diagnostics";
+type SettingsTab = "interface" | "hotkeys" | "speech" | "provider" | "diagnostics";
 
 export function SettingsPage() {
   const configQuery = useConfigQuery();
   const updateConfig = useUpdateConfigMutation();
   const checkOcrWorker = useCheckOcrWorkerMutation();
+  const checkTtsWorker = useCheckTtsWorkerMutation();
   const workspace = useWorkspaceState();
   const [draft, setDraft] = useState<AppConfig | null>(null);
   const [activeTab, setActiveTab] = useState<SettingsTab>("interface");
   const [modelStatus, setModelStatus] = useState("尚未检查 OCR Worker");
+  const [ttsStatus, setTtsStatus] = useState("尚未检查 TTS Worker");
   const [capabilities, setCapabilities] = useState<DesktopCapabilityStatus[]>(
     [],
   );
@@ -39,11 +42,11 @@ export function SettingsPage() {
   );
   const hasUnsavedChanges = useMemo(() => {
     if (!draft || !configQuery.data) return false;
-    return hasTabUnsavedChanges(activeTab, draft, configQuery.data);
+    return hasTabUnsavedChanges(activeTab, ensureSpeechDefaults(draft), ensureSpeechDefaults(configQuery.data));
   }, [activeTab, configQuery.data, draft]);
 
   useEffect(() => {
-    if (configQuery.data) setDraft(configQuery.data);
+    if (configQuery.data) setDraft(ensureSpeechDefaults(configQuery.data));
   }, [configQuery.data]);
 
   const providerConfig = useMemo(
@@ -84,6 +87,22 @@ export function SettingsPage() {
         report.worker_ready
           ? labels.ocrModelsValidated
           : labels.ocrModelFilesMissing,
+      );
+    } catch (error) {
+      workspace.showError(
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  async function handleCheckTtsWorker() {
+    try {
+      const report = await checkTtsWorker.mutateAsync();
+      setTtsStatus(
+        `python: ${report.python_available}, coqui: ${report.coqui_available}, worker: ${report.worker_ready}. ${report.message}`,
+      );
+      workspace.setStatus(
+        report.worker_ready ? labels.ttsWorkerReady : labels.ttsWorkerMissing,
       );
     } catch (error) {
       workspace.showError(
@@ -154,6 +173,12 @@ export function SettingsPage() {
             icon={<ServerCog size={16} />}
             label={labels.provider}
             onClick={() => setActiveTab("provider")}
+          />
+          <SettingsTabButton
+            active={activeTab === "speech"}
+            icon={<Volume2 size={16} />}
+            label={labels.speech}
+            onClick={() => setActiveTab("speech")}
           />
           <SettingsTabButton
             active={activeTab === "diagnostics"}
@@ -267,6 +292,10 @@ export function SettingsPage() {
               <Bolt size={16} />
               {labels.validateModels}
             </Button>
+            <Button onClick={handleCheckTtsWorker}>
+              <Volume2 size={16} />
+              {labels.checkTtsWorker}
+            </Button>
             <Button onClick={handleCapabilities}>
               <Stethoscope size={16} />
               {labels.checkPermissions}
@@ -277,6 +306,7 @@ export function SettingsPage() {
             </Button>
           </div>
           <p className="text-sm text-muted-foreground">{modelStatus}</p>
+          <p className="text-sm text-muted-foreground">{ttsStatus}</p>
           <ul className="grid gap-2">
             {capabilities.map((item) => (
               <li
@@ -324,6 +354,126 @@ export function SettingsPage() {
             labels={labels}
             loading={updateConfig.isPending}
             onSave={() => handleSave("provider")}
+          />
+          </section>
+        ) : null}
+
+        {activeTab === "speech" ? (
+          <section className="settings-block">
+          <div className="settings-grid">
+            <label className="flex min-h-9 items-center gap-2 text-sm">
+              <Switch
+                checked={draft.speech.enabled}
+                onCheckedChange={(checked) =>
+                  updateDraft(
+                    setDraft,
+                    (next) => (next.speech.enabled = checked),
+                  )
+                }
+              />
+              {labels.speechEnabled}
+            </label>
+            <Field>
+              <FieldLabel>{labels.speechProvider}</FieldLabel>
+              <Select
+                value={draft.speech.provider}
+                onChange={(event) =>
+                  updateDraft(
+                    setDraft,
+                    (next) => (next.speech.provider = event.target.value),
+                  )
+                }
+              >
+                <option value="system">{labels.speechSystem}</option>
+                <option value="coqui">{labels.speechCoqui}</option>
+              </Select>
+            </Field>
+            <Field>
+              <FieldLabel>{labels.speechRate}</FieldLabel>
+              <Input
+                type="number"
+                min="0.1"
+                max="3"
+                step="0.1"
+                value={draft.speech.rate}
+                onChange={(event) =>
+                  updateDraft(
+                    setDraft,
+                    (next) => (next.speech.rate = Number(event.target.value)),
+                  )
+                }
+              />
+            </Field>
+            <Field>
+              <FieldLabel>{labels.speechVolume}</FieldLabel>
+              <Input
+                type="number"
+                min="0"
+                max="1"
+                step="0.05"
+                value={draft.speech.volume}
+                onChange={(event) =>
+                  updateDraft(
+                    setDraft,
+                    (next) => (next.speech.volume = Number(event.target.value)),
+                  )
+                }
+              />
+            </Field>
+            <Field>
+              <FieldLabel>{labels.coquiModelName}</FieldLabel>
+              <Input
+                value={draft.speech.coqui.model_name}
+                onChange={(event) =>
+                  updateDraft(
+                    setDraft,
+                    (next) => (next.speech.coqui.model_name = event.target.value),
+                  )
+                }
+              />
+            </Field>
+            <Field>
+              <FieldLabel>{labels.coquiSpeakerWav}</FieldLabel>
+              <Input
+                value={draft.speech.coqui.speaker_wav ?? ""}
+                onChange={(event) =>
+                  updateDraft(
+                    setDraft,
+                    (next) => (next.speech.coqui.speaker_wav = event.target.value),
+                  )
+                }
+              />
+            </Field>
+            <Field>
+              <FieldLabel>{labels.coquiCacheDir}</FieldLabel>
+              <Input
+                value={draft.speech.coqui.cache_dir ?? ""}
+                onChange={(event) =>
+                  updateDraft(
+                    setDraft,
+                    (next) => (next.speech.coqui.cache_dir = event.target.value),
+                  )
+                }
+              />
+            </Field>
+            <Field>
+              <FieldLabel>{labels.coquiPython}</FieldLabel>
+              <Input
+                value={draft.speech.coqui.python ?? ""}
+                onChange={(event) =>
+                  updateDraft(
+                    setDraft,
+                    (next) => (next.speech.coqui.python = event.target.value),
+                  )
+                }
+              />
+            </Field>
+          </div>
+          <SettingsSaveRow
+            disabled={!hasUnsavedChanges || updateConfig.isPending}
+            labels={labels}
+            loading={updateConfig.isPending}
+            onSave={() => handleSave("speech")}
           />
           </section>
         ) : null}
@@ -616,6 +766,9 @@ function mergeConfigForTab(tab: SettingsTab, base: AppConfig, draft: AppConfig) 
     case "provider":
       next.translator = structuredClone(draft.translator);
       break;
+    case "speech":
+      next.speech = structuredClone(draft.speech);
+      break;
     case "diagnostics":
       break;
   }
@@ -635,7 +788,7 @@ function updateDraft(
 }
 
 function sanitizeConfig(config: AppConfig): AppConfig {
-  const next = structuredClone(config);
+  const next = ensureSpeechDefaults(config);
   next.target_lang = next.target_lang.trim();
   next.ui.theme = next.ui.theme.trim();
   next.ui.language = next.ui.language.trim();
@@ -660,10 +813,51 @@ function sanitizeConfig(config: AppConfig): AppConfig {
   next.translator.google.api_key = optionalTrim(next.translator.google.api_key);
   next.translator.local_http.endpoint =
     next.translator.local_http.endpoint.trim();
+  next.speech.provider = next.speech.provider === "coqui" ? "coqui" : "system";
+  next.speech.rate = clampNumber(next.speech.rate, 0.1, 3);
+  next.speech.volume = clampNumber(next.speech.volume, 0, 1);
+  next.speech.coqui.model_name =
+    next.speech.coqui.model_name.trim() || defaultSpeechConfig().coqui.model_name;
+  next.speech.coqui.speaker_wav = optionalTrim(next.speech.coqui.speaker_wav);
+  next.speech.coqui.cache_dir = optionalTrim(next.speech.coqui.cache_dir);
+  next.speech.coqui.python = optionalTrim(next.speech.coqui.python);
   return next;
 }
 
 function optionalTrim(value: string | null | undefined) {
   const trimmed = value?.trim() ?? "";
   return trimmed ? trimmed : null;
+}
+
+function ensureSpeechDefaults(config: AppConfig): AppConfig {
+  const next = structuredClone(config);
+  next.speech = {
+    ...defaultSpeechConfig(),
+    ...(next.speech ?? {}),
+    coqui: {
+      ...defaultSpeechConfig().coqui,
+      ...(next.speech?.coqui ?? {}),
+    },
+  };
+  return next;
+}
+
+function defaultSpeechConfig() {
+  return {
+    enabled: true,
+    provider: "system",
+    rate: 1,
+    volume: 1,
+    coqui: {
+      model_name: "tts_models/multilingual/multi-dataset/xtts_v2",
+      speaker_wav: null,
+      cache_dir: null,
+      python: null,
+    },
+  };
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(Math.max(value, min), max);
 }
