@@ -488,13 +488,17 @@ function HotkeyInput({
   value: string;
   onChange: (value: string) => void;
 }) {
+  const shortcutPlatform = useMemo(detectShortcutPlatform, []);
+
   return (
     <Input
-      value={value}
-      onChange={(event) => onChange(event.target.value)}
+      value={formatShortcutForPlatform(value, shortcutPlatform)}
+      onChange={(event) =>
+        onChange(normalizeShortcutForConfig(event.target.value))
+      }
       onKeyDown={(event) => {
         event.preventDefault();
-        const shortcut = shortcutFromKeyboardEvent(event);
+        const shortcut = shortcutFromKeyboardEvent(event, shortcutPlatform);
         if (shortcut) onChange(shortcut);
       }}
       placeholder="按下快捷键"
@@ -502,18 +506,39 @@ function HotkeyInput({
   );
 }
 
-function shortcutFromKeyboardEvent(event: React.KeyboardEvent<HTMLInputElement>) {
-  const key = normalizeShortcutKey(event.key, event.code);
-  const modifiers = [
-    event.metaKey || event.ctrlKey ? "CmdOrCtrl" : "",
-    event.altKey ? "Alt" : "",
-    event.shiftKey ? "Shift" : "",
-  ].filter(Boolean);
+type ShortcutPlatform = "macos" | "windows" | "linux";
 
-  if (!key || key === "Control" || key === "Meta" || key === "Alt" || key === "Shift") {
+function detectShortcutPlatform(): ShortcutPlatform {
+  if (typeof navigator === "undefined") return "linux";
+  const platform = `${navigator.platform} ${navigator.userAgent}`.toLowerCase();
+  if (platform.includes("mac")) return "macos";
+  if (platform.includes("win")) return "windows";
+  return "linux";
+}
+
+function shortcutFromKeyboardEvent(
+  event: React.KeyboardEvent<HTMLInputElement>,
+  platform: ShortcutPlatform,
+) {
+  const key = normalizeShortcutKey(event.key, event.code);
+  const modifiers = shortcutModifiersFromKeyboardEvent(event, platform);
+
+  if (!key || isShortcutModifierKey(key)) {
     return "";
   }
   return [...modifiers, key].join("+");
+}
+
+function shortcutModifiersFromKeyboardEvent(
+  event: React.KeyboardEvent<HTMLInputElement>,
+  platform: ShortcutPlatform,
+) {
+  const modifiers = [];
+  if (event.metaKey) modifiers.push(platform === "macos" ? "Cmd" : "Super");
+  if (event.ctrlKey) modifiers.push("Ctrl");
+  if (event.altKey) modifiers.push("Alt");
+  if (event.shiftKey) modifiers.push("Shift");
+  return modifiers;
 }
 
 function normalizeShortcutKey(key: string, code: string) {
@@ -533,21 +558,190 @@ function normalizeShortcutCode(code: string) {
   if (code.startsWith("Numpad")) return code.slice(6);
   if (/^F\d{1,2}$/.test(code)) return code;
   const specialKeys: Record<string, string> = {
+    ArrowDown: "Down",
+    ArrowLeft: "Left",
+    ArrowRight: "Right",
+    ArrowUp: "Up",
     Backquote: "`",
+    Backspace: "Backspace",
     Backslash: "\\",
     BracketLeft: "[",
     BracketRight: "]",
     Comma: ",",
+    Delete: "Delete",
+    End: "End",
     Equal: "=",
+    Enter: "Enter",
+    Escape: "Escape",
+    Home: "Home",
+    Insert: "Insert",
     Minus: "-",
+    PageDown: "PageDown",
+    PageUp: "PageUp",
     Period: ".",
     Quote: "'",
     Semicolon: ";",
     Slash: "/",
     Space: "Space",
+    Tab: "Tab",
   };
   return specialKeys[code] ?? "";
 }
+
+function isShortcutModifierKey(key: string) {
+  return ["Alt", "Control", "Meta", "OS", "Shift", "Super"].includes(key);
+}
+
+// 配置仍保存后端可解析的快捷键名，输入框只按当前系统翻译显示名称。
+function formatShortcutForPlatform(value: string, platform: ShortcutPlatform) {
+  return value
+    .split("+")
+    .map((token) => formatShortcutTokenForPlatform(token, platform))
+    .join("+");
+}
+
+function formatShortcutTokenForPlatform(
+  token: string,
+  platform: ShortcutPlatform,
+) {
+  const trimmed = token.trim();
+  const normalized = shortcutTokenLookupKey(trimmed);
+  const modifier = formatShortcutModifierForPlatform(normalized, platform);
+  if (modifier) return modifier;
+  const key = formatShortcutKeyForPlatform(normalized, platform);
+  if (key) return key;
+  if (trimmed.length === 1) return trimmed.toUpperCase();
+  return trimmed;
+}
+
+function formatShortcutModifierForPlatform(
+  token: string,
+  platform: ShortcutPlatform,
+) {
+  switch (token) {
+    case "alt":
+    case "option":
+      return platform === "macos" ? "Option" : "Alt";
+    case "cmd":
+    case "command":
+    case "meta":
+    case "super":
+      if (platform === "macos") return "Command";
+      return platform === "windows" ? "Win" : "Super";
+    case "cmdorctrl":
+    case "commandorcontrol":
+    case "commandorctrl":
+    case "cmdorcontrol":
+      return platform === "macos" ? "Command" : "Ctrl";
+    case "control":
+    case "ctrl":
+      return platform === "macos" ? "Control" : "Ctrl";
+    case "shift":
+      return "Shift";
+    default:
+      return "";
+  }
+}
+
+function formatShortcutKeyForPlatform(
+  token: string,
+  platform: ShortcutPlatform,
+) {
+  switch (token) {
+    case "arrowdown":
+    case "down":
+      return "Down";
+    case "arrowleft":
+    case "left":
+      return "Left";
+    case "arrowright":
+    case "right":
+      return "Right";
+    case "arrowup":
+    case "up":
+      return "Up";
+    case "backspace":
+      return platform === "macos" ? "Delete" : "Backspace";
+    case "delete":
+      return platform === "macos" ? "Forward Delete" : "Delete";
+    case "enter":
+    case "return":
+      return platform === "macos" ? "Return" : "Enter";
+    case "esc":
+    case "escape":
+      return "Esc";
+    case "pagedown":
+      return "Page Down";
+    case "pageup":
+      return "Page Up";
+    case "space":
+      return "Space";
+    default:
+      return "";
+  }
+}
+
+function normalizeShortcutForConfig(value: string) {
+  return value
+    .split("+")
+    .map(normalizeShortcutTokenForConfig)
+    .join("+");
+}
+
+function normalizeShortcutTokenForConfig(token: string) {
+  const trimmed = token.trim();
+  if (!trimmed) return "";
+  const normalized = shortcutTokenLookupKey(trimmed);
+  const configName = SHORTCUT_CONFIG_TOKEN_NAMES[normalized];
+  if (configName) return configName;
+  if (/^f\d{1,2}$/.test(normalized)) return normalized.toUpperCase();
+  if (trimmed.length === 1) return trimmed.toUpperCase();
+  return trimmed;
+}
+
+function shortcutTokenLookupKey(token: string) {
+  return token.toLowerCase().replace(/\s+/g, "");
+}
+
+const SHORTCUT_CONFIG_TOKEN_NAMES: Record<string, string> = {
+  alt: "Alt",
+  arrowdown: "Down",
+  arrowleft: "Left",
+  arrowright: "Right",
+  arrowup: "Up",
+  backspace: "Backspace",
+  cmd: "Cmd",
+  cmdorcontrol: "CmdOrCtrl",
+  cmdorctrl: "CmdOrCtrl",
+  command: "Cmd",
+  commandorcontrol: "CmdOrCtrl",
+  commandorctrl: "CmdOrCtrl",
+  control: "Ctrl",
+  ctrl: "Ctrl",
+  delete: "Delete",
+  down: "Down",
+  end: "End",
+  enter: "Enter",
+  esc: "Escape",
+  escape: "Escape",
+  forwarddelete: "Delete",
+  home: "Home",
+  insert: "Insert",
+  left: "Left",
+  meta: "Super",
+  option: "Alt",
+  pagedown: "PageDown",
+  pageup: "PageUp",
+  return: "Enter",
+  right: "Right",
+  shift: "Shift",
+  space: "Space",
+  super: "Super",
+  tab: "Tab",
+  up: "Up",
+  win: "Super",
+  windows: "Super",
+};
 
 function visibleProvider(provider?: string) {
   return provider === "deepl" || provider === "google" || provider === "snaptext_cloud"
@@ -598,8 +792,8 @@ function sanitizeConfig(config: AppConfig): AppConfig {
   next.ui.theme = next.ui.theme.trim();
   next.ui.language = next.ui.language.trim();
   next.ui.result_panel_dock = next.ui.result_panel_dock.trim();
-  next.hotkeys.screenshot = next.hotkeys.screenshot.trim();
-  next.hotkeys.selection = next.hotkeys.selection.trim();
+  next.hotkeys.screenshot = normalizeShortcutForConfig(next.hotkeys.screenshot);
+  next.hotkeys.selection = normalizeShortcutForConfig(next.hotkeys.selection);
   next.translator.provider = visibleProvider(next.translator.provider.trim());
   // SnapText 官方源地址由客户端构建配置决定，设置页不展示地址选择。
   next.translator.snaptext_cloud.endpoint = clientSnapTextCloudEndpoint();
