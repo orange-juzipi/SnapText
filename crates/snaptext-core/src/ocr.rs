@@ -25,6 +25,8 @@ pub const REC_IMAGE_HEIGHT: u32 = 48;
 pub const REC_IMAGE_WIDTH: u32 = 320;
 pub const REC_MEAN: [f32; 3] = [0.5, 0.5, 0.5];
 pub const REC_STD: [f32; 3] = [0.5, 0.5, 0.5];
+#[cfg(target_os = "macos")]
+pub const OCR_ENGINE_ENV: &str = "SNAPTEXT_OCR_ENGINE";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TextLine {
@@ -174,6 +176,13 @@ impl OcrEngine {
         }
 
         #[cfg(target_os = "macos")]
+        if macos_ocr_backend_from_env() == MacosOcrBackend::Vision {
+            // Apple Vision is the primary macOS OCR path because it handles real
+            // desktop screenshots better than the current minimal PP-OCR postprocess.
+            return macos_vision::recognize_text(image);
+        }
+
+        #[cfg(target_os = "macos")]
         let manifest = match self.validate_models() {
             Ok(manifest) => manifest,
             Err(model_error) => {
@@ -231,6 +240,32 @@ impl OcrEngine {
 
         sort_text_lines_for_reading(&mut lines);
         Ok(lines)
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MacosOcrBackend {
+    Vision,
+    Paddle,
+}
+
+#[cfg(target_os = "macos")]
+fn macos_ocr_backend_from_env() -> MacosOcrBackend {
+    macos_ocr_backend_from_value(std::env::var(OCR_ENGINE_ENV).ok().as_deref())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_ocr_backend_from_value(value: Option<&str>) -> MacosOcrBackend {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value)
+            if value.eq_ignore_ascii_case("paddle")
+                || value.eq_ignore_ascii_case("onnx")
+                || value.eq_ignore_ascii_case("ppocr") =>
+        {
+            MacosOcrBackend::Paddle
+        }
+        _ => MacosOcrBackend::Vision,
     }
 }
 
@@ -1264,6 +1299,32 @@ mod tests {
         assert!(err.to_string().contains("recognition dictionary is empty"));
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_ocr_backend_defaults_to_vision_unless_paddle_is_explicit() {
+        assert_eq!(macos_ocr_backend_from_value(None), MacosOcrBackend::Vision);
+        assert_eq!(
+            macos_ocr_backend_from_value(Some("")),
+            MacosOcrBackend::Vision
+        );
+        assert_eq!(
+            macos_ocr_backend_from_value(Some("vision")),
+            MacosOcrBackend::Vision
+        );
+        assert_eq!(
+            macos_ocr_backend_from_value(Some("paddle")),
+            MacosOcrBackend::Paddle
+        );
+        assert_eq!(
+            macos_ocr_backend_from_value(Some("ONNX")),
+            MacosOcrBackend::Paddle
+        );
+        assert_eq!(
+            macos_ocr_backend_from_value(Some(" ppocr ")),
+            MacosOcrBackend::Paddle
+        );
+    }
+
     #[test]
     fn load_sessions_rejects_invalid_onnx_payloads() {
         let tempdir = tempfile::tempdir().expect("tempdir");
@@ -1299,7 +1360,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn run_falls_back_to_vision_when_paddle_models_are_absent() {
+    fn run_uses_vision_by_default_on_macos() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let engine = OcrEngine::new(tempdir.path()).expect("engine");
         let image =

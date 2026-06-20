@@ -1,7 +1,6 @@
 use image::DynamicImage;
 #[cfg(not(test))]
 use snaptext_core::selection::ensure_selection_permission;
-#[cfg(target_os = "macos")]
 use snaptext_core::{
     Error, Result,
     config::{AppConfig, Lang},

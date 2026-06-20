@@ -8,7 +8,7 @@ const MODEL_DIR_ENV: &str = "SNAPTEXT_OCR_MODEL_DIR";
 const SMOKE_TEXT: &str = "SNAPTEXT";
 
 #[tokio::test]
-#[ignore = "requires real PP-OCRv6 ONNX files; run with SNAPTEXT_OCR_MODEL_DIR=models"]
+#[ignore = "requires real PP-OCRv6 ONNX files; run with SNAPTEXT_OCR_MODEL_DIR=models SNAPTEXT_OCR_ENGINE=paddle"]
 async fn pp_ocrv6_fixture_smoke_test_outputs_text() {
     let model_dir = std::env::var_os(MODEL_DIR_ENV)
         .map(PathBuf::from)

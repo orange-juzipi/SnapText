@@ -97,6 +97,12 @@ SNAPTEXT_OCR_MODEL_DIR=models cargo test -p snaptext-core --test ocr_smoke -- --
 
 桌面应用设置页也有 `Validate models`，用于检查模型文件是否缺失、识别字典是否为空、ONNX session 是否能加载。桌面能力诊断会集中报告截图、划词、全局热键和 OCR 模型状态；遇到模型文件缺失时，设置页可复制稳定格式的诊断摘要用于 QA 或问题反馈。
 
+macOS 运行时默认优先使用系统 Apple Vision OCR，以获得更稳定的真实截图识别效果。需要调试 Paddle/ONNX OCR pipeline 时，可以显式设置：
+
+```bash
+SNAPTEXT_OCR_ENGINE=paddle cargo run -p snaptext-tauri
+```
+
 配置加载、保存和 Tauri 更新命令会规范化用户输入边界：语言、热键、模型目录和翻译 provider 字段会在写入前修剪空白，已移除的 provider 会迁移到当前默认 provider，避免旧配置在桌面端运行时保留不可用状态。
 
 图片入口会拒绝超过 25 MiB 的原始图片 payload，也会拒绝超过 2400 万像素的解码图片，避免异常截图或拖入图片占用过多内存。翻译请求同样有边界保护：单次最多 8 条、单条最多 12,000 字符、总计最多 24,000 字符。
