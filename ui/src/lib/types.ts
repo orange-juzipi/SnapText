@@ -127,13 +127,6 @@ export type BBox = {
   height: number;
 };
 
-export type OcrWorkerStatus = {
-  python_available: boolean;
-  paddleocr_available: boolean;
-  worker_ready: boolean;
-  message: string;
-};
-
 export type OcrModelStatus = {
   model_dir: string;
   valid: boolean;

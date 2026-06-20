@@ -5,7 +5,6 @@ import type {
   HistoryRecord,
   OcrModelStatus,
   OcrTextResult,
-  OcrWorkerStatus,
   OverlayTranslationPayload,
   Region,
   ScreenshotPayload,
@@ -40,10 +39,6 @@ export function getHistory(limit = 50) {
 
 export function clearHistory() {
   return tauriInvoke<void>("clear_history");
-}
-
-export function checkOcrWorker() {
-  return tauriInvoke<OcrWorkerStatus>("check_ocr_worker");
 }
 
 export function validateOcrModels() {

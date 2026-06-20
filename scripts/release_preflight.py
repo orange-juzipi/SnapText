@@ -132,7 +132,7 @@ def main() -> int:
         "Tauri beforeDevCommand must start the Vite dev server from the Tauri CLI command cwd",
     )
     check(
-        build.get("beforeBuildCommand") == "cd ../.. && python3 scripts/build_tauri_frontend.py",
+        build.get("beforeBuildCommand") == "cd .. && python3 scripts/build_tauri_frontend.py",
         "Tauri beforeBuildCommand must run the model gate and React frontend build from the repository root",
     )
     check(
@@ -652,15 +652,8 @@ def main() -> int:
     models_dir = ROOT / "models"
     expected_model_files = ["det.onnx", "cls.onnx", "rec.onnx", "rec_dict.txt"]
     check(
-        bundle.get("resources") == {
-            "../../models": "models",
-            "../../python/ocr_worker.py": "python/ocr_worker.py",
-        },
-        "Tauri bundle.resources does not declare the expected OCR model and worker mappings",
-    )
-    check(
-        (ROOT / "python/ocr_worker.py").is_file(),
-        "python/ocr_worker.py is required so packaged apps can run OCR outside the repo checkout",
+        bundle.get("resources") == {"../../models": "models"},
+        "Tauri bundle.resources does not declare the expected OCR model mapping",
     )
 
     missing_models = [
@@ -792,18 +785,19 @@ def main() -> int:
         "goal/snaptext-desktop-plan.md is missing desktop capability diagnostics progress",
     )
 
-    tauri_lib = read_text(ROOT / "crates/snaptext-tauri/src/lib.rs")
+    tauri_capabilities = read_text(ROOT / "crates/snaptext-tauri/src/capabilities.rs")
     for expected in (
         "fn desktop_capabilities(state: &AppState)",
-        'capability: String::from("ocr_worker")',
-        "ocr_worker_capability_status(state)",
-        "ocr_worker_capability_action(state)",
-        "check_ocr_worker_inner(state)",
+        'capability: String::from("ocr_models")',
+        "ocr_models_capability_status(state)",
+        "ocr_models_capability_action(state)",
+        "validate_ocr_models_inner(state)",
     ):
         check(
-            expected in tauri_lib,
+            expected in tauri_capabilities,
             f"snaptext-tauri desktop capabilities are missing OCR model diagnostics: {expected}",
         )
+    tauri_lib = read_text(ROOT / "crates/snaptext-tauri/src/lib.rs")
     core_config = read_text(ROOT / "crates/snaptext-core/src/config.rs")
     for expected in (
         "snaptext_cloud_production_endpoint",
@@ -866,7 +860,6 @@ def main() -> int:
         '"update_config"',
         '"get_desktop_capabilities"',
         '"validate_ocr_models"',
-        '"check_ocr_worker"',
         '"translate_image_base64"',
         '"translate_screenshot_base64"',
         '"translate_screenshot_region"',
@@ -888,7 +881,6 @@ def main() -> int:
         "useHistoryQuery",
         "useDesktopCapabilitiesQuery",
         "useValidateModelsMutation",
-        "useCheckOcrWorkerMutation",
         "useUpdateConfigMutation",
         "useTranslateTextMutation",
         "useTranslateImageMutation",
@@ -1017,7 +1009,7 @@ def main() -> int:
         "screen_recording_permission",
         "desktop_capability_diagnostics",
         "[global_hotkey]",
-        "[ocr_worker]",
+        "[ocr_models]",
         "ui_automation_selection",
         "wayland_session",
         "python3 scripts/verify_desktop_qa.py docs/desktop-qa-record.json",

@@ -154,12 +154,18 @@ def find_paddle_model_dir(root: Path) -> Path:
         model_dir = pdmodel.parent
         if any(model_dir.glob("*.pdiparams")) or any(model_dir.glob("*.pdparams")):
             candidates.append(model_dir)
+    # PaddleOCR 3.x official inference archives may ship inference.json
+    # together with inference.pdiparams instead of the older .pdmodel file.
+    for json_model in root.rglob("*.json"):
+        model_dir = json_model.parent
+        if any(model_dir.glob("*.pdiparams")) or any(model_dir.glob("*.pdparams")):
+            candidates.append(model_dir)
     if not candidates:
         raise SystemExit(
             f"Could not find a Paddle inference model under {root}. "
-            "Expected files such as inference.pdmodel and inference.pdiparams."
+            "Expected files such as inference.pdmodel or inference.json with inference.pdiparams."
         )
-    candidates.sort(key=lambda path: (len(path.parts), str(path)))
+    candidates = sorted(set(candidates), key=lambda path: (len(path.parts), str(path)))
     return candidates[0]
 
 
@@ -232,6 +238,58 @@ def find_recognition_dict(rec_extract_dir: Path) -> Path | None:
     return scored[0][3]
 
 
+def parse_yaml_scalar(value: str) -> str:
+    quoted = value.strip(" ")
+    if len(quoted) >= 2 and quoted[0] == "'" and quoted[-1] == "'":
+        return quoted[1:-1].replace("''", "'")
+    if len(quoted) >= 2 and quoted[0] == '"' and quoted[-1] == '"':
+        return json.loads(quoted)
+    return value
+
+
+def extract_character_dict_from_inference_yml(path: Path) -> list[str]:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    for index, line in enumerate(lines):
+        if line.strip() != "character_dict:":
+            continue
+        base_indent = len(line) - len(line.lstrip(" "))
+        characters: list[str] = []
+        for item in lines[index + 1 :]:
+            stripped = item.lstrip(" ")
+            if not stripped.strip():
+                continue
+            indent = len(item) - len(item.lstrip(" "))
+            if stripped.startswith("- "):
+                characters.append(parse_yaml_scalar(stripped[2:]))
+                continue
+            if indent <= base_indent:
+                break
+        if characters:
+            return characters
+    return []
+
+
+def write_recognition_dict_from_metadata(rec_extract_dir: Path, destination: Path, dry_run: bool) -> str | None:
+    for inference_yml in sorted(rec_extract_dir.rglob("inference.yml")):
+        characters = extract_character_dict_from_inference_yml(inference_yml)
+        if not characters:
+            continue
+        if " " not in characters:
+            # PaddleX CTCLabelDecode defaults use_space_char=True, appending
+            # ASCII space after the embedded character_dict for PP-OCRv6.
+            characters.append(" ")
+        print(
+            f"Using recognition dictionary embedded in metadata: {inference_yml}",
+            flush=True,
+        )
+        if not dry_run:
+            # Do not trim entries here: PaddleOCR dictionaries can contain
+            # whitespace characters such as the ideographic space U+3000.
+            destination.write_text("\n".join(characters) + "\n", encoding="utf-8")
+        return file_uri(inference_yml)
+    return None
+
+
 def install_recognition_dict(
     rec_extract_dir: Path,
     destination: Path,
@@ -250,15 +308,19 @@ def install_recognition_dict(
         return file_uri(source)
 
     source = find_recognition_dict(rec_extract_dir)
-    if source is None:
+    if source is not None:
+        print(f"Using recognition dictionary from archive: {source}", flush=True)
+        if not dry_run:
+            shutil.copy2(source, destination)
+        return file_uri(source)
+
+    metadata_source = write_recognition_dict_from_metadata(rec_extract_dir, destination, dry_run)
+    if metadata_source is None:
         raise SystemExit(
             "Could not find a recognition dictionary in the recognition model archive. "
             "Pass --rec-dict /path/to/dict.txt or --rec-dict https://... explicitly."
         )
-    print(f"Using recognition dictionary from archive: {source}", flush=True)
-    if not dry_run:
-        shutil.copy2(source, destination)
-    return file_uri(source)
+    return metadata_source
 
 
 def write_checksum_manifest(model_dir: Path) -> None:

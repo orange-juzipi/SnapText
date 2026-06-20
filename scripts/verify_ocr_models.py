@@ -76,9 +76,9 @@ def validate_files(model_dir: Path) -> None:
 
     dict_path = model_dir / "rec_dict.txt"
     entries = [
-        line.strip()
+        line
         for line in dict_path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
+        if line
     ]
     if not entries:
         raise SystemExit(f"Recognition dictionary is empty: {dict_path}")

@@ -12,8 +12,10 @@ from install_paddleocr_onnx_models import (
     MODEL_TIERS,
     REQUIRED_MODEL_FILES,
     describe_source,
+    extract_character_dict_from_inference_yml,
     find_paddle_model_dir,
     find_recognition_dict,
+    install_recognition_dict,
     sha256_file,
     write_checksum_manifest,
     write_model_manifest,
@@ -91,6 +93,12 @@ def main() -> int:
         (paddle_model / "inference.pdiparams").write_text("params\n", encoding="utf-8")
         assert find_paddle_model_dir(root) == paddle_model
 
+        paddle3_model = root / "paddle3" / "nested"
+        paddle3_model.mkdir(parents=True)
+        (paddle3_model / "inference.json").write_text("{}\n", encoding="utf-8")
+        (paddle3_model / "inference.pdiparams").write_text("params\n", encoding="utf-8")
+        assert find_paddle_model_dir(root / "paddle3") == paddle3_model
+
         rec_archive = root / "rec"
         rec_archive.mkdir()
         dict_path = rec_archive / "ppocr_keys_v1.txt"
@@ -98,6 +106,29 @@ def main() -> int:
         (rec_archive / "README.txt").write_text("not a dictionary\n", encoding="utf-8")
         assert find_recognition_dict(rec_archive) == dict_path
         assert describe_source(str(dict_path)).startswith("file://")
+
+        metadata_rec_archive = root / "metadata-rec"
+        metadata_rec_archive.mkdir()
+        metadata = metadata_rec_archive / "inference.yml"
+        metadata.write_text(
+            "PostProcess:\n"
+            "  name: CTCLabelDecode\n"
+            "  character_dict:\n"
+            "  - a\n"
+            "  - ''''\n"
+            "  - 　\n",
+            encoding="utf-8",
+        )
+        assert extract_character_dict_from_inference_yml(metadata) == ["a", "'", "\u3000"]
+        generated_dict = root / "generated-rec-dict.txt"
+        source = install_recognition_dict(metadata_rec_archive, generated_dict, None, dry_run=False)
+        assert source.endswith("/inference.yml")
+        assert generated_dict.read_text(encoding="utf-8").splitlines() == [
+            "a",
+            "'",
+            "\u3000",
+            " ",
+        ]
 
         model_dir = root / "models"
         hashes = write_fake_installed_models(model_dir)

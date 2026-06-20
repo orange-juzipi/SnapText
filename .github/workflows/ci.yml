@@ -48,7 +48,7 @@ jobs:
 
       - name: Check Python helper scripts
         shell: bash
-        run: python -m py_compile scripts/build_frontend.py scripts/generate_release_manifest.py scripts/install_ocr_models.py scripts/package_desktop.py scripts/package_macos.py scripts/release_gate.py scripts/release_preflight.py scripts/test_build_frontend.py scripts/test_desktop_bundles.py scripts/test_desktop_qa.py scripts/test_install_ocr_models.py scripts/test_ocr_models.py scripts/test_packaging.py scripts/test_release_gate.py scripts/test_release_manifest.py scripts/test_release_signing.py scripts/test_translator_providers.py scripts/verify_desktop_bundles.py scripts/verify_desktop_qa.py scripts/verify_release_signing.py scripts/verify_translator_providers.py scripts/verify_ocr_models.py
+        run: python -m py_compile scripts/build_frontend.py scripts/build_tauri_frontend.py scripts/generate_release_manifest.py scripts/install_ocr_models.py scripts/install_paddleocr_onnx_models.py scripts/package_desktop.py scripts/package_macos.py scripts/release_gate.py scripts/release_preflight.py scripts/test_build_frontend.py scripts/test_desktop_bundles.py scripts/test_desktop_qa.py scripts/test_install_ocr_models.py scripts/test_ocr_models.py scripts/test_paddleocr_onnx_installer.py scripts/test_packaging.py scripts/test_release_gate.py scripts/test_release_manifest.py scripts/test_release_signing.py scripts/test_translator_providers.py scripts/verify_desktop_bundles.py scripts/verify_desktop_qa.py scripts/verify_release_signing.py scripts/verify_translator_providers.py scripts/verify_ocr_models.py
 
       - name: Run Python self-tests
         shell: bash
@@ -56,6 +56,7 @@ jobs:
           python scripts/test_build_frontend.py
           python scripts/test_install_ocr_models.py
           python scripts/test_ocr_models.py
+          python scripts/test_paddleocr_onnx_installer.py
           python scripts/test_packaging.py
           python scripts/test_desktop_bundles.py
           python scripts/test_release_gate.py

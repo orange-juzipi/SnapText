@@ -88,6 +88,17 @@ def main() -> int:
         empty_dict = run_verify(empty_dict_dir)
         assert_failure_contains(empty_dict, "Recognition dictionary is empty")
 
+        whitespace_dict_dir = root / "whitespace-dict"
+        write_fake_models(whitespace_dict_dir)
+        (whitespace_dict_dir / "rec_dict.txt").write_text("a\n\u3000\n", encoding="utf-8")
+        whitespace_dict = run_verify(whitespace_dict_dir)
+        assert_success(whitespace_dict)
+        if "recognition entries: 2" not in whitespace_dict.stdout:
+            raise SystemExit(
+                "Expected verifier to preserve whitespace dictionary tokens:\n"
+                + whitespace_dict.stdout
+            )
+
         model_dir = root / "models"
         hashes = write_fake_models(model_dir)
         no_manifest = run_verify(model_dir, "--require-sha256")

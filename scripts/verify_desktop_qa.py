@@ -59,7 +59,7 @@ PLACEHOLDER_PREFIXES = ("replace-with-", "replace with ")
 MIN_EVIDENCE_LENGTH = 12
 SEMVER_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 GIT_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{7,40}$")
-CAPABILITY_DIAGNOSTIC_NAMES = ("screenshot", "selection", "global_hotkey", "ocr_worker")
+CAPABILITY_DIAGNOSTIC_NAMES = ("screenshot", "selection", "global_hotkey", "ocr_models")
 EVIDENCE_KEYWORDS = {
     "package_build": ("package_desktop.py", "cargo-tauri", "build"),
     "bundle_verification": ("verify_desktop_bundles.py", "bundle", "installer"),

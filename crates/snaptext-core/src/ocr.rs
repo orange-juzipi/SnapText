@@ -18,8 +18,8 @@ pub const DET_STD: [f32; 3] = [0.229, 0.224, 0.225];
 pub const DET_BOX_THRESHOLD: f32 = 0.3;
 pub const DET_MIN_BOX_SIDE: u32 = 3;
 pub const REC_BLANK_INDEX: usize = 0;
-pub const CLS_IMAGE_HEIGHT: u32 = 48;
-pub const CLS_IMAGE_WIDTH: u32 = 192;
+pub const CLS_IMAGE_HEIGHT: u32 = 80;
+pub const CLS_IMAGE_WIDTH: u32 = 160;
 pub const CLS_LABELS: [&str; 2] = ["0", "180"];
 pub const REC_IMAGE_HEIGHT: u32 = 48;
 pub const REC_IMAGE_WIDTH: u32 = 320;
@@ -434,7 +434,6 @@ impl OcrModelManifest {
         let content = std::fs::read_to_string(&self.rec_dict)?;
         let entries = content
             .lines()
-            .map(str::trim)
             .filter(|line| !line.is_empty())
             .map(ToOwned::to_owned)
             .collect::<Vec<_>>();
@@ -1241,13 +1240,13 @@ mod tests {
         std::fs::write(tempdir.path().join(DET_MODEL_FILE), b"det").expect("det");
         std::fs::write(tempdir.path().join(CLS_MODEL_FILE), b"cls").expect("cls");
         std::fs::write(tempdir.path().join(REC_MODEL_FILE), b"rec").expect("rec");
-        std::fs::write(tempdir.path().join(REC_DICT_FILE), "a\n\n b \n").expect("dict");
+        std::fs::write(tempdir.path().join(REC_DICT_FILE), "a\n\n b \n\u{3000}\n").expect("dict");
 
         let manifest = OcrModelManifest::from_dir(tempdir.path());
 
         assert_eq!(
             manifest.load_recognition_dict().expect("dictionary"),
-            ["a".to_owned(), "b".to_owned()]
+            ["a".to_owned(), " b ".to_owned(), "\u{3000}".to_owned()]
         );
     }
 

@@ -1,6 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  checkOcrWorker,
   clearHistory,
   getConfig,
   getDesktopCapabilities,
@@ -89,12 +88,6 @@ export function useClearHistoryMutation() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["history"], exact: false });
     },
-  });
-}
-
-export function useCheckOcrWorkerMutation() {
-  return useMutation({
-    mutationFn: checkOcrWorker,
   });
 }
 

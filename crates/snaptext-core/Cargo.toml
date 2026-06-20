@@ -35,4 +35,5 @@ objc2-core-foundation.workspace = true
 objc2-foundation.workspace = true
 
 [dev-dependencies]
+ab_glyph = "0.2"
 tempfile = "3"

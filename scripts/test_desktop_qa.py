@@ -17,7 +17,7 @@ CAPABILITY_DIAGNOSTIC_EVIDENCE = (
     "[screenshot] available - screenshot permission checked\n"
     "[selection] available - selection permission checked\n"
     "[global_hotkey] configured - shortcut registration checked\n"
-    "[ocr_worker] ready - worker validation checked"
+    "[ocr_models] ready - local ONNX model validation checked"
 )
 CHECK_EVIDENCE = {
     "package_build": "package_desktop.py completed cargo-tauri build for this platform",
@@ -262,7 +262,7 @@ def main() -> int:
             "desktop_capability_diagnostics"
         ][
             "evidence"
-        ] = "[screenshot] ok\n[selection] ok\n[global_hotkey] ok\n[ocr_worker] ok"
+        ] = "[screenshot] ok\n[selection] ok\n[global_hotkey] ok\n[ocr_models] ok"
         write_json(malformed_diagnostics_path, malformed_diagnostics)
         assert_failure_contains(
             run_qa(str(malformed_diagnostics_path)),
