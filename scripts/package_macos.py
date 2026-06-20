@@ -77,12 +77,23 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Build the release binary and .app bundle, but skip DMG creation.",
     )
+    parser.add_argument(
+        "--require-sha256",
+        action="store_true",
+        help="Require real OCR model checksums instead of using the macOS Vision fallback gate.",
+    )
     return parser.parse_args(argv)
 
 
-def packaging_commands(tauri: str, skip_dmg: bool) -> list[list[str]]:
+def packaging_commands(tauri: str, skip_dmg: bool, require_sha256: bool) -> list[list[str]]:
+    # Local macOS bundle checks can use Vision fallback; release checks should
+    # pass --require-sha256 to prove the bundled Paddle ONNX assets are present.
+    model_check = ["python3", "scripts/verify_ocr_models.py", "models", "--allow-macos-vision-fallback"]
+    if require_sha256:
+        model_check = ["python3", "scripts/verify_ocr_models.py", "models", "--require-sha256"]
+
     commands = [
-        ["python3", "scripts/verify_ocr_models.py", "models", "--allow-macos-vision-fallback"],
+        model_check,
         ["python3", "scripts/build_frontend.py"],
         [tauri, "build", "--no-bundle"],
         [tauri, "build", "--bundles", "app", "--no-sign"],
@@ -99,7 +110,11 @@ def main(argv: list[str]) -> int:
     product_name = config.get("productName", "SnapText")
     version = config.get("version", "0.1.0")
 
-    commands = packaging_commands(tauri, skip_dmg=args.skip_dmg)
+    commands = packaging_commands(
+        tauri,
+        skip_dmg=args.skip_dmg,
+        require_sha256=args.require_sha256,
+    )
     if args.dry_run:
         for command in commands:
             print(" ".join(command))

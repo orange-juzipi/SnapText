@@ -72,6 +72,14 @@ def main() -> int:
     assert_contains(macos_full.stdout, "cargo-tauri build --bundles dmg --no-sign")
     assert_contains(macos_full.stdout, "verify_macos_artifacts SnapText 0.1.0 require_dmg=True")
 
+    macos_release_models = run_script("package_macos.py", "--skip-dmg", "--require-sha256")
+    assert_success(macos_release_models)
+    assert_contains(
+        macos_release_models.stdout,
+        "python3 scripts/verify_ocr_models.py models --require-sha256",
+    )
+    assert_contains(macos_release_models.stdout, "verify_macos_artifacts SnapText 0.1.0 require_dmg=False")
+
     print("Packaging command self-test passed.")
     return 0
 

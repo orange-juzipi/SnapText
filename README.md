@@ -245,6 +245,10 @@ SNAPTEXT_OCR_MODEL_DIR=models cargo test -p snaptext-core --test ocr_smoke -- --
 
 不要用 Python 3.14 创建 PaddleOCR 转换环境；PaddlePaddle 通常不会立即提供新 Python 大版本的 wheel，容易出现 `No matching distribution found for paddlepaddle`。默认 `--tier tiny` 包体积最小；需要更高精度时可改为 `small` 或 `medium`。如果已经有转换好的 ONNX 模型，也可以继续使用 `scripts/install_ocr_models.py` 从填好 URL 和 SHA-256 的 `manifest.json` 安装；两个安装路径都会保留 `models/manifest.json` 并写入 `models/SHA256SUMS`。正式发布使用 `python3 scripts/verify_ocr_models.py --require-sha256 models`，它会同时校验 `manifest.json`、`SHA256SUMS`、实际文件哈希和 OCR smoke test。后面的 `cargo test` 是等价的底层 smoke test 命令，便于调试。
 
+```bash
+python3 scripts/install_ocr_models.py --manifest models/manifest.json --model-dir models
+```
+
 ## 下一步
 
 1. 放入真实 PP-OCRv6 multilingual ONNX 模型和识别字典，运行固定图片 OCR smoke test，验证真实 OCR 输出。

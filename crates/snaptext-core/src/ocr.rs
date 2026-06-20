@@ -173,23 +173,22 @@ impl OcrEngine {
             return Err(Error::Ocr("image cannot be empty".to_owned()));
         }
 
-        if let Err(model_error) = self.validate_models() {
-            #[cfg(target_os = "macos")]
-            {
+        #[cfg(target_os = "macos")]
+        let manifest = match self.validate_models() {
+            Ok(manifest) => manifest,
+            Err(model_error) => {
+                // macOS Vision keeps OCR usable when bundled Paddle models are absent.
                 tracing::warn!(
                     error = %model_error,
                     "Paddle OCR models are unavailable; falling back to macOS Vision OCR"
                 );
                 return macos_vision::recognize_text(image);
             }
+        };
 
-            #[cfg(not(target_os = "macos"))]
-            {
-                return Err(model_error);
-            }
-        }
-
+        #[cfg(not(target_os = "macos"))]
         let manifest = self.validate_models()?;
+
         let mut sessions = self.load_sessions()?;
         let dictionary = manifest.load_recognition_dict()?;
         let detection_input = preprocess_for_detection(&image)?;
@@ -1280,8 +1279,9 @@ mod tests {
         assert!(err.to_string().contains("OCR failed"));
     }
 
+    #[cfg(not(target_os = "macos"))]
     #[test]
-    fn run_returns_empty_text_lines_when_detection_is_empty() {
+    fn run_returns_missing_model_error_when_paddle_models_are_absent() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let engine = OcrEngine::new(tempdir.path()).expect("engine");
         let image =
@@ -1296,6 +1296,26 @@ mod tests {
             .expect_err("missing models");
 
         assert!(err.to_string().contains("missing OCR model files"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn run_falls_back_to_vision_when_paddle_models_are_absent() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let engine = OcrEngine::new(tempdir.path()).expect("engine");
+        let image =
+            DynamicImage::ImageRgba8(ImageBuffer::from_pixel(64, 64, Rgba([255, 255, 255, 255])));
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let lines = runtime
+            .block_on(engine.run(image))
+            .expect("macOS Vision fallback");
+
+        // A blank image exercises the fallback without depending on real OCR content.
+        assert!(lines.is_empty());
     }
 
     #[test]

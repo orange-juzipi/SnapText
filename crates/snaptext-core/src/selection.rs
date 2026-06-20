@@ -744,7 +744,10 @@ mod tests {
         assert!(looks_like_garbled_selection(
             "??????????python3 scripts/package_desktop.py --no-sign ?? DMG\n???????????????????????? DMG ??"
         ));
-        assert!(looks_like_garbled_selection("åè¯ä¸­æå°±æé®é¢"));
+        assert!(looks_like_garbled_selection(
+            // Keep the mojibake sample escaped so the source has no invisible control chars.
+            "\u{e5}\u{88}\u{92}\u{e8}\u{af}\u{8d}\u{e4}\u{b8}\u{ad}\u{e6}\u{96}\u{87}\u{e5}\u{b0}\u{b1}\u{e6}\u{9c}\u{89}\u{e9}\u{97}\u{ae}\u{e9}\u{a2}\u{98}"
+        ));
         assert!(!looks_like_garbled_selection("OpenAI base URL 是什么？"));
         assert!(!looks_like_garbled_selection("what??? really?"));
         assert!(!looks_like_garbled_selection(

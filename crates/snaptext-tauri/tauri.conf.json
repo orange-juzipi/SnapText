@@ -7,7 +7,7 @@
     "devUrl": "http://127.0.0.1:1420",
     "frontendDist": "../../ui/dist",
     "beforeDevCommand": "cd ../ui && bun run dev",
-    "beforeBuildCommand": "cd .. && python3 scripts/build_tauri_frontend.py"
+    "beforeBuildCommand": "cd ../.. && python3 scripts/build_tauri_frontend.py"
   },
   "app": {
     "withGlobalTauri": true,

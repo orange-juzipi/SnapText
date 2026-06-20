@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "release": {
+    "version": "0.1.0",
+    "commit": "replace-with-git-sha",
+    "date": "YYYY-MM-DD",
+    "signing_operator": "replace-with-name"
+  },
+  "platforms": {
+    "macos": {
+      "checks": {
+        "developer_id_signature": {
+          "result": "blocked",
+          "evidence": "replace with command output, certificate fingerprint, or artifact path"
+        },
+        "notarization_accepted": {
+          "result": "blocked",
+          "evidence": "replace with command output, certificate fingerprint, or artifact path"
+        },
+        "stapled_ticket": {
+          "result": "blocked",
+          "evidence": "replace with command output, certificate fingerprint, or artifact path"
+        },
+        "gatekeeper_assessment": {
+          "result": "blocked",
+          "evidence": "replace with command output, certificate fingerprint, or artifact path"
+        },
+        "dmg_signature": {
+          "result": "blocked",
+          "evidence": "replace with command output, certificate fingerprint, or artifact path"
+        }
+      }
+    },
+    "windows": {
+      "checks": {
+        "authenticode_signature": {
+          "result": "blocked",
+          "evidence": "replace with command output, certificate fingerprint, or artifact path"
+        },
+        "timestamp": {
+          "result": "blocked",
+          "evidence": "replace with command output, certificate fingerprint, or artifact path"
+        },
+        "installer_signature": {
+          "result": "blocked",
+          "evidence": "replace with command output, certificate fingerprint, or artifact path"
+        },
+        "smart_screen_reputation_plan": {
+          "result": "blocked",
+          "evidence": "replace with command output, certificate fingerprint, or artifact path"
+        }
+      }
+    },
+    "linux": {
+      "checks": {
+        "sha256_checksums": {
+          "result": "blocked",
+          "evidence": "replace with command output, certificate fingerprint, or artifact path"
+        },
+        "deb_signature_or_repository_plan": {
+          "result": "blocked",
+          "evidence": "replace with command output, certificate fingerprint, or artifact path"
+        },
+        "rpm_signature_or_repository_plan": {
+          "result": "blocked",
+          "evidence": "replace with command output, certificate fingerprint, or artifact path"
+        },
+        "appimage_checksum": {
+          "result": "blocked",
+          "evidence": "replace with command output, certificate fingerprint, or artifact path"
+        }
+      }
+    }
+  }
+}
