@@ -412,14 +412,38 @@ fn snaptext_cloud_translate_endpoint(config: &SnapTextCloudConfig) -> Result<Url
 }
 
 fn snaptext_cloud_payload(req: &TranslateRequest, text: &str) -> Value {
+    let source_lang = snaptext_cloud_source_lang(req, text);
     json!({
         "text": text,
-        "source_lang": req.source.as_ref().map(|lang| lang.0.as_str()).unwrap_or("auto"),
+        "source_lang": source_lang,
         "target_lang": req.target.0,
         "scene": "text",
         "mode": "balanced",
         "client_version": env!("CARGO_PKG_VERSION"),
     })
+}
+
+fn snaptext_cloud_source_lang(req: &TranslateRequest, text: &str) -> String {
+    if let Some(source) = req.source.as_ref() {
+        return source.0.clone();
+    }
+
+    // 官方源的自动识别对单字中文不稳定；明显含中文且目标非中文时显式声明源语言。
+    if target_is_not_chinese(&req.target) && contains_chinese(text) {
+        return "zh_cn".to_owned();
+    }
+
+    "auto".to_owned()
+}
+
+fn target_is_not_chinese(target: &Lang) -> bool {
+    let value = target.0.trim().to_ascii_lowercase();
+    value != "zh" && value != "zh_cn" && value != "zh-cn" && value != "zh_tw" && value != "zh-tw"
+}
+
+fn contains_chinese(text: &str) -> bool {
+    text.chars()
+        .any(|ch| ('\u{3400}'..='\u{9fff}').contains(&ch))
 }
 
 fn openai_payload(config: &OpenAiCompatibleConfig, req: &TranslateRequest) -> Value {
@@ -706,6 +730,34 @@ mod tests {
         assert_eq!(payload["target"], "fr");
         assert_eq!(payload["format"], "text");
         assert_eq!(payload["key"], "key-123");
+    }
+
+    #[test]
+    fn snaptext_cloud_payload_marks_chinese_source_for_non_chinese_target() {
+        let req = TranslateRequest {
+            texts: vec!["鸡".to_owned()],
+            source: None,
+            target: Lang("en".to_owned()),
+        };
+
+        let payload = snaptext_cloud_payload(&req, "鸡");
+
+        assert_eq!(payload["source_lang"], "zh_cn");
+        assert_eq!(payload["target_lang"], "en");
+    }
+
+    #[test]
+    fn snaptext_cloud_payload_keeps_auto_source_for_chinese_target() {
+        let req = TranslateRequest {
+            texts: vec!["鸡".to_owned()],
+            source: None,
+            target: Lang("zh_cn".to_owned()),
+        };
+
+        let payload = snaptext_cloud_payload(&req, "鸡");
+
+        assert_eq!(payload["source_lang"], "auto");
+        assert_eq!(payload["target_lang"], "zh_cn");
     }
 
     #[test]

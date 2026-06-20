@@ -1,4 +1,8 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+    time::SystemTime,
+};
 
 use image::{DynamicImage, GrayImage, Rgb, RgbImage, imageops::FilterType};
 use ndarray::{Array4, ArrayViewD, ShapeError};
@@ -50,6 +54,7 @@ pub struct BBox {
 #[derive(Debug, Clone)]
 pub struct OcrEngine {
     model_dir: PathBuf,
+    runtime: Arc<Mutex<Option<OcrRuntime>>>,
 }
 
 #[derive(Debug)]
@@ -85,6 +90,28 @@ pub struct OcrModelManifest {
 pub struct OcrModelAssets {
     pub manifest: OcrModelManifest,
     pub recognition_dict_len: usize,
+}
+
+#[derive(Debug)]
+struct OcrRuntime {
+    sessions: OcrSessions,
+    dictionary: Vec<String>,
+    assets: OcrModelAssets,
+    fingerprint: OcrModelFingerprint,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OcrModelFingerprint {
+    det: OcrFileFingerprint,
+    cls: OcrFileFingerprint,
+    rec: OcrFileFingerprint,
+    rec_dict: OcrFileFingerprint,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OcrFileFingerprint {
+    len: u64,
+    modified: Option<SystemTime>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -143,7 +170,10 @@ impl OcrEngine {
             return Err(Error::Ocr("model directory cannot be empty".to_owned()));
         }
 
-        Ok(Self { model_dir })
+        Ok(Self {
+            model_dir,
+            runtime: Arc::new(Mutex::new(None)),
+        })
     }
 
     pub fn model_dir(&self) -> &Path {
@@ -174,6 +204,12 @@ impl OcrEngine {
         OcrSessions::from_manifest(&manifest)
     }
 
+    pub fn warm_runtime(&self) -> Result<OcrModelAssets> {
+        let manifest = self.validate_models()?;
+        let fingerprint = manifest.fingerprint()?;
+        self.with_runtime(manifest, fingerprint, |runtime| Ok(runtime.assets.clone()))
+    }
+
     pub async fn run(&self, image: DynamicImage) -> Result<Vec<TextLine>> {
         if image.width() == 0 || image.height() == 0 {
             return Err(Error::Ocr("image cannot be empty".to_owned()));
@@ -202,48 +238,96 @@ impl OcrEngine {
         #[cfg(not(target_os = "macos"))]
         let manifest = self.validate_models()?;
 
-        let mut sessions = self.load_sessions()?;
-        let dictionary = manifest.load_recognition_dict()?;
         let detection_input = preprocess_for_detection(&image)?;
-        let detection_output = sessions.run_detection(&detection_input)?;
-        let candidates = postprocess_detection_map(
-            &detection_output.probabilities,
-            detection_output.width,
-            detection_output.height,
-            &detection_input,
-            DET_BOX_THRESHOLD,
-        )?;
-
-        let mut lines = Vec::with_capacity(candidates.len());
-        for candidate in candidates {
-            let crop = crop_text_region_for_recognition(&image, candidate.bbox)?;
-            // PP-OCR classifies 0/180 orientation per cropped text box before recognition.
-            let classification_input = preprocess_for_classification(&crop)?;
-            let classification = sessions.run_classification(&classification_input)?;
-            let recognition_image = rotate_text_region_for_classification(crop, &classification);
-            let recognition_input = preprocess_for_recognition(&recognition_image)?;
-            let logits = sessions.run_recognition(&recognition_input)?;
-            let recognition = decode_recognition_ctc(
-                &logits.probabilities,
-                logits.timestep_count,
-                logits.class_count,
-                &dictionary,
+        let fingerprint = manifest.fingerprint()?;
+        self.with_runtime(manifest, fingerprint, |runtime| {
+            let detection_output = runtime.sessions.run_detection(&detection_input)?;
+            let candidates = postprocess_detection_map(
+                &detection_output.probabilities,
+                detection_output.width,
+                detection_output.height,
+                &detection_input,
+                DET_BOX_THRESHOLD,
             )?;
 
-            if recognition.text.trim().is_empty() {
-                continue;
+            let mut lines = Vec::with_capacity(candidates.len());
+            for candidate in candidates {
+                let crop = crop_text_region_for_recognition(&image, candidate.bbox)?;
+                // PP-OCR classifies 0/180 orientation per cropped text box before recognition.
+                let classification_input = preprocess_for_classification(&crop)?;
+                let classification = runtime.sessions.run_classification(&classification_input)?;
+                let recognition_image =
+                    rotate_text_region_for_classification(crop, &classification);
+                let recognition_input = preprocess_for_recognition(&recognition_image)?;
+                let logits = runtime.sessions.run_recognition(&recognition_input)?;
+                let recognition = decode_recognition_ctc(
+                    &logits.probabilities,
+                    logits.timestep_count,
+                    logits.class_count,
+                    &runtime.dictionary,
+                )?;
+
+                if recognition.text.trim().is_empty() {
+                    continue;
+                }
+
+                lines.push(TextLine {
+                    text: recognition.text,
+                    bbox: candidate.bbox,
+                    confidence: (candidate.score
+                        + classification.confidence
+                        + recognition.confidence)
+                        / 3.0,
+                });
             }
 
-            lines.push(TextLine {
-                text: recognition.text,
-                bbox: candidate.bbox,
-                confidence: (candidate.score + classification.confidence + recognition.confidence)
-                    / 3.0,
-            });
+            sort_text_lines_for_reading(&mut lines);
+            Ok(lines)
+        })
+    }
+
+    fn with_runtime<T>(
+        &self,
+        manifest: OcrModelManifest,
+        fingerprint: OcrModelFingerprint,
+        action: impl FnOnce(&mut OcrRuntime) -> Result<T>,
+    ) -> Result<T> {
+        let mut runtime = self
+            .runtime
+            .lock()
+            .map_err(|err| Error::Ocr(format!("OCR runtime cache lock failed: {err}")))?;
+        let should_reload = match runtime.as_ref() {
+            Some(runtime) => runtime.fingerprint != fingerprint,
+            None => true,
+        };
+
+        if should_reload {
+            // ONNX sessions are expensive to create; cache them until the model files change.
+            *runtime = Some(OcrRuntime::from_manifest(manifest, fingerprint)?);
         }
 
-        sort_text_lines_for_reading(&mut lines);
-        Ok(lines)
+        let runtime = runtime
+            .as_mut()
+            .ok_or_else(|| Error::Ocr("OCR runtime cache was not initialized".to_owned()))?;
+        action(runtime)
+    }
+}
+
+impl OcrRuntime {
+    fn from_manifest(manifest: OcrModelManifest, fingerprint: OcrModelFingerprint) -> Result<Self> {
+        let dictionary = manifest.load_recognition_dict()?;
+        let recognition_dict_len = dictionary.len();
+        let sessions = OcrSessions::from_manifest(&manifest)?;
+
+        Ok(Self {
+            sessions,
+            dictionary,
+            assets: OcrModelAssets {
+                manifest,
+                recognition_dict_len,
+            },
+            fingerprint,
+        })
     }
 }
 
@@ -501,6 +585,25 @@ impl OcrModelManifest {
         }
 
         Ok(entries)
+    }
+
+    fn fingerprint(&self) -> Result<OcrModelFingerprint> {
+        Ok(OcrModelFingerprint {
+            det: OcrFileFingerprint::from_path(&self.det)?,
+            cls: OcrFileFingerprint::from_path(&self.cls)?,
+            rec: OcrFileFingerprint::from_path(&self.rec)?,
+            rec_dict: OcrFileFingerprint::from_path(&self.rec_dict)?,
+        })
+    }
+}
+
+impl OcrFileFingerprint {
+    fn from_path(path: &Path) -> Result<Self> {
+        let metadata = std::fs::metadata(path)?;
+        Ok(Self {
+            len: metadata.len(),
+            modified: metadata.modified().ok(),
+        })
     }
 }
 

@@ -41,19 +41,31 @@ pub(crate) fn validate_ocr_models_inner(state: &AppState) -> Result<OcrModelStat
         });
     }
 
-    let assets = ocr.validate_assets()?;
-    // Loading every ONNX session catches corrupted or mismatched model files before a
-    // screenshot/image translation request reaches the full OCR pipeline.
-    if let Err(err) = ocr.load_sessions() {
-        return Ok(OcrModelStatus {
-            model_dir: ocr.model_dir().display().to_string(),
-            valid: false,
-            missing_files,
-            recognition_dict_len: assets.recognition_dict_len,
-            loadable: false,
-            message: format!("OCR model files exist, but ONNX sessions failed to load: {err}"),
-        });
-    }
+    // Warming the runtime catches corrupted models and keeps loaded sessions for the next OCR run.
+    let assets = match ocr.warm_runtime() {
+        Ok(assets) => assets,
+        Err(err) => {
+            let Ok(assets) = ocr.validate_assets() else {
+                return Ok(OcrModelStatus {
+                    model_dir: ocr.model_dir().display().to_string(),
+                    valid: false,
+                    missing_files,
+                    recognition_dict_len: 0,
+                    loadable: false,
+                    message: format!("OCR model files exist, but asset validation failed: {err}"),
+                });
+            };
+
+            return Ok(OcrModelStatus {
+                model_dir: ocr.model_dir().display().to_string(),
+                valid: false,
+                missing_files,
+                recognition_dict_len: assets.recognition_dict_len,
+                loadable: false,
+                message: format!("OCR model files exist, but ONNX sessions failed to load: {err}"),
+            });
+        }
+    };
 
     Ok(OcrModelStatus {
         model_dir: ocr.model_dir().display().to_string(),

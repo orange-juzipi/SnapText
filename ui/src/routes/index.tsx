@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type * as React from "react";
-import { Copy, Languages, LoaderCircle, Pin, ScanText, Volume2 } from "lucide-react";
+import { Copy, Languages, LoaderCircle, Pin, ScanText, Trash2, Volume2 } from "lucide-react";
 import { startScreenshotOverlay, unpinResultWindow } from "@/lib/api";
 import { translatorProviderDetailLabel } from "@/lib/format";
 import { labelsForLanguage } from "@/lib/labels";
@@ -33,6 +33,11 @@ export function WorkspacePage() {
   const [activeSpeechKey, setActiveSpeechKey] = useState<string | null>(null);
   const speechReady =
     Boolean(configQuery.data) && isSpeechSupported(configQuery.data?.speech);
+  const hasWorkspaceText = Boolean(
+    workspace.textInput.trim() ||
+      workspace.snapshot.sourceText.trim() ||
+      workspace.snapshot.result.trim(),
+  );
 
   useEffect(() => {
     if (speechReady || !activeSpeechKey) return;
@@ -87,6 +92,13 @@ export function WorkspacePage() {
     } catch (error) {
       workspace.showError(errorMessage(error));
     }
+  }
+
+  function handleClearTextPanels() {
+    stopSpeech();
+    setActiveSpeechKey(null);
+    workspace.clearTextPanels();
+    workspace.setStatus(labels.workspaceTextCleared);
   }
 
   async function handleSpeak(text: string, lang: string, key: string, accent?: SpeechAccent) {
@@ -208,6 +220,13 @@ export function WorkspacePage() {
               "source",
               labels.playSource,
             )}
+            <IconTooltipButton
+              disabled={!hasWorkspaceText || workspace.ocrLoading || workspace.translating}
+              label={labels.clearWorkspaceText}
+              onClick={handleClearTextPanels}
+            >
+              <Trash2 size={16} />
+            </IconTooltipButton>
             <IconTooltipButton label={labels.startOverlay} onClick={handleStartOverlay}>
               <ScanText size={16} />
             </IconTooltipButton>

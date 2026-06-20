@@ -76,6 +76,8 @@ const zhCN = {
   unsavedChanges: "有未保存更改",
   refresh: "刷新",
   clear: "清空",
+  clearWorkspaceText: "清空原文和译文",
+  workspaceTextCleared: "原文和译文已清空",
   copyHistory: "复制历史",
   open: "打开",
   cancel: "取消",
@@ -173,6 +175,8 @@ const en: Labels = {
   saveSettings: "Save settings",
   saveSettingsHint:
     "Saving updates the running configuration for new translation requests.",
+  clearWorkspaceText: "Clear source and translation",
+  workspaceTextCleared: "Source and translation cleared",
   speech: "Speech",
   speechEnabled: "Enable speech",
   englishAccent: "English accent",
