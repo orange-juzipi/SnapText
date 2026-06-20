@@ -19,7 +19,7 @@ React/Vite 前端位于 `ui/`，静态构建产物输出到 `ui/dist`，Tauri �
 真实 OCR 模型可以通过 manifest 安装，也可以用 PaddleOCR ONNX 转换脚本生成：
 
 ```bash
-python3 scripts/install_ocr_models.py models/manifest.json --output models
+python3 scripts/install_ocr_models.py --manifest models/manifest.json --model-dir models
 python3 scripts/verify_ocr_models.py --require-sha256 models
 ```
 
