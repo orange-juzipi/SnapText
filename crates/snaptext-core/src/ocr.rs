@@ -173,6 +173,22 @@ impl OcrEngine {
             return Err(Error::Ocr("image cannot be empty".to_owned()));
         }
 
+        if let Err(model_error) = self.validate_models() {
+            #[cfg(target_os = "macos")]
+            {
+                tracing::warn!(
+                    error = %model_error,
+                    "Paddle OCR models are unavailable; falling back to macOS Vision OCR"
+                );
+                return macos_vision::recognize_text(image);
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                return Err(model_error);
+            }
+        }
+
         let manifest = self.validate_models()?;
         let mut sessions = self.load_sessions()?;
         let dictionary = manifest.load_recognition_dict()?;
@@ -216,6 +232,170 @@ impl OcrEngine {
 
         sort_text_lines_for_reading(&mut lines);
         Ok(lines)
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod macos_vision {
+    use std::{io::Cursor, ptr};
+
+    use image::{DynamicImage, ImageFormat};
+    use objc2::{class, msg_send, runtime::AnyObject};
+    use objc2_core_foundation::CGRect;
+    use objc2_foundation::{NSArray, NSDictionary, NSError, NSString, NSURL};
+
+    use super::{BBox, TextLine};
+    use crate::{Error, Result};
+
+    const VN_REQUEST_TEXT_RECOGNITION_LEVEL_ACCURATE: isize = 0;
+
+    #[link(name = "Vision", kind = "framework")]
+    unsafe extern "C" {}
+
+    pub fn recognize_text(image: DynamicImage) -> Result<Vec<TextLine>> {
+        let width = image.width();
+        let height = image.height();
+        let image_path = write_temp_png(image)?;
+        let result = recognize_png_path(&image_path, width, height);
+        let _ = std::fs::remove_file(&image_path);
+        result
+    }
+
+    fn write_temp_png(image: DynamicImage) -> Result<std::path::PathBuf> {
+        let path = std::env::temp_dir().join(format!(
+            "snaptext-vision-{}-{}.png",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let mut bytes = Cursor::new(Vec::new());
+        image
+            .write_to(&mut bytes, ImageFormat::Png)
+            .map_err(|err| Error::Ocr(format!("failed to encode image for macOS Vision: {err}")))?;
+        std::fs::write(&path, bytes.into_inner())?;
+        Ok(path)
+    }
+
+    fn recognize_png_path(
+        path: &std::path::Path,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<TextLine>> {
+        let url = NSURL::from_file_path(path).ok_or_else(|| {
+            Error::Ocr(format!("failed to build file URL for {}", path.display()))
+        })?;
+        let request = new_text_request();
+        if request.is_null() {
+            return Err(Error::Ocr(
+                "failed to create macOS Vision text recognition request".to_owned(),
+            ));
+        }
+        configure_text_request(unsafe { &*request });
+
+        let options = NSDictionary::<NSString, AnyObject>::new();
+        let handler: *mut AnyObject = unsafe { msg_send![class!(VNImageRequestHandler), alloc] };
+        let handler: *mut AnyObject = unsafe {
+            msg_send![
+                handler,
+                initWithURL: &*url,
+                options: &*options
+            ]
+        };
+        let request_ref = unsafe { &*request };
+        let requests = NSArray::from_slice(&[request_ref]);
+        let mut error: *mut NSError = ptr::null_mut();
+        let ok: bool = unsafe {
+            msg_send![
+                &*handler,
+                performRequests: &*requests,
+                error: &mut error
+            ]
+        };
+        if !ok {
+            return Err(Error::Ocr(
+                "macOS Vision text recognition failed".to_owned(),
+            ));
+        }
+
+        let results: *mut NSArray<AnyObject> = unsafe { msg_send![&*request, results] };
+        if results.is_null() {
+            return Ok(Vec::new());
+        }
+        let results = unsafe { &*results };
+        let mut lines = Vec::with_capacity(results.count());
+        for index in 0..results.count() {
+            let observation = unsafe { results.objectAtIndex_unchecked(index) };
+            let candidates: *mut NSArray<AnyObject> =
+                unsafe { msg_send![observation, topCandidates: 1usize] };
+            if candidates.is_null() {
+                continue;
+            }
+            let candidates = unsafe { &*candidates };
+            if candidates.count() == 0 {
+                continue;
+            }
+            let candidate = unsafe { candidates.objectAtIndex_unchecked(0) };
+            let text: *mut NSString = unsafe { msg_send![candidate, string] };
+            if text.is_null() {
+                continue;
+            }
+            let text =
+                unsafe { objc2::rc::autoreleasepool(|pool| (&*text).to_str(pool).to_owned()) };
+            let text = text.trim().to_owned();
+            if text.is_empty() {
+                continue;
+            }
+            let confidence: f32 = unsafe { msg_send![candidate, confidence] };
+            let rect: CGRect = unsafe { msg_send![observation, boundingBox] };
+            lines.push(TextLine {
+                text,
+                bbox: bbox_from_vision_rect(rect, width, height),
+                confidence,
+            });
+        }
+
+        super::sort_text_lines_for_reading(&mut lines);
+        Ok(lines)
+    }
+
+    fn new_text_request() -> *mut AnyObject {
+        let request: *mut AnyObject = unsafe { msg_send![class!(VNRecognizeTextRequest), alloc] };
+        unsafe { msg_send![request, init] }
+    }
+
+    fn configure_text_request(request: &AnyObject) {
+        let zh_hans = NSString::from_str("zh-Hans");
+        let zh_hant = NSString::from_str("zh-Hant");
+        let en_us = NSString::from_str("en-US");
+        let languages = NSArray::from_slice(&[&*zh_hans, &*zh_hant, &*en_us]);
+        unsafe {
+            let _: () = msg_send![
+                request,
+                setRecognitionLevel: VN_REQUEST_TEXT_RECOGNITION_LEVEL_ACCURATE
+            ];
+            let _: () = msg_send![request, setUsesLanguageCorrection: true];
+            let _: () = msg_send![request, setRecognitionLanguages: &*languages];
+        }
+    }
+
+    fn bbox_from_vision_rect(rect: CGRect, image_width: u32, image_height: u32) -> BBox {
+        let x = (rect.origin.x * image_width as f64)
+            .round()
+            .clamp(0.0, image_width as f64) as u32;
+        let y_top = ((1.0 - rect.origin.y - rect.size.height) * image_height as f64)
+            .round()
+            .clamp(0.0, image_height as f64) as u32;
+        let width = (rect.size.width * image_width as f64)
+            .round()
+            .clamp(0.0, image_width.saturating_sub(x) as f64) as u32;
+        let height = (rect.size.height * image_height as f64)
+            .round()
+            .clamp(0.0, image_height.saturating_sub(y_top) as f64) as u32;
+        BBox {
+            x,
+            y: y_top,
+            width,
+            height,
+        }
     }
 }
 

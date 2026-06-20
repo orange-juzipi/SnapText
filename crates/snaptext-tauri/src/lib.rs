@@ -1,5 +1,9 @@
 #[cfg(not(test))]
 use std::collections::HashMap;
+#[cfg(not(test))]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(not(test))]
+use std::time::Instant;
 use std::{
     io::Cursor,
     path::{Path, PathBuf},
@@ -23,7 +27,9 @@ use snaptext_core::{
     ocr::OcrEngine,
     pipeline::{TranslationResult, first_translated_text},
     screenshot::{ImageMeta, Screencap},
-    selection::{SelectionEvent, SelectionWatcher, normalize_selection_text},
+    selection::{
+        SelectionEvent, SelectionWatcher, looks_like_garbled_selection, normalize_selection_text,
+    },
     translate::{TranslateRequest, TranslatorRegistry},
 };
 #[cfg(all(not(test), not(target_os = "macos")))]
@@ -61,6 +67,8 @@ const TRAY_QUIT: &str = "quit";
 const MAX_IMAGE_PAYLOAD_BYTES: usize = 25 * 1024 * 1024;
 const MAX_IMAGE_PIXELS: u64 = 24_000_000;
 const MAIN_WINDOW_HIDE_SETTLE_MS: u64 = 160;
+#[cfg(not(test))]
+const SELECTION_HOTKEY_DEBOUNCE_MS: u64 = 800;
 const OCR_WORKER_PATH: &str = "python/ocr_worker.py";
 const SNAPTEXT_PYTHON_ENV: &str = "SNAPTEXT_PYTHON";
 const OCR_VENV_PYTHON: &str = ".venv-ocr/bin/python";
@@ -79,6 +87,10 @@ pub struct AppState {
     fake_translated_text: Mutex<Option<String>>,
     #[cfg(not(test))]
     hotkey_routes: RwLock<HashMap<u32, HotkeyAction>>,
+    #[cfg(not(test))]
+    selection_hotkey_busy: AtomicBool,
+    #[cfg(not(test))]
+    last_selection_hotkey_at: Mutex<Option<Instant>>,
 }
 
 #[derive(Debug, Clone)]
@@ -132,6 +144,10 @@ impl AppState {
             fake_translated_text: Mutex::new(None),
             #[cfg(not(test))]
             hotkey_routes: RwLock::new(HashMap::new()),
+            #[cfg(not(test))]
+            selection_hotkey_busy: AtomicBool::new(false),
+            #[cfg(not(test))]
+            last_selection_hotkey_at: Mutex::new(None),
         })
     }
 }
@@ -359,6 +375,21 @@ fn hotkey_action_for_event_id(state: &AppState, id: u32) -> Option<HotkeyAction>
 }
 
 #[cfg(not(test))]
+fn should_ignore_selection_hotkey(state: &AppState) -> bool {
+    let now = Instant::now();
+    let Ok(mut last_triggered) = state.last_selection_hotkey_at.lock() else {
+        return false;
+    };
+    if last_triggered.is_some_and(|last| {
+        now.duration_since(last) < Duration::from_millis(SELECTION_HOTKEY_DEBOUNCE_MS)
+    }) {
+        return true;
+    }
+    *last_triggered = Some(now);
+    false
+}
+
+#[cfg(not(test))]
 fn handle_global_hotkey(app: AppHandle, action: HotkeyAction) {
     tracing::info!(?action, "global hotkey action triggered");
     tauri::async_runtime::spawn(async move {
@@ -367,13 +398,34 @@ fn handle_global_hotkey(app: AppHandle, action: HotkeyAction) {
             HotkeyAction::Screenshot => start_screenshot_overlay_inner(&app, state.inner())
                 .await
                 .map(|_| ()),
-            HotkeyAction::Selection => match current_selection_text_inner(state.inner()).await {
-                Ok(payload) => show_main_window(&app).map(|_| emit_selection_text(&app, &payload)),
-                Err(err) => {
-                    emit_selection_failure(&app, &err);
-                    Err(err)
+            HotkeyAction::Selection => {
+                if should_ignore_selection_hotkey(state.inner()) {
+                    tracing::debug!("selection hotkey ignored because it was triggered recently");
+                    return;
                 }
-            },
+                if state
+                    .inner()
+                    .selection_hotkey_busy
+                    .swap(true, Ordering::AcqRel)
+                {
+                    tracing::debug!("selection hotkey ignored because a selection flow is active");
+                    return;
+                }
+                let result = match current_selection_text_inner(state.inner()).await {
+                    Ok(payload) => {
+                        show_main_window(&app).map(|_| emit_selection_text(&app, &payload))
+                    }
+                    Err(err) => {
+                        emit_selection_failure(&app, &err);
+                        Err(err)
+                    }
+                };
+                state
+                    .inner()
+                    .selection_hotkey_busy
+                    .store(false, Ordering::Release);
+                result
+            }
         };
 
         if let Err(err) = result {
@@ -525,7 +577,7 @@ async fn start_native_screenshot_selection_inner(
 
     let (payload, image) = capture?;
     emit_overlay_ocr_started(app, payload_to_full_region(&payload));
-    match ocr_dynamic_image_inner(state, image) {
+    match ocr_dynamic_image_inner(state, image).await {
         Ok(result) => emit_overlay_ocr(app, result, payload_to_full_region(&payload)),
         Err(err) => {
             emit_overlay_ocr_failed(app, payload_to_full_region(&payload));
@@ -820,6 +872,9 @@ fn selection_failure_message(error: &Error) -> String {
     if message.contains("no selected text is available") {
         return "未读取到选中文本，请先选中文本后再使用划词。".to_owned();
     }
+    if message.contains("selected text could not be decoded correctly") {
+        return "选中文本解码失败，请重新选择文本后再试。".to_owned();
+    }
     message
 }
 
@@ -977,6 +1032,11 @@ fn normalize_selection_text_for_translation(text: String) -> Result<String> {
     let text = normalize_selection_text(text);
     if text.is_empty() {
         return Err(Error::Translate("selected text cannot be empty".to_owned()));
+    }
+    if looks_like_garbled_selection(&text) {
+        return Err(Error::Selection(
+            "selected text could not be decoded correctly".to_owned(),
+        ));
     }
 
     Ok(text)
@@ -1143,7 +1203,7 @@ async fn ocr_overlay_selection_inner(
 
     let image = png_payload_to_image(&session.screenshot.base64_png)?;
     let cropped = crop_image(&image, bbox)?;
-    ocr_dynamic_image_inner(state, cropped)
+    ocr_dynamic_image_inner(state, cropped).await
 }
 
 #[cfg(target_os = "macos")]
@@ -1163,7 +1223,7 @@ async fn ocr_image_region_inner(
 ) -> Result<OcrTextResult> {
     let image = base64_image_to_dynamic_image(&base64_png)?;
     let cropped = crop_image(&image, bbox)?;
-    ocr_dynamic_image_inner(state, cropped)
+    ocr_dynamic_image_inner(state, cropped).await
 }
 
 async fn ocr_screenshot_region_inner(
@@ -1171,7 +1231,7 @@ async fn ocr_screenshot_region_inner(
     bbox: snaptext_core::ocr::BBox,
 ) -> Result<OcrTextResult> {
     let image = state.screencap.capture_region(bbox).await?;
-    ocr_dynamic_image_inner(state, DynamicImage::ImageRgba8(image))
+    ocr_dynamic_image_inner(state, DynamicImage::ImageRgba8(image)).await
 }
 
 async fn translate_base64_image_inner(
@@ -1482,7 +1542,7 @@ async fn translate_dynamic_image_inner(
         ));
     }
 
-    let ocr_result = ocr_dynamic_image_inner(state, image)?;
+    let ocr_result = ocr_dynamic_image_inner(state, image).await?;
     let translation = translator
         .translate(TranslateRequest {
             texts: vec![ocr_result.source_text.clone()],
@@ -1508,10 +1568,25 @@ async fn translate_dynamic_image_inner(
     Ok(result)
 }
 
-fn ocr_dynamic_image_inner(state: &AppState, image: DynamicImage) -> Result<OcrTextResult> {
+async fn ocr_dynamic_image_inner(state: &AppState, image: DynamicImage) -> Result<OcrTextResult> {
     validate_decoded_image_dimensions(&image)?;
-    let worker_path = resolve_ocr_worker_path(state);
-    run_ocr_worker_on_image(state, &worker_path, &image)
+    let ocr = state
+        .ocr
+        .read()
+        .map_err(|err| Error::Ocr(err.to_string()))?
+        .clone();
+    let text_lines = ocr.run(image).await?;
+    let source_text = snaptext_core::ocr::aggregate_text(&text_lines);
+    if source_text.trim().is_empty() {
+        return Err(Error::Ocr(
+            "OCR did not detect any translatable text".to_owned(),
+        ));
+    }
+
+    Ok(OcrTextResult {
+        source_text,
+        text_lines,
+    })
 }
 
 fn resolve_ocr_worker_path(state: &AppState) -> PathBuf {
@@ -1527,43 +1602,6 @@ fn resolve_ocr_worker_path(state: &AppState) -> PathBuf {
         .map(|dir| dir.join(OCR_WORKER_PATH))
         .filter(|path| path.is_file())
         .unwrap_or_else(|| PathBuf::from(OCR_WORKER_PATH))
-}
-
-fn run_ocr_worker_on_image(
-    state: &AppState,
-    worker_path: &Path,
-    image: &DynamicImage,
-) -> Result<OcrTextResult> {
-    let tempdir = tempfile::tempdir()?;
-    let image_path = tempdir.path().join("snaptext-ocr.png");
-    image.save_with_format(&image_path, ImageFormat::Png)?;
-    let output = Command::new(resolve_python_command(state))
-        .arg(worker_path)
-        .arg("--image")
-        .arg(&image_path)
-        .output()
-        .map_err(|err| Error::Ocr(format!("failed to start OCR worker: {err}")))?;
-    parse_ocr_worker_output(output)
-}
-
-fn parse_ocr_worker_output(output: std::process::Output) -> Result<OcrTextResult> {
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let message = ocr_worker_error_message(&stderr, &stdout);
-        return Err(Error::Ocr(format!("OCR worker failed: {message}")));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let result_json = last_json_stdout_line(&stdout)
-        .ok_or_else(|| Error::Ocr("OCR worker did not return JSON output.".to_owned()))?;
-    let result: OcrTextResult = serde_json::from_str(result_json)
-        .map_err(|err| Error::Ocr(format!("OCR worker returned invalid JSON: {err}")))?;
-    if result.source_text.trim().is_empty() {
-        return Err(Error::Ocr(
-            "OCR did not detect any translatable text".to_owned(),
-        ));
-    }
-    Ok(result)
 }
 
 fn resolve_python_command(state: &AppState) -> String {
@@ -1611,14 +1649,7 @@ fn find_named_venv_python_from(start: &Path, marker: &str) -> Option<PathBuf> {
     None
 }
 
-fn last_json_stdout_line(stdout: &str) -> Option<&str> {
-    stdout
-        .lines()
-        .rev()
-        .map(str::trim)
-        .find(|line| line.starts_with('{') && line.ends_with('}'))
-}
-
+#[cfg(test)]
 fn ocr_worker_error_message(stderr: &str, stdout: &str) -> String {
     let raw = if stderr.trim().is_empty() {
         stdout.trim()
@@ -1631,6 +1662,7 @@ fn ocr_worker_error_message(stderr: &str, stdout: &str) -> String {
     strip_ansi_escape_codes(raw)
 }
 
+#[cfg(test)]
 fn extract_worker_error_json(output: &str) -> Option<String> {
     let start = output.rfind(r#"{"error""#)?;
     let end = output[start..].rfind('}')? + start + 1;
@@ -1641,6 +1673,7 @@ fn extract_worker_error_json(output: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+#[cfg(test)]
 fn strip_ansi_escape_codes(input: &str) -> String {
     let mut output = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
@@ -2115,6 +2148,19 @@ mod tests {
             .expect_err("empty text");
 
         assert!(err.to_string().contains("selected text cannot be empty"));
+    }
+
+    #[test]
+    fn normalize_selection_text_for_translation_rejects_garbled_text() {
+        let err = normalize_selection_text_for_translation(
+            "??? API ???????????? AI ???????? OpenAI ?? � ???? base URL ?????".to_owned(),
+        )
+        .expect_err("garbled selection");
+
+        assert!(
+            err.to_string()
+                .contains("selected text could not be decoded correctly")
+        );
     }
 
     #[tokio::test]

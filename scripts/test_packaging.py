@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import sys
 import subprocess
 from pathlib import Path
 
@@ -36,8 +37,15 @@ def assert_not_contains(output: str, unexpected: str) -> None:
 
 
 def main() -> int:
+    desktop_model_check = "python3 scripts/verify_ocr_models.py models --require-sha256"
+    if sys.platform == "darwin":
+        desktop_model_check = (
+            "python3 scripts/verify_ocr_models.py models --allow-macos-vision-fallback"
+        )
+
     desktop_skip = run_script("package_desktop.py", "--skip-installers", "--no-sign")
     assert_success(desktop_skip)
+    assert_contains(desktop_skip.stdout, desktop_model_check)
     assert_contains(desktop_skip.stdout, "python3 scripts/build_frontend.py")
     assert_contains(desktop_skip.stdout, "cargo-tauri build --no-bundle")
     assert_contains(desktop_skip.stdout, "verify_desktop_bundles.py --platform current --skip-installers")
@@ -49,6 +57,10 @@ def main() -> int:
 
     macos_skip = run_script("package_macos.py", "--skip-dmg")
     assert_success(macos_skip)
+    assert_contains(
+        macos_skip.stdout,
+        "python3 scripts/verify_ocr_models.py models --allow-macos-vision-fallback",
+    )
     assert_contains(macos_skip.stdout, "python3 scripts/build_frontend.py")
     assert_contains(macos_skip.stdout, "cargo-tauri build --no-bundle")
     assert_contains(macos_skip.stdout, "cargo-tauri build --bundles app --no-sign")

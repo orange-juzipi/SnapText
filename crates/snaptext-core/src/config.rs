@@ -568,7 +568,7 @@ fn normalize_translator_provider(provider: TranslatorProvider) -> TranslatorProv
 }
 
 pub fn snaptext_cloud_production_endpoint() -> Url {
-    Url::parse("https://translate.snaptext.app").expect("valid default URL")
+    Url::parse("https://snaptext.uuidcx.com").expect("valid default URL")
 }
 
 pub fn snaptext_cloud_local_endpoint() -> Url {

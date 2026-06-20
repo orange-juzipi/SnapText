@@ -51,6 +51,7 @@ SnapText 是一款基于 PP-OCRv6 multilingual 的桌面端 OCR 翻译软件，�
 - 已补充发布签名/公证记录校验脚本，见 `scripts/verify_release_signing.py`，用于发布前记录 macOS notarization、Windows Authenticode 和 Linux checksums/包签名证据。
 - 已补充 OCR 模型交付说明，见 `models/README.md`。设置页 `Validate models` 会检查必要文件、识别字典和 ONNX session 加载状态。
 - 已补充真实 OCR smoke test 入口：模型在位后可运行固定图片完整 OCR 流程。
+- 已补充官方 PaddleOCR 模型落地脚本，见 `scripts/install_paddleocr_onnx_models.py`，用于下载 PP-OCRv6 推理模型、调用 PaddleX/Paddle2ONNX 转 ONNX、写入 `models/` 并生成 checksum/manifest。
 - 已补充 manifest 驱动的 OCR 模型安装脚本，见 `scripts/install_ocr_models.py`，用于下载、SHA-256 校验、落盘和触发真实模型验收。
 - 已补充 OCR 模型安装脚本自测，见 `scripts/test_install_ocr_models.py`，使用本地 fake manifest 覆盖下载、hash 校验、拒绝覆盖和 checksum 写入逻辑。
 - 已补充真实模型发布验收脚本，见 `scripts/verify_ocr_models.py`。
@@ -91,7 +92,7 @@ cd crates/snaptext-tauri
 cargo run -p snaptext-tauri
 ```
 
-SnapText 免费源默认使用线上地址 `https://translate.snaptext.app`。本地调试服务地址不在设置页暴露，可通过客户端环境变量选择：
+SnapText 官方源默认使用线上地址 `https://snaptext.uuidcx.com`。本地调试服务地址不在设置页暴露，可通过客户端环境变量选择：
 
 ```bash
 VITE_SNAPTEXT_CLOUD_ENV=local cargo run -p snaptext-tauri
@@ -100,10 +101,11 @@ VITE_SNAPTEXT_CLOUD_ENV=local cargo run -p snaptext-tauri
 ```bash
 cargo fmt --all -- --check
 python3 scripts/build_frontend.py
-python3 -m py_compile scripts/build_frontend.py scripts/generate_release_manifest.py scripts/install_ocr_models.py scripts/package_desktop.py scripts/package_macos.py scripts/release_gate.py scripts/release_preflight.py scripts/test_build_frontend.py scripts/test_desktop_bundles.py scripts/test_desktop_qa.py scripts/test_install_ocr_models.py scripts/test_ocr_models.py scripts/test_packaging.py scripts/test_release_gate.py scripts/test_release_manifest.py scripts/test_release_signing.py scripts/test_translator_providers.py scripts/verify_desktop_bundles.py scripts/verify_desktop_qa.py scripts/verify_release_signing.py scripts/verify_translator_providers.py scripts/verify_ocr_models.py
+python3 -m py_compile scripts/build_frontend.py scripts/build_tauri_frontend.py scripts/generate_release_manifest.py scripts/install_ocr_models.py scripts/install_paddleocr_onnx_models.py scripts/package_desktop.py scripts/package_macos.py scripts/release_gate.py scripts/release_preflight.py scripts/test_build_frontend.py scripts/test_desktop_bundles.py scripts/test_desktop_qa.py scripts/test_install_ocr_models.py scripts/test_ocr_models.py scripts/test_paddleocr_onnx_installer.py scripts/test_packaging.py scripts/test_release_gate.py scripts/test_release_manifest.py scripts/test_release_signing.py scripts/test_translator_providers.py scripts/verify_desktop_bundles.py scripts/verify_desktop_qa.py scripts/verify_release_signing.py scripts/verify_translator_providers.py scripts/verify_ocr_models.py
 python3 scripts/test_build_frontend.py
 python3 scripts/test_install_ocr_models.py
 python3 scripts/test_ocr_models.py
+python3 scripts/test_paddleocr_onnx_installer.py
 python3 scripts/test_packaging.py
 python3 scripts/test_desktop_bundles.py
 python3 scripts/test_release_gate.py
@@ -227,16 +229,21 @@ python3 scripts/verify_release_signing.py docs/release-signing-record.json
 
 正式发布前，`release-signing-record.json` 必须记录 macOS Developer ID 签名、公证、staple、Gatekeeper 验证，Windows Authenticode 签名和时间戳，以及 Linux checksums/包签名计划的通过证据；evidence 还必须包含对应命令或产物关键词，例如 `codesign`、`notarytool`、`spctl`、`signtool`、`SHA256SUMS` 和 `AppImage`。涉及发布附件的签名/checksum 项还必须提到本次版本的具体产物名，并覆盖完整附件族：macOS `SnapText_0.1.0_aarch64.dmg`，Windows `SnapText_0.1.0_x64.msi` 和 `SnapText_0.1.0_x64.exe`，Linux `SnapText_0.1.0_amd64.deb`、`SnapText-0.1.0-1.x86_64.rpm` 和 `SnapText_0.1.0_amd64.AppImage`。校验脚本同样会拒绝未知平台、未知检查项、模板占位内容、过短证据、缺失具体产物名和未来日期。
 
-真实 PP-OCRv6 模型放入 `models/` 后，再运行：
+推荐使用官方 PaddleOCR 模型落地脚本生成 SnapText 需要的 ONNX 模型：
 
 ```bash
-cp models/manifest.example.json models/manifest.json
-python3 scripts/install_ocr_models.py --manifest models/manifest.json --model-dir models
-python3 scripts/verify_ocr_models.py
+rm -rf .venv-paddle
+/usr/local/bin/python3.12 -m venv .venv-paddle
+source .venv-paddle/bin/activate
+python -m pip install --upgrade pip
+python -m pip install paddlepaddle paddleocr paddlex
+paddlex --install paddle2onnx
+python3 scripts/install_paddleocr_onnx_models.py --tier tiny --skip-smoke-test
+python3 scripts/verify_ocr_models.py --require-sha256 models
 SNAPTEXT_OCR_MODEL_DIR=models cargo test -p snaptext-core --test ocr_smoke -- --ignored --nocapture
 ```
 
-通常优先使用 `scripts/install_ocr_models.py` 从填好 URL 和 SHA-256 的 `manifest.json` 安装模型；安装脚本会保留 `models/manifest.json` 并写入 `models/SHA256SUMS`。正式发布使用 `python3 scripts/verify_ocr_models.py --require-sha256 models`，它会同时校验 `manifest.json`、`SHA256SUMS`、实际文件哈希和 OCR smoke test。后面的 `cargo test` 是等价的底层 smoke test 命令，便于调试。
+不要用 Python 3.14 创建 PaddleOCR 转换环境；PaddlePaddle 通常不会立即提供新 Python 大版本的 wheel，容易出现 `No matching distribution found for paddlepaddle`。默认 `--tier tiny` 包体积最小；需要更高精度时可改为 `small` 或 `medium`。如果已经有转换好的 ONNX 模型，也可以继续使用 `scripts/install_ocr_models.py` 从填好 URL 和 SHA-256 的 `manifest.json` 安装；两个安装路径都会保留 `models/manifest.json` 并写入 `models/SHA256SUMS`。正式发布使用 `python3 scripts/verify_ocr_models.py --require-sha256 models`，它会同时校验 `manifest.json`、`SHA256SUMS`、实际文件哈希和 OCR smoke test。后面的 `cargo test` 是等价的底层 smoke test 命令，便于调试。
 
 ## 下一步
 

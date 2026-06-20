@@ -18,7 +18,23 @@ SnapText 的桌面 OCR 流程要求 `models/` 目录包含 PP-OCRv6 multilingual
 
 ## 安装方式
 
-仓库提供 manifest 驱动的安装脚本，但不会内置未经确认的模型下载地址。先复制示例 manifest，并把四个文件的 URL 和 SHA-256 替换为本次发布选定的官方地址或内部镜像地址：
+推荐先使用官方 PaddleOCR 推理模型自动落地脚本。该脚本默认下载 PP-OCRv6 tiny 检测、识别和方向分类模型，使用 PaddleX/Paddle2ONNX 转为 ONNX，再写入 SnapText 需要的四个固定文件：
+
+```bash
+rm -rf .venv-paddle
+/usr/local/bin/python3.12 -m venv .venv-paddle
+source .venv-paddle/bin/activate
+python -m pip install --upgrade pip
+python -m pip install paddlepaddle paddleocr paddlex
+paddlex --install paddle2onnx
+python3 scripts/install_paddleocr_onnx_models.py --tier tiny --skip-smoke-test
+```
+
+不要使用 Python 3.14 创建该 venv；PaddlePaddle 通常不会立即提供新 Python 大版本的 wheel，容易出现 `No matching distribution found for paddlepaddle`。
+
+如果需要更高精度，可以把 `--tier tiny` 改为 `--tier small` 或 `--tier medium`。如果官方地址访问不稳定，可以通过 `--det-url`、`--rec-url` 和 `--cls-url` 指向内部镜像；如果识别模型压缩包里没有可识别的字典文件，可以用 `--rec-dict /path/to/dict.txt` 显式指定。
+
+也可以使用 manifest 驱动的安装脚本安装已经转换好的 ONNX 文件。先复制示例 manifest，并把四个文件的 URL 和 SHA-256 替换为本次发布选定的官方地址或内部镜像地址：
 
 ```bash
 cp models/manifest.example.json models/manifest.json
@@ -101,5 +117,6 @@ python3 scripts/verify_ocr_models.py --require-sha256 models
 - `scripts/verify_ocr_models.py` 已加入，用于模型在位后的发布验收
 - `scripts/verify_ocr_models.py` 已支持可选 `SHA256SUMS` 校验和发布强制校验模式；发布强制模式会同时校验 `manifest.json`、`SHA256SUMS` 和实际文件一致性
 - `scripts/install_ocr_models.py` 已加入，用于从显式 manifest 下载、校验和安装模型文件
+- `scripts/install_paddleocr_onnx_models.py` 已加入，用于从官方 PaddleOCR 推理模型下载、Paddle2ONNX 转换并安装 SnapText 需要的 ONNX 文件
 - 模型文件交付仍待外部放入
 - 真实 OCR 端到端验证仍待执行

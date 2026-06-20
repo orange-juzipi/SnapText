@@ -55,6 +55,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Only validate files and checksums. Intended for verifier self-tests, not release gates.",
     )
+    parser.add_argument(
+        "--allow-macos-vision-fallback",
+        action="store_true",
+        help="On macOS, accept missing Paddle assets because the app can use the system Vision OCR fallback.",
+    )
     args = parser.parse_args(argv[1:])
     args.model_dir = Path(args.model_dir).expanduser().resolve()
     return args
@@ -82,6 +87,10 @@ def validate_files(model_dir: Path) -> None:
         "OCR model assets found: "
         f"{', '.join(REQUIRED_MODEL_FILES)}; recognition entries: {len(entries)}"
     )
+
+
+def has_required_model_files(model_dir: Path) -> bool:
+    return all((model_dir / name).is_file() for name in REQUIRED_MODEL_FILES)
 
 
 def sha256_file(path: Path) -> str:
@@ -205,6 +214,17 @@ def verify_model_manifest(model_dir: Path, expected_checksums: dict[str, str]) -
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     model_dir = args.model_dir
+    if (
+        args.allow_macos_vision_fallback
+        and sys.platform == "darwin"
+        and not has_required_model_files(model_dir)
+    ):
+        print(
+            "Paddle OCR model files are missing, but macOS Vision OCR fallback is enabled "
+            "for this build."
+        )
+        return 0
+
     validate_files(model_dir)
     if args.write_sha256_manifest:
         write_checksum_manifest(model_dir)

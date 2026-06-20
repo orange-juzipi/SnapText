@@ -24,7 +24,9 @@ LOCAL_CARGO_TAURI = ROOT / ".tools" / "bin" / "cargo-tauri"
 
 def run(cmd: list[str], cwd: Path = ROOT) -> None:
     print(f"$ {' '.join(cmd)}", flush=True)
-    subprocess.run(cmd, cwd=cwd, check=True)
+    result = subprocess.run(cmd, cwd=cwd)
+    if result.returncode != 0:
+        raise SystemExit(result.returncode)
 
 
 def cargo_tauri() -> str:
@@ -69,7 +71,19 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def packaging_commands(args: argparse.Namespace, tauri: str, current_platform: str) -> list[list[str]]:
-    commands = [["python3", "scripts/build_frontend.py"]]
+    model_check = ["python3", "scripts/verify_ocr_models.py", "models", "--require-sha256"]
+    if current_platform == "macos":
+        model_check = [
+            "python3",
+            "scripts/verify_ocr_models.py",
+            "models",
+            "--allow-macos-vision-fallback",
+        ]
+
+    commands = [
+        model_check,
+        ["python3", "scripts/build_frontend.py"],
+    ]
     if args.skip_installers:
         commands.append([tauri, "build", "--no-bundle"])
         # A macOS release binary is not directly user-installable; keep the .app

@@ -121,6 +121,7 @@ export function WorkspaceStateProvider({ children }: { children: ReactNode }) {
 
   const clearResult = useCallback(() => {
     setSnapshot(emptySnapshot);
+    setTextInput("");
     setLastRequest(null);
     setPinned(false);
   }, []);

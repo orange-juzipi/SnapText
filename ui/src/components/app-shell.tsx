@@ -1,7 +1,7 @@
-import { Outlet, useRouterState } from "@tanstack/react-router";
+import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Home, History, Settings } from "lucide-react";
-import { useEffect } from "react";
+import { useCallback, useEffect } from "react";
 import { queryKeys, useConfigQuery, useUpdateConfigMutation } from "@/lib/queries";
 import { labelsForLanguage } from "@/lib/labels";
 import { resolveTargetLang } from "@/lib/language";
@@ -23,6 +23,7 @@ import type {
 
 export function AppShell() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const hideHeader = pathname === "/settings";
   const configQuery = useConfigQuery();
@@ -39,8 +40,16 @@ export function AppShell() {
     setStatus,
     setTranslating,
     showError,
+    clearResult,
     targetLang,
   } = workspace;
+
+  const ensureWorkspaceRoute = useCallback(() => {
+    // Capture and selection flows update the workspace panels, so surface them immediately.
+    if (pathname !== "/") {
+      void navigate({ to: "/" });
+    }
+  }, [navigate, pathname]);
 
   useEffect(() => {
     const config = configQuery.data;
@@ -97,11 +106,13 @@ export function AppShell() {
       setStatus(labels.regionTranslated);
     }));
     register(tauriListen<HistoryRecord>(events.resultSelection, (event) => {
+      ensureWorkspaceRoute();
       setResultFromHistory(event.payload);
       setStatus(labels.textTranslated);
     }));
     register(tauriListen<SelectionTextPayload>(events.selectionText, (event) => {
       const sourceText = event.payload.text;
+      ensureWorkspaceRoute();
       setOcrLoading(false);
       setOcrTextInput(sourceText, "selection");
       setStatus(labels.selectionTextExtracted);
@@ -118,10 +129,13 @@ export function AppShell() {
         .finally(() => setTranslating(false));
     }));
     register(tauriListen<SelectionFailurePayload>(events.resultSelectionFailed, (event) => {
+      ensureWorkspaceRoute();
       setTranslating(false);
+      setOcrLoading(false);
       showError(errorMessage(event.payload.message));
     }));
     register(tauriListen(events.overlayOcrStarted, () => {
+      ensureWorkspaceRoute();
       setOcrLoading(true);
       setTranslating(false);
       setStatus(labels.ocrSelectedRegion);
@@ -160,6 +174,8 @@ export function AppShell() {
     labels.selectionTextExtracted,
     labels.ocrSelectedRegion,
     labels.ocrTextExtracted,
+    clearResult,
+    ensureWorkspaceRoute,
     queryClient,
     setPinned,
     setOcrTextInput,

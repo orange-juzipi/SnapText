@@ -63,8 +63,10 @@ def main() -> int:
             "-m",
             "py_compile",
             "scripts/build_frontend.py",
+            "scripts/build_tauri_frontend.py",
             "scripts/generate_release_manifest.py",
             "scripts/install_ocr_models.py",
+            "scripts/install_paddleocr_onnx_models.py",
             "scripts/package_desktop.py",
             "scripts/package_macos.py",
             "scripts/release_gate.py",
@@ -75,6 +77,7 @@ def main() -> int:
             "scripts/test_release_manifest.py",
             "scripts/test_install_ocr_models.py",
             "scripts/test_ocr_models.py",
+            "scripts/test_paddleocr_onnx_installer.py",
             "scripts/test_packaging.py",
             "scripts/test_release_gate.py",
             "scripts/test_release_signing.py",
@@ -90,6 +93,7 @@ def main() -> int:
     run(["python3", "scripts/test_build_frontend.py"])
     run(["python3", "scripts/test_install_ocr_models.py"])
     run(["python3", "scripts/test_ocr_models.py"])
+    run(["python3", "scripts/test_paddleocr_onnx_installer.py"])
     run(["python3", "scripts/test_desktop_bundles.py"])
     run(["python3", "scripts/test_release_manifest.py"])
     run(["python3", "scripts/test_release_gate.py"])
@@ -128,8 +132,8 @@ def main() -> int:
         "Tauri beforeDevCommand must start the Vite dev server from the Tauri CLI command cwd",
     )
     check(
-        build.get("beforeBuildCommand") == "cd ../ui && bun run build",
-        "Tauri beforeBuildCommand must build the React frontend from the Tauri CLI command cwd",
+        build.get("beforeBuildCommand") == "cd ../.. && python3 scripts/build_tauri_frontend.py",
+        "Tauri beforeBuildCommand must run the model gate and React frontend build from the repository root",
     )
     check(
         app.get("withGlobalTauri") is True,
@@ -157,6 +161,21 @@ def main() -> int:
             expected in build_frontend_text,
             f"scripts/build_frontend.py is missing frontend build support for {expected}",
         )
+    build_tauri_frontend_script = ROOT / "scripts/build_tauri_frontend.py"
+    check(
+        build_tauri_frontend_script.is_file(),
+        "scripts/build_tauri_frontend.py is required to gate Tauri release builds",
+    )
+    build_tauri_frontend_text = read_text(build_tauri_frontend_script)
+    for expected in (
+        "scripts/verify_ocr_models.py",
+        "--require-sha256",
+        "scripts/build_frontend.py",
+    ):
+        check(
+            expected in build_tauri_frontend_text,
+            f"scripts/build_tauri_frontend.py is missing release build gate support for {expected}",
+        )
     test_build_frontend_script = ROOT / "scripts/test_build_frontend.py"
     check(
         test_build_frontend_script.is_file(),
@@ -180,6 +199,8 @@ def main() -> int:
     )
     package_desktop_text = read_text(package_desktop_script)
     for expected in (
+        "scripts/verify_ocr_models.py",
+        "--require-sha256",
         "scripts/build_frontend.py",
         "cargo-tauri",
         "--bundles",
@@ -197,6 +218,8 @@ def main() -> int:
     )
     package_macos_text = read_text(package_macos_script)
     for expected in (
+        "scripts/verify_ocr_models.py",
+        "--require-sha256",
         "verify_macos_artifacts",
         "verify_macos",
         "require_dmg",
@@ -421,6 +444,7 @@ def main() -> int:
         )
     verify_ocr_models_script = ROOT / "scripts/verify_ocr_models.py"
     install_ocr_models_script = ROOT / "scripts/install_ocr_models.py"
+    install_paddleocr_onnx_script = ROOT / "scripts/install_paddleocr_onnx_models.py"
     check(
         install_ocr_models_script.is_file(),
         "scripts/install_ocr_models.py is required for reproducible OCR model installation",
@@ -439,6 +463,24 @@ def main() -> int:
         check(
             expected in install_ocr_models_text,
             f"scripts/install_ocr_models.py is missing model install support for {expected}",
+        )
+    check(
+        install_paddleocr_onnx_script.is_file(),
+        "scripts/install_paddleocr_onnx_models.py is required for official PaddleOCR model installation",
+    )
+    install_paddleocr_onnx_text = read_text(install_paddleocr_onnx_script)
+    for expected in (
+        "PP-OCRv6_tiny_det_infer.tar",
+        "PP-OCRv6_tiny_rec_infer.tar",
+        "PP-LCNet_x0_25_textline_ori_infer.tar",
+        "--paddle2onnx",
+        "rec_dict.txt",
+        "SHA256SUMS",
+        "manifest.json",
+    ):
+        check(
+            expected in install_paddleocr_onnx_text,
+            f"scripts/install_paddleocr_onnx_models.py is missing PaddleOCR install support for {expected}",
         )
     test_install_ocr_models_script = ROOT / "scripts/test_install_ocr_models.py"
     check(
@@ -463,6 +505,23 @@ def main() -> int:
         check(
             expected in test_install_ocr_models_text,
             f"scripts/test_install_ocr_models.py is missing installer test coverage for {expected}",
+        )
+    test_paddleocr_onnx_script = ROOT / "scripts/test_paddleocr_onnx_installer.py"
+    check(
+        test_paddleocr_onnx_script.is_file(),
+        "scripts/test_paddleocr_onnx_installer.py is required to self-test the PaddleOCR ONNX installer",
+    )
+    test_paddleocr_onnx_text = read_text(test_paddleocr_onnx_script)
+    for expected in (
+        "--dry-run",
+        "find_paddle_model_dir",
+        "find_recognition_dict",
+        "write_model_manifest",
+        "PaddleOCR ONNX installer self-test passed",
+    ):
+        check(
+            expected in test_paddleocr_onnx_text,
+            f"scripts/test_paddleocr_onnx_installer.py is missing installer coverage for {expected}",
         )
     check(
         verify_ocr_models_script.is_file(),
@@ -593,8 +652,15 @@ def main() -> int:
     models_dir = ROOT / "models"
     expected_model_files = ["det.onnx", "cls.onnx", "rec.onnx", "rec_dict.txt"]
     check(
-        bundle.get("resources") == {"../../models": "models"},
-        "Tauri bundle.resources does not declare the expected OCR model directory mapping",
+        bundle.get("resources") == {
+            "../../models": "models",
+            "../../python/ocr_worker.py": "python/ocr_worker.py",
+        },
+        "Tauri bundle.resources does not declare the expected OCR model and worker mappings",
+    )
+    check(
+        (ROOT / "python/ocr_worker.py").is_file(),
+        "python/ocr_worker.py is required so packaged apps can run OCR outside the repo checkout",
     )
 
     missing_models = [
@@ -742,7 +808,7 @@ def main() -> int:
     for expected in (
         "snaptext_cloud_production_endpoint",
         "snaptext_cloud_local_endpoint",
-        "https://translate.snaptext.app",
+        "https://snaptext.uuidcx.com",
         "http://127.0.0.1:8080",
     ):
         check(expected in core_config, f"snaptext-core config is missing SnapText source endpoint: {expected}")
@@ -769,11 +835,10 @@ def main() -> int:
     for expected in (
         "VITE_SNAPTEXT_CLOUD_ENV",
         "clientSnapTextCloudEndpoint",
-        'production: "https://translate.snaptext.app"',
+        'production: "https://snaptext.uuidcx.com"',
         'local: "http://127.0.0.1:8080"',
         'option value="snaptext_cloud"',
-        "SnapText device ID",
-        "启用 SnapText 免费源",
+        "SnapText 官方源",
     ):
         check(expected in client_snaptext_source, f"settings page is missing SnapText source controls: {expected}")
     for unexpected in (

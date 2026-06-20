@@ -89,12 +89,14 @@ def verify_macos(
     app_info = app_bundle / "Contents" / "Info.plist"
 
     require_nonempty_file(binary, "Run cargo-tauri build on macOS first.")
-    require_dir(app_bundle, "The macOS .app bundle was not produced.")
-    require_nonempty_file(app_executable, "The .app bundle is missing its main executable.")
-    require_nonempty_file(app_info, "The .app bundle is missing Info.plist.")
-
     if require_installers:
         verify_macos_installers(product_name, version, bundle_dir)
+    else:
+        # Tauri's dmg bundler can remove the intermediate .app after creating
+        # the disk image. Only require the app bundle in no-installer checks.
+        require_dir(app_bundle, "The macOS .app bundle was not produced.")
+        require_nonempty_file(app_executable, "The .app bundle is missing its main executable.")
+        require_nonempty_file(app_info, "The .app bundle is missing Info.plist.")
 
 
 def verify_macos_installers(product_name: str, version: str, bundle_dir: Path) -> None:

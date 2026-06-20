@@ -1,5 +1,7 @@
+#[cfg(debug_assertions)]
+use snaptext_core::Error;
 use snaptext_core::{
-    Error, Result,
+    Result,
     config::{AppConfig, default_history_path},
     history::HistoryStore,
 };

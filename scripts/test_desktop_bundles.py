@@ -86,8 +86,10 @@ def main() -> int:
         release_dir = root / "release"
         bundle_dir = release_dir / "bundle"
         create_installer_artifacts(bundle_dir)
+        write_file(release_dir / "snaptext-tauri", b"unix binary")
 
         common_args = ["--release-dir", str(release_dir), "--bundle-dir", str(bundle_dir)]
+        assert_success(run_bundles("--platform", "macos", *common_args))
         assert_success(run_bundles("--platform", "all", *common_args))
 
         (bundle_dir / "nsis" / "SnapText_0.1.0_x64.exe").unlink()

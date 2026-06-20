@@ -7,7 +7,7 @@
     "devUrl": "http://127.0.0.1:1420",
     "frontendDist": "../../ui/dist",
     "beforeDevCommand": "cd ../ui && bun run dev",
-    "beforeBuildCommand": "cd ../ui && bun run build"
+    "beforeBuildCommand": "cd .. && python3 scripts/build_tauri_frontend.py"
   },
   "app": {
     "withGlobalTauri": true,
@@ -30,13 +30,17 @@
     "active": true,
     "targets": "all",
     "category": "Productivity",
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    },
     "icon": [
       "icons/icon.png",
       "icons/icon.icns",
       "icons/icon.ico"
     ],
     "resources": {
-      "../../models": "models"
+      "../../models": "models",
+      "../../python/ocr_worker.py": "python/ocr_worker.py"
     }
   }
 }

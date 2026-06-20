@@ -31,6 +31,7 @@ core-foundation.workspace = true
 core-foundation-sys.workspace = true
 objc2.workspace = true
 objc2-app-kit.workspace = true
+objc2-core-foundation.workspace = true
 objc2-foundation.workspace = true
 
 [dev-dependencies]

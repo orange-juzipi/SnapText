@@ -20,6 +20,21 @@ export function formatUserError(message: string) {
     return "翻译服务暂时不可用，请稍后重试或切换翻译服务。";
   }
 
+  if (raw.includes("HTTP 504 Gateway Timeout")) {
+    return "SnapText 官方源响应超时，请稍后重试。";
+  }
+
+  if (
+    raw.includes("error sending request for url") &&
+    (raw.includes("snaptext.uuidcx.com") || raw.includes("translate.snaptext.app"))
+  ) {
+    return "无法连接 SnapText 官方源，请检查网络后重试。";
+  }
+
+  if (raw.includes("missing OCR model files")) {
+    return "OCR 模型文件缺失，请确认安装包已包含 det.onnx、cls.onnx、rec.onnx 和 rec_dict.txt。";
+  }
+
   return raw;
 }
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type * as React from "react";
-import { Copy, Languages, Pin, ScanText, Volume2 } from "lucide-react";
+import { Copy, Languages, LoaderCircle, Pin, ScanText, Volume2 } from "lucide-react";
 import { startScreenshotOverlay, unpinResultWindow } from "@/lib/api";
 import { translatorProviderDetailLabel } from "@/lib/format";
 import { labelsForLanguage } from "@/lib/labels";
@@ -215,22 +215,38 @@ export function WorkspacePage() {
             </IconTooltipButton>
           </div>
         </div>
-        <Textarea
-          className="workspace-textarea bg-control"
-          value={workspace.ocrLoading ? "" : workspace.textInput}
-          onChange={(event) => workspace.setTextInput(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) {
-              return;
+        <div className="workspace-textarea-shell" aria-busy={workspace.ocrLoading}>
+          <Textarea
+            className={
+              workspace.ocrLoading
+                ? "workspace-textarea workspace-textarea-busy bg-control"
+                : "workspace-textarea bg-control"
             }
-            event.preventDefault();
-            if (!workspace.translating && !translateTextMutation.isPending) {
-              void handleTranslateText();
-            }
-          }}
-          placeholder={workspace.ocrLoading ? labels.ocrSelectedRegion : labels.textInputPlaceholder}
-          disabled={workspace.ocrLoading}
-        />
+            value={workspace.ocrLoading ? "" : workspace.textInput}
+            onChange={(event) => workspace.setTextInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) {
+                return;
+              }
+              event.preventDefault();
+              if (!workspace.translating && !translateTextMutation.isPending) {
+                void handleTranslateText();
+              }
+            }}
+            placeholder={workspace.ocrLoading ? labels.ocrSelectedRegion : labels.textInputPlaceholder}
+            disabled={workspace.ocrLoading}
+          />
+          {workspace.ocrLoading ? (
+            // OCR happens outside the main window, so the source input needs its own busy state.
+            <div className="workspace-textarea-loading" aria-live="polite">
+              <div className="workspace-loading-message">
+                <LoaderCircle size={18} aria-hidden="true" />
+                <span>{labels.ocrSelectedRegion}</span>
+              </div>
+              <div className="workspace-loading-bar" aria-hidden="true" />
+            </div>
+          ) : null}
+        </div>
       </section>
 
       <section className="workspace-panel">
@@ -272,12 +288,28 @@ export function WorkspacePage() {
             </IconTooltipButton>
           </div>
         </div>
-        <Textarea
-          className="workspace-textarea bg-background text-[15px]"
-          value={workspace.translating ? "" : workspace.snapshot.result}
-          readOnly
-          placeholder={workspace.translating ? labels.translating : labels.translationPlaceholder}
-        />
+        <div className="workspace-textarea-shell" aria-busy={workspace.translating}>
+          <Textarea
+            className={
+              workspace.translating
+                ? "workspace-textarea workspace-textarea-busy bg-background text-[15px]"
+                : "workspace-textarea bg-background text-[15px]"
+            }
+            value={workspace.translating ? "" : workspace.snapshot.result}
+            readOnly
+            placeholder={workspace.translating ? labels.translating : labels.translationPlaceholder}
+          />
+          {workspace.translating ? (
+            // Translation can follow OCR immediately, so the result box mirrors the same busy treatment.
+            <div className="workspace-textarea-loading" aria-live="polite">
+              <div className="workspace-loading-message">
+                <LoaderCircle size={18} aria-hidden="true" />
+                <span>{labels.translating}</span>
+              </div>
+              <div className="workspace-loading-bar" aria-hidden="true" />
+            </div>
+          ) : null}
+        </div>
       </section>
     </section>
   );

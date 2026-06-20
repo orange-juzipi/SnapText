@@ -1,5 +1,5 @@
 export const SNAPTEXT_CLOUD_ENDPOINTS = {
-  production: "https://translate.snaptext.app",
+  production: "https://snaptext.uuidcx.com",
   local: "http://127.0.0.1:8080",
 } as const;
 

@@ -101,13 +101,100 @@ pub fn normalize_selection_text(text: impl AsRef<str>) -> String {
     lines.join("\n")
 }
 
+pub fn looks_like_garbled_selection(text: &str) -> bool {
+    let text = text.trim();
+    if text.is_empty() {
+        return false;
+    }
+
+    let visible_chars = text.chars().filter(|ch| !ch.is_whitespace()).count();
+    if visible_chars < 4 {
+        return false;
+    }
+
+    let longest_replacement_run = longest_placeholder_run(text);
+    if longest_replacement_run >= 4 {
+        return true;
+    }
+    if looks_like_mojibake_selection(text, visible_chars) {
+        return true;
+    }
+
+    let replacement_marks = text.chars().filter(|ch| *ch == '?' || *ch == '�').count();
+    let alphanumeric_chars = text.chars().filter(|ch| ch.is_alphanumeric()).count();
+    let cjk_chars = text
+        .chars()
+        .filter(|ch| {
+            matches!(
+                *ch as u32,
+                0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF
+            )
+        })
+        .count();
+
+    // Some macOS selection providers degrade non-Latin text to placeholder
+    // question marks. Reject only placeholder-heavy text so normal English
+    // questions like "what??? really?" remain valid selections.
+    replacement_marks >= 3
+        && replacement_marks * 3 >= visible_chars
+        && replacement_marks > alphanumeric_chars + cjk_chars
+}
+
+fn looks_like_mojibake_selection(text: &str, visible_chars: usize) -> bool {
+    let c1_controls = text
+        .chars()
+        .filter(|ch| matches!(*ch as u32, 0x80..=0x9F))
+        .count();
+    if c1_controls > 0 {
+        return true;
+    }
+
+    let mojibake_markers = text
+        .chars()
+        .filter(|ch| {
+            matches!(
+                ch,
+                'Ã' | 'Â' | 'â' | '€' | '™' | 'œ' | 'ä' | 'å' | 'æ' | 'è' | 'é'
+            )
+        })
+        .count();
+    if mojibake_markers < 3 {
+        return false;
+    }
+
+    let cjk_chars = text
+        .chars()
+        .filter(|ch| {
+            matches!(
+                *ch as u32,
+                0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF
+            )
+        })
+        .count();
+
+    // UTF-8 text decoded as Latin-1 or Windows-1252 commonly shows dense runs
+    // like "ä¸­æ–‡". Require marker-heavy text and no real CJK to avoid
+    // rejecting normal European-language selections.
+    cjk_chars == 0 && mojibake_markers * 4 >= visible_chars
+}
+
+fn longest_placeholder_run(text: &str) -> usize {
+    let mut longest = 0;
+    let mut current = 0;
+    for ch in text.chars() {
+        if ch == '?' || ch == '�' {
+            current += 1;
+            longest = longest.max(current);
+        } else {
+            current = 0;
+        }
+    }
+    longest
+}
+
 #[cfg(target_os = "macos")]
 mod macos {
-    use std::{
-        process::{Command, Stdio},
-        ptr, thread,
-        time::Duration,
-    };
+    use std::{ptr, thread, time::Duration};
 
     use core_foundation::{
         base::{CFType, TCFType},
@@ -121,17 +208,17 @@ mod macos {
         string::CFStringRef,
     };
     use objc2::rc::Retained;
-    use objc2_app_kit::{NSPasteboard, NSWorkspace};
+    use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString, NSWorkspace};
     use objc2_foundation::NSString;
 
-    use super::{SelectionEvent, selection_event_from_text};
+    use super::{SelectionEvent, looks_like_garbled_selection, selection_event_from_text};
     use crate::{Error, Result};
 
     type AXUIElementRef = *const core::ffi::c_void;
     type CGEventRef = *mut core::ffi::c_void;
     type CGEventSourceRef = *mut core::ffi::c_void;
     type CGEventFlags = u64;
-    type CGEventSourceStateID = u32;
+    type CGEventSourceStateID = i32;
     type CGEventTapLocation = u32;
     type CGKeyCode = u16;
     type AXError = i32;
@@ -140,11 +227,22 @@ mod macos {
     const K_AX_ERROR_SUCCESS: AXError = 0;
     const K_AX_ERROR_NO_VALUE: AXError = -25212;
     const K_AX_ERROR_ATTRIBUTE_UNSUPPORTED: AXError = -25205;
+    const K_CG_EVENT_SOURCE_STATE_PRIVATE: CGEventSourceStateID = -1;
     const K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE: CGEventSourceStateID = 1;
     const K_CG_HID_EVENT_TAP: CGEventTapLocation = 0;
+    const K_CG_EVENT_FLAG_MASK_SHIFT: CGEventFlags = 1 << 17;
+    const K_CG_EVENT_FLAG_MASK_CONTROL: CGEventFlags = 1 << 18;
+    const K_CG_EVENT_FLAG_MASK_ALTERNATE: CGEventFlags = 1 << 19;
     const K_CG_EVENT_FLAG_MASK_COMMAND: CGEventFlags = 1 << 20;
+    const ACTIVE_HOTKEY_MODIFIER_MASK: CGEventFlags = K_CG_EVENT_FLAG_MASK_SHIFT
+        | K_CG_EVENT_FLAG_MASK_CONTROL
+        | K_CG_EVENT_FLAG_MASK_ALTERNATE
+        | K_CG_EVENT_FLAG_MASK_COMMAND;
     const CLIPBOARD_COPY_SETTLE_MS: u64 = 80;
     const CLIPBOARD_COPY_ATTEMPTS: usize = 6;
+    const CLIPBOARD_COPY_ROUNDS: usize = 3;
+    const HOTKEY_MODIFIER_RELEASE_SETTLE_MS: u64 = 40;
+    const HOTKEY_MODIFIER_RELEASE_ATTEMPTS: usize = 30;
     const AX_TRUSTED_CHECK_OPTION_PROMPT: &str = "AXTrustedCheckOptionPrompt";
     const KEY_CODE_C: CGKeyCode = 8;
 
@@ -163,6 +261,7 @@ mod macos {
             virtual_key: CGKeyCode,
             key_down: bool,
         ) -> CGEventRef;
+        fn CGEventSourceFlagsState(state_id: CGEventSourceStateID) -> CGEventFlags;
         fn CGEventSetFlags(event: CGEventRef, flags: CGEventFlags);
         fn CGEventPost(tap: CGEventTapLocation, event: CGEventRef);
     }
@@ -170,13 +269,20 @@ mod macos {
     pub fn current_selection() -> Result<Option<SelectionEvent>> {
         ensure_accessibility_permission(false)?;
         let app_bundle_id = frontmost_bundle_identifier();
-        if is_accessibility_trusted()
-            && let Some(event) = current_accessibility_selection(app_bundle_id.clone())?
-        {
+
+        if let Some(event) = current_clipboard_selection(app_bundle_id.clone())? {
             return Ok(Some(event));
         }
 
-        current_clipboard_selection(app_bundle_id)
+        if let Some(event) = current_accessibility_selection(app_bundle_id)? {
+            if looks_like_garbled_selection(&event.text) {
+                tracing::warn!("macOS Accessibility selected text looked garbled");
+                return Ok(None);
+            }
+            return Ok(Some(event));
+        }
+
+        Ok(None)
     }
 
     pub fn selection_permission_status() -> &'static str {
@@ -242,10 +348,12 @@ mod macos {
         app_bundle_id: Option<String>,
     ) -> Result<Option<SelectionEvent>> {
         let previous_clipboard = read_clipboard_text().ok();
-        let previous_change_count = clipboard_change_count();
-        copy_frontmost_selection()?;
-
-        if !wait_for_clipboard_change(previous_change_count) {
+        let marker = format!("__SNAPTEXT_SELECTION_MARKER_{}__", uuid::Uuid::new_v4());
+        write_clipboard_text(&marker)?;
+        if !copy_frontmost_selection_to_clipboard(&marker)? {
+            if let Some(previous) = previous_clipboard {
+                restore_clipboard(&previous);
+            }
             return Ok(None);
         }
 
@@ -254,12 +362,37 @@ mod macos {
         if let Some(previous) = previous_clipboard {
             // Cmd+C is the pragmatic fallback for apps that do not expose AXSelectedText.
             // Restore the plain-text clipboard so the fallback is less disruptive.
-            if let Err(err) = write_clipboard_text(&previous) {
-                tracing::warn!(error = %err, "failed to restore clipboard after selection fallback");
+            restore_clipboard(&previous);
+        }
+
+        let event = selection_event_from_text(selected_text, app_bundle_id);
+        if event
+            .as_ref()
+            .is_some_and(|event| looks_like_garbled_selection(&event.text))
+        {
+            tracing::warn!("macOS clipboard selected text still looked garbled");
+            return Ok(None);
+        }
+        Ok(event)
+    }
+
+    fn copy_frontmost_selection_to_clipboard(marker: &str) -> Result<bool> {
+        for round in 0..CLIPBOARD_COPY_ROUNDS {
+            let marker_change_count = clipboard_change_count();
+            copy_frontmost_selection()?;
+            if wait_for_copied_selection(marker_change_count, marker)? {
+                return Ok(true);
+            }
+
+            // Some hotkey chords, especially Option-based dead keys, can still
+            // be settling when the handler starts. Retry after the key state has
+            // had another short window to return to neutral.
+            if round + 1 < CLIPBOARD_COPY_ROUNDS {
+                thread::sleep(Duration::from_millis(CLIPBOARD_COPY_SETTLE_MS));
             }
         }
 
-        Ok(selection_event_from_text(selected_text, app_bundle_id))
+        Ok(false)
     }
 
     fn clipboard_change_count() -> isize {
@@ -267,20 +400,33 @@ mod macos {
         pasteboard.changeCount()
     }
 
-    fn wait_for_clipboard_change(previous_change_count: isize) -> bool {
+    fn wait_for_copied_selection(previous_change_count: isize, marker: &str) -> Result<bool> {
         for _ in 0..CLIPBOARD_COPY_ATTEMPTS {
             thread::sleep(Duration::from_millis(CLIPBOARD_COPY_SETTLE_MS));
-            if clipboard_change_count() != previous_change_count {
-                return true;
+            if clipboard_change_count() == previous_change_count {
+                continue;
+            }
+
+            let text = read_clipboard_text()?;
+            if text != marker {
+                return Ok(true);
             }
         }
-        false
+        Ok(false)
+    }
+
+    fn restore_clipboard(previous: &str) {
+        if let Err(err) = write_clipboard_text(previous) {
+            tracing::warn!(error = %err, "failed to restore clipboard after selection fallback");
+        }
     }
 
     fn copy_frontmost_selection() -> Result<()> {
         // Send Cmd+C from the SnapText process instead of delegating through
         // osascript; macOS blocks System Events key injection separately.
-        let source = unsafe { CGEventSourceCreate(K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE) };
+        wait_for_hotkey_modifiers_to_release();
+
+        let source = unsafe { CGEventSourceCreate(K_CG_EVENT_SOURCE_STATE_PRIVATE) };
         if source.is_null() {
             return Err(Error::Selection(
                 "failed to create macOS keyboard event source".to_owned(),
@@ -312,43 +458,39 @@ mod macos {
         Ok(())
     }
 
-    fn read_clipboard_text() -> Result<String> {
-        let output = Command::new("pbpaste")
-            .output()
-            .map_err(|err| Error::Selection(format!("failed to read clipboard: {err}")))?;
-
-        if output.status.success() {
-            return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
+    fn wait_for_hotkey_modifiers_to_release() {
+        for _ in 0..HOTKEY_MODIFIER_RELEASE_ATTEMPTS {
+            let flags =
+                unsafe { CGEventSourceFlagsState(K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE) };
+            if flags & ACTIVE_HOTKEY_MODIFIER_MASK == 0 {
+                return;
+            }
+            thread::sleep(Duration::from_millis(HOTKEY_MODIFIER_RELEASE_SETTLE_MS));
         }
 
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        Err(Error::Selection(if stderr.is_empty() {
-            "failed to read clipboard".to_owned()
-        } else {
-            format!("failed to read clipboard: {stderr}")
-        }))
+        // Continue after a short wait so holding a modifier key does not hang
+        // selection translation. The synthetic copy event still sets only Cmd.
+        tracing::debug!("copying selection while a keyboard modifier is still pressed");
+    }
+
+    fn read_clipboard_text() -> Result<String> {
+        let pasteboard = NSPasteboard::generalPasteboard();
+        Ok(pasteboard
+            .stringForType(unsafe { NSPasteboardTypeString })
+            .map(|value| value.to_string())
+            .unwrap_or_default())
     }
 
     fn write_clipboard_text(text: &str) -> Result<()> {
-        let mut child = Command::new("pbcopy")
-            .stdin(Stdio::piped())
-            .spawn()
-            .map_err(|err| Error::Selection(format!("failed to restore clipboard: {err}")))?;
-
-        if let Some(stdin) = child.stdin.as_mut() {
-            use std::io::Write as _;
-            stdin
-                .write_all(text.as_bytes())
-                .map_err(|err| Error::Selection(format!("failed to restore clipboard: {err}")))?;
-        }
-
-        let status = child
-            .wait()
-            .map_err(|err| Error::Selection(format!("failed to restore clipboard: {err}")))?;
-        if status.success() {
+        let pasteboard = NSPasteboard::generalPasteboard();
+        pasteboard.clearContents();
+        let text = NSString::from_str(text);
+        if pasteboard.setString_forType(&text, unsafe { NSPasteboardTypeString }) {
             Ok(())
         } else {
-            Err(Error::Selection("failed to restore clipboard".to_owned()))
+            Err(Error::Selection(
+                "failed to write clipboard text".to_owned(),
+            ))
         }
     }
 
@@ -592,6 +734,22 @@ mod tests {
             normalize_selection_text("\n\t hello world \r\0"),
             "hello world"
         );
+    }
+
+    #[test]
+    fn detects_placeholder_heavy_garbled_selection_text() {
+        assert!(looks_like_garbled_selection(
+            "??? API ???????????? AI ???????? OpenAI ?? � ???? base URL ?????"
+        ));
+        assert!(looks_like_garbled_selection(
+            "??????????python3 scripts/package_desktop.py --no-sign ?? DMG\n???????????????????????? DMG ??"
+        ));
+        assert!(looks_like_garbled_selection("åè¯ä¸­æå°±æé®é¢"));
+        assert!(!looks_like_garbled_selection("OpenAI base URL 是什么？"));
+        assert!(!looks_like_garbled_selection("what??? really?"));
+        assert!(!looks_like_garbled_selection(
+            "déjà vu café résumé — normal accents"
+        ));
     }
 
     #[test]

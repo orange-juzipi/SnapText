@@ -33,7 +33,9 @@ LOCAL_CARGO_TAURI = ROOT / ".tools" / "bin" / "cargo-tauri"
 
 def run(cmd: list[str], cwd: Path = ROOT) -> None:
     print(f"$ {' '.join(cmd)}", flush=True)
-    subprocess.run(cmd, cwd=cwd, check=True)
+    result = subprocess.run(cmd, cwd=cwd)
+    if result.returncode != 0:
+        raise SystemExit(result.returncode)
 
 
 def read_tauri_config() -> dict:
@@ -80,6 +82,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def packaging_commands(tauri: str, skip_dmg: bool) -> list[list[str]]:
     commands = [
+        ["python3", "scripts/verify_ocr_models.py", "models", "--allow-macos-vision-fallback"],
         ["python3", "scripts/build_frontend.py"],
         [tauri, "build", "--no-bundle"],
         [tauri, "build", "--bundles", "app", "--no-sign"],

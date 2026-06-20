@@ -22,6 +22,7 @@ ui/pkg
 # Python helper script caches
 .venv/
 .venv-ocr/
+.venv-paddle/
 __pycache__/
 **/__pycache__/
 *.py[cod]

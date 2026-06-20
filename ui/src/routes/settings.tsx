@@ -331,24 +331,8 @@ function ProviderFields({
   provider: string;
 }) {
   if (provider === "snaptext_cloud") {
-    return (
-      <div className="settings-grid">
-        <Field>
-          <FieldLabel>SnapText device ID</FieldLabel>
-          <Input
-            value={draft.translator.snaptext_cloud.device_id}
-            onChange={(event) =>
-              updateDraft(
-                setDraft,
-                (next) =>
-                  (next.translator.snaptext_cloud.device_id =
-                    event.target.value),
-              )
-            }
-          />
-        </Field>
-      </div>
-    );
+    // 官方源的客户端 ID 由配置自动维护，普通设置页不暴露可编辑入口。
+    return null;
   }
   if (provider === "deepl") {
     return (
