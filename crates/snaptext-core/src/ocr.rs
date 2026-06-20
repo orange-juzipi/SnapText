@@ -23,8 +23,12 @@ pub const CLS_IMAGE_WIDTH: u32 = 160;
 pub const CLS_LABELS: [&str; 2] = ["0", "180"];
 pub const REC_IMAGE_HEIGHT: u32 = 48;
 pub const REC_IMAGE_WIDTH: u32 = 320;
+pub const REC_MAX_IMAGE_WIDTH: u32 = 960;
+pub const OCR_CROP_X_PADDING_RATIO: f32 = 0.10;
+pub const OCR_CROP_Y_PADDING_RATIO: f32 = 0.35;
 pub const REC_MEAN: [f32; 3] = [0.5, 0.5, 0.5];
 pub const REC_STD: [f32; 3] = [0.5, 0.5, 0.5];
+pub const OCR_CHANNEL_ORDER_ENV: &str = "SNAPTEXT_OCR_CHANNEL_ORDER";
 #[cfg(target_os = "macos")]
 pub const OCR_ENGINE_ENV: &str = "SNAPTEXT_OCR_ENGINE";
 
@@ -212,7 +216,7 @@ impl OcrEngine {
 
         let mut lines = Vec::with_capacity(candidates.len());
         for candidate in candidates {
-            let crop = crop_text_region(&image, candidate.bbox)?;
+            let crop = crop_text_region_for_recognition(&image, candidate.bbox)?;
             // PP-OCR classifies 0/180 orientation per cropped text box before recognition.
             let classification_input = preprocess_for_classification(&crop)?;
             let classification = sessions.run_classification(&classification_input)?;
@@ -266,6 +270,25 @@ fn macos_ocr_backend_from_value(value: Option<&str>) -> MacosOcrBackend {
             MacosOcrBackend::Paddle
         }
         _ => MacosOcrBackend::Vision,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OcrChannelOrder {
+    Rgb,
+    Bgr,
+}
+
+fn ocr_channel_order_from_env() -> OcrChannelOrder {
+    ocr_channel_order_from_value(std::env::var(OCR_CHANNEL_ORDER_ENV).ok().as_deref())
+}
+
+fn ocr_channel_order_from_value(value: Option<&str>) -> OcrChannelOrder {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) if value.eq_ignore_ascii_case("rgb") => OcrChannelOrder::Rgb,
+        // Paddle/OpenCV OCR examples commonly feed BGR tensors. Keep that as the
+        // default so the Rust path matches the TTime/eSearch-style ONNX runtime.
+        _ => OcrChannelOrder::Bgr,
     }
 }
 
@@ -738,12 +761,25 @@ fn map_shape_error(error: ShapeError) -> Error {
 }
 
 fn normalize_rgb_to_chw_with_stats(image: &RgbImage, mean: [f32; 3], std: [f32; 3]) -> Vec<f32> {
+    normalize_rgb_to_chw_with_stats_and_order(image, mean, std, ocr_channel_order_from_env())
+}
+
+fn normalize_rgb_to_chw_with_stats_and_order(
+    image: &RgbImage,
+    mean: [f32; 3],
+    std: [f32; 3],
+    order: OcrChannelOrder,
+) -> Vec<f32> {
     let plane_len = image.width() as usize * image.height() as usize;
     let mut data = vec![0.0; plane_len * 3];
 
     for (index, pixel) in image.pixels().enumerate() {
         for channel in 0..3 {
-            let normalized = f32::from(pixel[channel]) / 255.0;
+            let source_channel = match order {
+                OcrChannelOrder::Rgb => channel,
+                OcrChannelOrder::Bgr => 2 - channel,
+            };
+            let normalized = f32::from(pixel[source_channel]) / 255.0;
             data[channel * plane_len + index] = (normalized - mean[channel]) / std[channel];
         }
     }
@@ -772,6 +808,28 @@ pub fn crop_text_region(image: &DynamicImage, bbox: BBox) -> Result<DynamicImage
     };
 
     Ok(image.crop_imm(x, y, width, height))
+}
+
+fn crop_text_region_for_recognition(image: &DynamicImage, bbox: BBox) -> Result<DynamicImage> {
+    crop_text_region(image, padded_bbox_for_recognition(bbox))
+}
+
+fn padded_bbox_for_recognition(bbox: BBox) -> BBox {
+    // Detection maps often hug glyph pixels tightly. Adding surrounding context
+    // mirrors TTime's OCR path and prevents recognition from seeing clipped text.
+    let pad_x = ((bbox.width as f32) * OCR_CROP_X_PADDING_RATIO).round() as u32;
+    let pad_y = ((bbox.height as f32) * OCR_CROP_Y_PADDING_RATIO).round() as u32;
+    let x = bbox.x.saturating_sub(pad_x);
+    let y = bbox.y.saturating_sub(pad_y);
+    let right = bbox.x.saturating_add(bbox.width).saturating_add(pad_x);
+    let bottom = bbox.y.saturating_add(bbox.height).saturating_add(pad_y);
+
+    BBox {
+        x,
+        y,
+        width: right.saturating_sub(x),
+        height: bottom.saturating_sub(y),
+    }
 }
 
 pub fn preprocess_for_classification(image: &DynamicImage) -> Result<ClassificationInput> {
@@ -807,21 +865,31 @@ pub fn preprocess_for_recognition(image: &DynamicImage) -> Result<RecognitionInp
 
     let rgb = image.to_rgb8();
     let aspect = image.width() as f32 / image.height() as f32;
-    let resized_width =
-        ((REC_IMAGE_HEIGHT as f32 * aspect).round() as u32).clamp(1, REC_IMAGE_WIDTH);
+    let target_width = recognition_target_width(aspect);
+    let resized_width = ((REC_IMAGE_HEIGHT as f32 * aspect).round() as u32).clamp(1, target_width);
     let resized =
         image::imageops::resize(&rgb, resized_width, REC_IMAGE_HEIGHT, FilterType::Triangle);
-    let mut padded = RgbImage::from_pixel(REC_IMAGE_WIDTH, REC_IMAGE_HEIGHT, Rgb([0, 0, 0]));
+    let mut padded = RgbImage::from_pixel(target_width, REC_IMAGE_HEIGHT, Rgb([0, 0, 0]));
     image::imageops::replace(&mut padded, &resized, 0, 0);
 
     Ok(RecognitionInput {
-        width: REC_IMAGE_WIDTH,
+        width: target_width,
         height: REC_IMAGE_HEIGHT,
         resized_width,
         original_width: image.width(),
         original_height: image.height(),
         chw_data: normalize_rgb_to_chw_with_stats(&padded, REC_MEAN, REC_STD),
     })
+}
+
+fn recognition_target_width(aspect: f32) -> u32 {
+    // PP-OCR recognition models accept dynamic width after ONNX conversion. Use
+    // the legacy 320px floor for short text and preserve more detail for long rows.
+    let width = (REC_IMAGE_HEIGHT as f32 * aspect).ceil() as u32;
+    round_up_to_multiple(
+        width.clamp(REC_IMAGE_WIDTH, REC_MAX_IMAGE_WIDTH),
+        DET_INPUT_SIDE_MULTIPLE,
+    )
 }
 
 fn clamp_bbox_to_image(
@@ -936,14 +1004,28 @@ fn flood_fill_candidate(
         return None;
     }
 
-    let scale_x = input.original_width as f32 / map_width as f32;
-    let scale_y = input.original_height as f32 / map_height as f32;
+    let scale_x = input.width as f32 / map_width as f32 / input.scale_x;
+    let scale_y = input.height as f32 / map_height as f32 / input.scale_y;
+    let original_width = input.original_width;
+    let original_height = input.original_height;
+    let x = (min_x as f32 * scale_x)
+        .round()
+        .clamp(0.0, original_width as f32) as u32;
+    let y = (min_y as f32 * scale_y)
+        .round()
+        .clamp(0.0, original_height as f32) as u32;
+    let right = ((max_x + 1) as f32 * scale_x)
+        .round()
+        .clamp(0.0, original_width as f32) as u32;
+    let bottom = ((max_y + 1) as f32 * scale_y)
+        .round()
+        .clamp(0.0, original_height as f32) as u32;
     Some(DetectionCandidate {
         bbox: BBox {
-            x: (min_x as f32 * scale_x).round() as u32,
-            y: (min_y as f32 * scale_y).round() as u32,
-            width: (width as f32 * scale_x).round().max(1.0) as u32,
-            height: (height as f32 * scale_y).round().max(1.0) as u32,
+            x,
+            y,
+            width: right.saturating_sub(x).max(1),
+            height: bottom.saturating_sub(y).max(1),
         },
         score: score_sum / count as f32,
     })
@@ -1165,6 +1247,26 @@ mod tests {
     }
 
     #[test]
+    fn padded_bbox_for_recognition_adds_context_without_underflow() {
+        let bbox = padded_bbox_for_recognition(BBox {
+            x: 2,
+            y: 3,
+            width: 20,
+            height: 10,
+        });
+
+        assert_eq!(
+            bbox,
+            BBox {
+                x: 0,
+                y: 0,
+                width: 24,
+                height: 17,
+            }
+        );
+    }
+
+    #[test]
     fn crop_text_region_rejects_out_of_bounds_boxes() {
         let image =
             DynamicImage::ImageRgba8(ImageBuffer::from_pixel(100, 80, Rgba([255, 255, 255, 255])));
@@ -1187,7 +1289,7 @@ mod tests {
     }
 
     #[test]
-    fn preprocess_for_recognition_resizes_and_pads_to_model_shape() {
+    fn preprocess_for_recognition_uses_legacy_width_for_short_text() {
         let image =
             DynamicImage::ImageRgba8(ImageBuffer::from_pixel(120, 30, Rgba([255, 255, 255, 255])));
 
@@ -1203,29 +1305,61 @@ mod tests {
     }
 
     #[test]
-    fn preprocess_for_recognition_caps_wide_text_width() {
-        let image = DynamicImage::ImageRgba8(ImageBuffer::from_pixel(
-            1000,
-            40,
-            Rgba([255, 255, 255, 255]),
-        ));
+    fn preprocess_for_recognition_expands_width_for_long_text() {
+        let image =
+            DynamicImage::ImageRgba8(ImageBuffer::from_pixel(800, 40, Rgba([255, 255, 255, 255])));
 
         let input = preprocess_for_recognition(&image).expect("recognition input");
 
-        assert_eq!(input.resized_width, REC_IMAGE_WIDTH);
+        assert_eq!(input.width, REC_MAX_IMAGE_WIDTH);
+        assert_eq!(input.resized_width, REC_MAX_IMAGE_WIDTH);
     }
 
     #[test]
     fn recognition_tensor_uses_nchw_shape() {
         let image =
-            DynamicImage::ImageRgba8(ImageBuffer::from_pixel(120, 30, Rgba([255, 255, 255, 255])));
+            DynamicImage::ImageRgba8(ImageBuffer::from_pixel(800, 40, Rgba([255, 255, 255, 255])));
         let input = preprocess_for_recognition(&image).expect("recognition input");
 
         let tensor = recognition_tensor(&input).expect("tensor");
 
         assert_eq!(
             tensor.shape(),
-            &[1, 3, REC_IMAGE_HEIGHT as usize, REC_IMAGE_WIDTH as usize]
+            &[1, 3, REC_IMAGE_HEIGHT as usize, input.width as usize]
+        );
+    }
+
+    #[test]
+    fn normalization_defaults_to_bgr_and_can_use_rgb() {
+        let image = RgbImage::from_pixel(1, 1, Rgb([10, 20, 30]));
+
+        let bgr = normalize_rgb_to_chw_with_stats_and_order(
+            &image,
+            [0.0, 0.0, 0.0],
+            [1.0, 1.0, 1.0],
+            OcrChannelOrder::Bgr,
+        );
+        let rgb = normalize_rgb_to_chw_with_stats_and_order(
+            &image,
+            [0.0, 0.0, 0.0],
+            [1.0, 1.0, 1.0],
+            OcrChannelOrder::Rgb,
+        );
+
+        assert_eq!(bgr, vec![30.0 / 255.0, 20.0 / 255.0, 10.0 / 255.0]);
+        assert_eq!(rgb, vec![10.0 / 255.0, 20.0 / 255.0, 30.0 / 255.0]);
+    }
+
+    #[test]
+    fn channel_order_env_defaults_to_bgr_unless_rgb_is_explicit() {
+        assert_eq!(ocr_channel_order_from_value(None), OcrChannelOrder::Bgr);
+        assert_eq!(
+            ocr_channel_order_from_value(Some("bgr")),
+            OcrChannelOrder::Bgr
+        );
+        assert_eq!(
+            ocr_channel_order_from_value(Some("rgb")),
+            OcrChannelOrder::Rgb
         );
     }
 
@@ -1415,24 +1549,8 @@ mod tests {
                 .expect("candidates");
 
         assert_eq!(candidates.len(), 2);
-        assert_eq!(
-            candidates[0].bbox,
-            BBox {
-                x: 20,
-                y: 20,
-                width: 30,
-                height: 30,
-            }
-        );
-        assert_eq!(
-            candidates[1].bbox,
-            BBox {
-                x: 100,
-                y: 80,
-                width: 40,
-                height: 40,
-            }
-        );
+        assert_eq!(candidates[0].bbox, bbox(20, 20, 30, 30));
+        assert_eq!(candidates[1].bbox, bbox(100, 80, 40, 40));
         assert!((candidates[0].score - 0.9).abs() < f32::EPSILON);
     }
 
@@ -1448,15 +1566,28 @@ mod tests {
                 .expect("candidates");
 
         assert_eq!(candidates.len(), 1);
-        assert_eq!(
-            candidates[0].bbox,
-            BBox {
-                x: 50,
-                y: 50,
-                width: 30,
-                height: 30,
-            }
-        );
+        assert_eq!(candidates[0].bbox, bbox(50, 50, 30, 30));
+    }
+
+    #[test]
+    fn postprocess_detection_map_uses_resized_content_not_padding_for_coordinates() {
+        let input = DetectionInput {
+            width: 128,
+            height: 96,
+            original_width: 101,
+            original_height: 65,
+            scale_x: 1.0,
+            scale_y: 1.0,
+            chw_data: Vec::new(),
+        };
+        let mut probabilities = vec![0.0; 128 * 96];
+        fill_rect(&mut probabilities, 128, 90, 50, 30, 20, 0.8);
+
+        let candidates =
+            postprocess_detection_map(&probabilities, 128, 96, &input, DET_BOX_THRESHOLD)
+                .expect("candidates");
+
+        assert_eq!(candidates[0].bbox, bbox(90, 50, 11, 15));
     }
 
     #[test]
@@ -1546,15 +1677,24 @@ mod tests {
         }
     }
 
+    fn bbox(x: u32, y: u32, width: u32, height: u32) -> BBox {
+        BBox {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
     fn detection_input_for_map(
-        map_width: u32,
-        map_height: u32,
+        _map_width: u32,
+        _map_height: u32,
         original_width: u32,
         original_height: u32,
     ) -> DetectionInput {
         DetectionInput {
-            width: map_width,
-            height: map_height,
+            width: original_width,
+            height: original_height,
             original_width,
             original_height,
             scale_x: 1.0,
