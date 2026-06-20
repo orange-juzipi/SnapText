@@ -58,13 +58,13 @@ use screenshots::mac_screenshot_selection_error;
 use screenshots::{capture_macos_interactive_screenshot, payload_to_full_region};
 use screenshots::{screenshot_full_inner, screenshot_region_inner};
 use state::AppState;
-#[cfg(all(not(test), not(target_os = "macos")))]
+#[cfg(not(target_os = "macos"))]
 use state::OverlaySession;
 #[cfg(not(test))]
 use tray::setup_tray;
 #[cfg(not(test))]
 use window::show_main_window;
-#[cfg(all(not(test), not(target_os = "macos")))]
+#[cfg(not(target_os = "macos"))]
 use window::show_overlay_window;
 use window::{
     hide_main_window, hide_overlay_window, main_window_is_visible, restore_main_window_if_needed,
