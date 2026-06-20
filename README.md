@@ -95,7 +95,7 @@ python3 scripts/verify_ocr_models.py --write-sha256-manifest models
 SNAPTEXT_OCR_MODEL_DIR=models cargo test -p snaptext-core --test ocr_smoke -- --ignored --nocapture
 ```
 
-桌面应用设置页也有 `Validate models`，用于检查模型文件是否缺失、识别字典是否为空、ONNX session 是否能加载。桌面能力诊断会集中报告截图、划词、全局热键和 OCR 模型状态；遇到模型文件缺失时，设置页可复制稳定格式的诊断摘要用于 QA 或问题反馈。
+桌面应用设置页也有 `Validate models`，用于检查模型文件是否缺失、识别字典是否为空、ONNX session 是否能加载。
 
 macOS 运行时默认优先使用系统 Apple Vision OCR，以获得更稳定的真实截图识别效果。需要调试 Paddle/ONNX OCR pipeline 时，可以显式设置：
 

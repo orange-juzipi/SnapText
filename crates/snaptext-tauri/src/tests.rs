@@ -392,39 +392,6 @@ fn validate_ocr_models_reports_unloadable_onnx_files() {
     assert!(status.message.contains("ONNX sessions failed to load"));
 }
 
-#[test]
-fn desktop_capabilities_include_required_plan_features() {
-    let state = AppState::new(
-        AppConfig::default(),
-        HistoryStore::in_memory().expect("history store"),
-    )
-    .expect("app state");
-    let capabilities = desktop_capabilities(&state);
-    let names = capabilities
-        .iter()
-        .map(|capability| capability.capability.as_str())
-        .collect::<Vec<_>>();
-
-    assert!(names.contains(&"screenshot"));
-    assert!(names.contains(&"selection"));
-    assert!(names.contains(&"global_hotkey"));
-    assert!(names.contains(&"ocr_models"));
-    assert!(
-        !capabilities
-            .iter()
-            .find(|capability| capability.capability == "ocr_models")
-            .expect("ocr models capability")
-            .status
-            .trim()
-            .is_empty()
-    );
-    assert!(
-        capabilities
-            .iter()
-            .all(|capability| !capability.action.is_empty())
-    );
-}
-
 #[tokio::test]
 async fn translate_image_base64_rejects_invalid_image_data() {
     let state = AppState::new(

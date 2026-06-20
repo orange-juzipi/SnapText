@@ -26,7 +26,6 @@ COMMON_CHECKS = (
     "app_launch",
     "model_validation",
     "translator_provider_validation",
-    "desktop_capability_diagnostics",
     "screenshot_translation",
     "selection_translation",
     "image_translation",
@@ -59,7 +58,6 @@ PLACEHOLDER_PREFIXES = ("replace-with-", "replace with ")
 MIN_EVIDENCE_LENGTH = 12
 SEMVER_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 GIT_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{7,40}$")
-CAPABILITY_DIAGNOSTIC_NAMES = ("screenshot", "selection", "global_hotkey", "ocr_models")
 EVIDENCE_KEYWORDS = {
     "package_build": ("package_desktop.py", "cargo-tauri", "build"),
     "bundle_verification": ("verify_desktop_bundles.py", "bundle", "installer"),
@@ -206,18 +204,6 @@ def validate_release_metadata(
         )
 
 
-def validate_desktop_capability_diagnostics(platform_name: str, evidence_text: str) -> None:
-    for capability_name in CAPABILITY_DIAGNOSTIC_NAMES:
-        check(
-            f"[{capability_name}]" in evidence_text,
-            f"{platform_name}.desktop_capability_diagnostics.evidence must include [{capability_name}] copied from Check permissions",
-        )
-    check(
-        " - " in evidence_text,
-        f"{platform_name}.desktop_capability_diagnostics.evidence must use [capability] status - action format",
-    )
-
-
 def validate_evidence_keywords(platform_name: str, check_name: str, evidence_text: str) -> None:
     required_keywords = EVIDENCE_KEYWORDS.get(check_name)
     if required_keywords is None:
@@ -251,8 +237,6 @@ def validate_check(platform_name: str, check_name: str, payload: object) -> None
         f"{platform_name}.{check_name} is not passing: {result}",
     )
     validate_evidence_keywords(platform_name, check_name, evidence_text)
-    if check_name == "desktop_capability_diagnostics":
-        validate_desktop_capability_diagnostics(platform_name, evidence_text)
 
 
 def validate_platform(platform_name: str, payload: object) -> None:

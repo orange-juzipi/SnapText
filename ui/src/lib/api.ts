@@ -1,7 +1,6 @@
 import { tauriInvoke } from "@/lib/tauri";
 import type {
   AppConfig,
-  DesktopCapabilityStatus,
   HistoryRecord,
   OcrModelStatus,
   OcrTextResult,
@@ -43,10 +42,6 @@ export function clearHistory() {
 
 export function validateOcrModels() {
   return tauriInvoke<OcrModelStatus>("validate_ocr_models");
-}
-
-export function getDesktopCapabilities() {
-  return tauriInvoke<DesktopCapabilityStatus[]>("get_desktop_capabilities");
 }
 
 export function screenshotFull() {

@@ -1,17 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, ClipboardCopy, Keyboard, MonitorCog, RefreshCw, Save, ServerCog, Volume2 } from "lucide-react";
+import { ArrowLeft, Keyboard, MonitorCog, Save, ServerCog, Volume2 } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { labelsForLanguage } from "@/lib/labels";
-import {
-  useConfigQuery,
-  useDesktopCapabilitiesQuery,
-  useUpdateConfigMutation,
-} from "@/lib/queries";
-import type { AppConfig, DesktopCapabilityStatus } from "@/lib/types";
+import { useConfigQuery, useUpdateConfigMutation } from "@/lib/queries";
+import type { AppConfig } from "@/lib/types";
 import { useWorkspaceState } from "@/app/workspace-state";
 import { clientSnapTextCloudEndpoint } from "@/lib/snaptext-cloud";
-import { formatCapabilitiesForClipboard } from "@/lib/format";
-import { copyText } from "@/lib/tauri";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -24,7 +18,6 @@ type SettingsTab = "interface" | "hotkeys" | "speech" | "provider";
 
 export function SettingsPage() {
   const configQuery = useConfigQuery();
-  const desktopCapabilities = useDesktopCapabilitiesQuery();
   const updateConfig = useUpdateConfigMutation();
   const workspace = useWorkspaceState();
   const [draft, setDraft] = useState<AppConfig | null>(null);
@@ -63,33 +56,6 @@ export function SettingsPage() {
       );
       setDraft(saved);
       workspace.setStatus(labels.configSaved);
-    } catch (error) {
-      workspace.showError(
-        error instanceof Error ? error.message : String(error),
-      );
-    }
-  }
-
-  async function checkPermissions() {
-    try {
-      await desktopCapabilities.refetch();
-      workspace.setStatus(labels.desktopCapabilitiesChecked);
-    } catch (error) {
-      workspace.showError(
-        error instanceof Error ? error.message : String(error),
-      );
-    }
-  }
-
-  async function copyDiagnostics() {
-    const diagnostics = desktopCapabilities.data ?? [];
-    if (diagnostics.length === 0) {
-      workspace.setStatus(labels.noDesktopCapabilitiesToCopy);
-      return;
-    }
-    try {
-      await copyText(formatCapabilitiesForClipboard(diagnostics));
-      workspace.setStatus(labels.desktopCapabilitiesCopied);
     } catch (error) {
       workspace.showError(
         error instanceof Error ? error.message : String(error),
@@ -196,13 +162,6 @@ export function SettingsPage() {
             labels={labels}
             loading={updateConfig.isPending}
             onSave={() => handleSave("interface")}
-          />
-          <DiagnosticsPanel
-            capabilities={desktopCapabilities.data ?? []}
-            checking={desktopCapabilities.isFetching}
-            labels={labels}
-            onCheck={checkPermissions}
-            onCopy={copyDiagnostics}
           />
           </section>
         ) : null}
@@ -409,50 +368,6 @@ function ProviderFields({
     );
   }
   return null;
-}
-
-function DiagnosticsPanel({
-  capabilities,
-  checking,
-  labels,
-  onCheck,
-  onCopy,
-}: {
-  capabilities: DesktopCapabilityStatus[];
-  checking: boolean;
-  labels: ReturnType<typeof labelsForLanguage>;
-  onCheck: () => void;
-  onCopy: () => void;
-}) {
-  return (
-    <section className="settings-diagnostics">
-      <div className="settings-actions">
-        <Button onClick={onCheck} variant="secondary" disabled={checking}>
-          <RefreshCw size={16} />
-          {checking ? labels.refresh : labels.checkPermissions}
-        </Button>
-        <Button onClick={onCopy} variant="ghost" disabled={capabilities.length === 0}>
-          <ClipboardCopy size={16} />
-          {labels.copyDiagnostics}
-        </Button>
-      </div>
-      {capabilities.length > 0 ? (
-        <div className="settings-diagnostics-list">
-          {capabilities.map((item) => (
-            <div className="settings-diagnostics-item" key={item.capability}>
-              <div>
-                <strong>{item.capability}</strong>
-                <p>{item.action}</p>
-              </div>
-              <Badge variant={item.status === "ok" ? "primary" : "default"}>
-                {item.status}
-              </Badge>
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </section>
-  );
 }
 
 type ProviderInputPath =

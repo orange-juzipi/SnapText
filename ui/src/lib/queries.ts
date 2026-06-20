@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   clearHistory,
   getConfig,
-  getDesktopCapabilities,
   getHistory,
   pinResultWindow,
   retranslateResultText,
@@ -15,7 +14,6 @@ import {
 export const queryKeys = {
   config: ["config"] as const,
   history: (limit = 50) => ["history", limit] as const,
-  desktopCapabilities: ["desktop-capabilities"] as const,
 };
 
 export function useConfigQuery() {
@@ -29,14 +27,6 @@ export function useHistoryQuery(limit = 50) {
   return useQuery({
     queryKey: queryKeys.history(limit),
     queryFn: () => getHistory(limit),
-  });
-}
-
-export function useDesktopCapabilitiesQuery(enabled = false) {
-  return useQuery({
-    queryKey: queryKeys.desktopCapabilities,
-    queryFn: getDesktopCapabilities,
-    enabled,
   });
 }
 

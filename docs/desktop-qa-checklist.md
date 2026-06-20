@@ -15,7 +15,6 @@ python3 scripts/verify_desktop_qa.py docs/desktop-qa-record.json
 - `app_launch`：记录安装后启动主窗口的结果。
 - `model_validation`：记录 `verify_ocr_models.py`、设置页 Validate models 或 `SHA256SUMS` 校验结果。
 - `translator_provider_validation`：记录 `verify_translator_providers.py` 覆盖 OpenAI-compatible、DeepL、Google 和 local HTTP。
-- `desktop_capability_diagnostics`：复制设置页桌面能力诊断摘要，证据必须包含 `[screenshot]`、`[selection]`、`[global_hotkey]` 和 `[ocr_models]`，并使用 `[capability] status - action` 格式。
 - `screenshot_translation`：验证截图 OCR 翻译。
 - `selection_translation`：验证划词翻译和热键触发。
 - `image_translation`：验证选择、拖拽和粘贴图片。

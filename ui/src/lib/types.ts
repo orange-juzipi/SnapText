@@ -136,12 +136,6 @@ export type OcrModelStatus = {
   message: string;
 };
 
-export type DesktopCapabilityStatus = {
-  capability: string;
-  status: string;
-  action: string;
-};
-
 export type OverlayTranslationPayload = {
   result: TranslationResult;
   region: Region;

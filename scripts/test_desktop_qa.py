@@ -13,12 +13,6 @@ from verify_desktop_qa import example_record
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CAPABILITY_DIAGNOSTIC_EVIDENCE = (
-    "[screenshot] available - screenshot permission checked\n"
-    "[selection] available - selection permission checked\n"
-    "[global_hotkey] configured - shortcut registration checked\n"
-    "[ocr_models] ready - local ONNX model validation checked"
-)
 CHECK_EVIDENCE = {
     "package_build": "package_desktop.py completed cargo-tauri build for this platform",
     "bundle_verification": "verify_desktop_bundles.py confirmed bundle installer artifact",
@@ -82,10 +76,7 @@ def passing_record() -> dict:
         platform["architecture"] = "test arch"
         for check_name, check_payload in platform["checks"].items():
             check_payload["result"] = "pass"
-            if check_name == "desktop_capability_diagnostics":
-                check_payload["evidence"] = CAPABILITY_DIAGNOSTIC_EVIDENCE
-            else:
-                check_payload["evidence"] = CHECK_EVIDENCE[check_name]
+            check_payload["evidence"] = CHECK_EVIDENCE[check_name]
     return record
 
 
@@ -232,41 +223,6 @@ def main() -> int:
         assert_failure_contains(
             run_qa(str(missing_path)),
             "linux.checks is missing wayland_session",
-        )
-
-        missing_diagnostics_path = root / "desktop-qa-missing-diagnostics.json"
-        missing_diagnostics = passing_record()
-        del missing_diagnostics["platforms"]["windows"]["checks"][
-            "desktop_capability_diagnostics"
-        ]
-        write_json(missing_diagnostics_path, missing_diagnostics)
-        assert_failure_contains(
-            run_qa(str(missing_diagnostics_path)),
-            "windows.checks is missing desktop_capability_diagnostics",
-        )
-
-        incomplete_diagnostics_path = root / "desktop-qa-incomplete-diagnostics.json"
-        incomplete_diagnostics = passing_record()
-        incomplete_diagnostics["platforms"]["linux"]["checks"][
-            "desktop_capability_diagnostics"
-        ]["evidence"] = "[screenshot] available - only one copied line"
-        write_json(incomplete_diagnostics_path, incomplete_diagnostics)
-        assert_failure_contains(
-            run_qa(str(incomplete_diagnostics_path)),
-            "linux.desktop_capability_diagnostics.evidence must include [selection] copied from Check permissions",
-        )
-
-        malformed_diagnostics_path = root / "desktop-qa-malformed-diagnostics.json"
-        malformed_diagnostics = passing_record()
-        malformed_diagnostics["platforms"]["macos"]["checks"][
-            "desktop_capability_diagnostics"
-        ][
-            "evidence"
-        ] = "[screenshot] ok\n[selection] ok\n[global_hotkey] ok\n[ocr_models] ok"
-        write_json(malformed_diagnostics_path, malformed_diagnostics)
-        assert_failure_contains(
-            run_qa(str(malformed_diagnostics_path)),
-            "macos.desktop_capability_diagnostics.evidence must use [capability] status - action format",
         )
 
         unknown_platform_path = root / "desktop-qa-unknown-platform.json"

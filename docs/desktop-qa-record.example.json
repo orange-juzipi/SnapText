@@ -31,10 +31,6 @@
           "result": "blocked",
           "evidence": "replace with command output, screenshot name, or notes"
         },
-        "desktop_capability_diagnostics": {
-          "result": "blocked",
-          "evidence": "replace with command output, screenshot name, or notes"
-        },
         "screenshot_translation": {
           "result": "blocked",
           "evidence": "replace with command output, screenshot name, or notes"
@@ -105,10 +101,6 @@
           "result": "blocked",
           "evidence": "replace with command output, screenshot name, or notes"
         },
-        "desktop_capability_diagnostics": {
-          "result": "blocked",
-          "evidence": "replace with command output, screenshot name, or notes"
-        },
         "screenshot_translation": {
           "result": "blocked",
           "evidence": "replace with command output, screenshot name, or notes"
@@ -176,10 +168,6 @@
           "evidence": "replace with command output, screenshot name, or notes"
         },
         "translator_provider_validation": {
-          "result": "blocked",
-          "evidence": "replace with command output, screenshot name, or notes"
-        },
-        "desktop_capability_diagnostics": {
           "result": "blocked",
           "evidence": "replace with command output, screenshot name, or notes"
         },

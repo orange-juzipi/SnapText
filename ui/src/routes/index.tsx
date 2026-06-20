@@ -125,14 +125,15 @@ export function WorkspacePage() {
   }
 
   function renderSpeechButtons(text: string, lang: string, scope: "source" | "translation", label: string) {
-    const disabled = !speechReady || !text.trim();
-    const tooltipLabel = !text.trim()
-      ? labels.noSpeechText
-      : configQuery.data?.speech.enabled === false
-        ? labels.speechEnableToPlay
-        : !speechReady
-          ? labels.speechUnsupported
-          : label;
+    const speechText = text.trim();
+    // 空态不展示播放入口，避免把占位提示误认为可朗读内容。
+    if (!speechText) return null;
+    const disabled = !speechReady;
+    const tooltipLabel = configQuery.data?.speech.enabled === false
+      ? labels.speechEnableToPlay
+      : !speechReady
+        ? labels.speechUnsupported
+        : label;
     if (lang === "en") {
       return (
         <>

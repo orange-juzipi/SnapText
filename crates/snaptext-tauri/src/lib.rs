@@ -27,9 +27,7 @@ mod screenshots;
 mod state;
 mod tray;
 mod window;
-use capabilities::{
-    DesktopCapabilityStatus, OcrModelStatus, desktop_capabilities, validate_ocr_models_inner,
-};
+use capabilities::{OcrModelStatus, validate_ocr_models_inner};
 use events::{
     OverlayTranslationPayload, SelectionTextPayload, emit_overlay_ocr, emit_result_translation,
     emit_result_window_state, emit_selection_record, history_record_to_translation_result,
@@ -117,7 +115,6 @@ pub fn run_tauri(config: AppConfig, history: HistoryStore) -> Result<()> {
             screenshot_region,
             start_screenshot_overlay,
             update_config,
-            get_desktop_capabilities,
             validate_ocr_models,
             translate_image_base64,
             translate_screenshot_base64,
@@ -213,12 +210,6 @@ fn update_config(
 #[allow(dead_code)]
 fn validate_ocr_models(state: State<'_, AppState>) -> Result<OcrModelStatus> {
     validate_ocr_models_inner(state.inner())
-}
-
-#[tauri::command]
-#[allow(dead_code)]
-fn get_desktop_capabilities(state: State<'_, AppState>) -> Vec<DesktopCapabilityStatus> {
-    desktop_capabilities(state.inner())
 }
 
 #[tauri::command]

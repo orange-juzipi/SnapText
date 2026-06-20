@@ -355,9 +355,6 @@ def main() -> int:
         "screen_recording_permission",
         "ui_automation_selection",
         "wayland_session",
-        "desktop_capability_diagnostics",
-        "CAPABILITY_DIAGNOSTIC_NAMES",
-        "validate_desktop_capability_diagnostics",
         "screenshot_translation",
         "image_translation",
         "MIN_EVIDENCE_LENGTH",
@@ -380,12 +377,8 @@ def main() -> int:
     for expected in (
         "screenshot_translation",
         "wayland_session",
-        "desktop_capability_diagnostics",
         "not passing: blocked",
         "is missing wayland_session",
-        "is missing desktop_capability_diagnostics",
-        "desktop-qa-incomplete-diagnostics.json",
-        "desktop-qa-malformed-diagnostics.json",
         "desktop-qa-short-evidence.json",
         "desktop-qa-future-date.json",
         "desktop-qa-unknown-platform.json",
@@ -747,12 +740,6 @@ def main() -> int:
         "README.md is missing the release signing verification command",
     )
     check(
-        "桌面能力诊断会集中报告截图、划词、全局热键和 OCR 模型状态" in readme
-        and "模型文件缺失" in readme
-        and "可复制稳定格式的诊断摘要" in readme,
-        "README.md is missing desktop capability diagnostics for OCR models",
-    )
-    check(
         'python3 scripts/release_gate.py --release-commit "$(git rev-parse HEAD)"' in readme,
         "README.md is missing the final release gate command with --release-commit",
     )
@@ -777,26 +764,6 @@ def main() -> int:
         "README.md is missing translation request size limits",
     )
 
-    goal_plan = read_text(ROOT / "goal/snaptext-desktop-plan.md")
-    check(
-        "桌面能力诊断现在会集中报告截图、划词、全局热键和 OCR 模型状态" in goal_plan
-        and "ONNX session 不可加载" in goal_plan
-        and "[capability] status - action" in goal_plan,
-        "goal/snaptext-desktop-plan.md is missing desktop capability diagnostics progress",
-    )
-
-    tauri_capabilities = read_text(ROOT / "crates/snaptext-tauri/src/capabilities.rs")
-    for expected in (
-        "fn desktop_capabilities(state: &AppState)",
-        'capability: String::from("ocr_models")',
-        "ocr_models_capability_status(state)",
-        "ocr_models_capability_action(state)",
-        "validate_ocr_models_inner(state)",
-    ):
-        check(
-            expected in tauri_capabilities,
-            f"snaptext-tauri desktop capabilities are missing OCR model diagnostics: {expected}",
-        )
     tauri_lib = read_text(ROOT / "crates/snaptext-tauri/src/lib.rs")
     core_config = read_text(ROOT / "crates/snaptext-core/src/config.rs")
     for expected in (
@@ -811,18 +778,6 @@ def main() -> int:
         "snaptext-core should not read client SnapText endpoint environment variables",
     )
 
-    frontend_lib = read_text(ROOT / "ui/src/lib/format.ts") + read_text(
-        ROOT / "ui/src/routes/settings.tsx"
-    )
-    for expected in (
-        "copyDiagnostics",
-        "formatCapabilitiesForClipboard",
-        "[${item.capability.trim()}] ${item.status.trim()} - ${singleLineText(item.action)}",
-    ):
-        check(
-            expected in frontend_lib,
-            f"React frontend is missing copyable desktop diagnostics support: {expected}",
-        )
     snaptext_cloud_client = read_text(ROOT / "ui/src/lib/snaptext-cloud.ts")
     settings_page = read_text(ROOT / "ui/src/routes/settings.tsx")
     client_snaptext_source = settings_page + snaptext_cloud_client
@@ -858,7 +813,6 @@ def main() -> int:
         '"screenshot_region"',
         '"start_screenshot_overlay"',
         '"update_config"',
-        '"get_desktop_capabilities"',
         '"validate_ocr_models"',
         '"translate_image_base64"',
         '"translate_screenshot_base64"',
@@ -879,7 +833,6 @@ def main() -> int:
     for expected in (
         "useConfigQuery",
         "useHistoryQuery",
-        "useDesktopCapabilitiesQuery",
         "useValidateModelsMutation",
         "useUpdateConfigMutation",
         "useTranslateTextMutation",
@@ -1007,9 +960,6 @@ def main() -> int:
     desktop_qa_checklist = read_text(ROOT / "docs/desktop-qa-checklist.md")
     for expected in (
         "screen_recording_permission",
-        "desktop_capability_diagnostics",
-        "[global_hotkey]",
-        "[ocr_models]",
         "ui_automation_selection",
         "wayland_session",
         "python3 scripts/verify_desktop_qa.py docs/desktop-qa-record.json",

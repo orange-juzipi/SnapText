@@ -1,5 +1,5 @@
 import type { Labels } from "@/lib/labels";
-import type { DesktopCapabilityStatus, HistoryRecord } from "@/lib/types";
+import type { HistoryRecord } from "@/lib/types";
 
 export function singleLineText(value: string) {
   return value.split(/\s+/).filter(Boolean).join(" ");
@@ -8,12 +8,6 @@ export function singleLineText(value: string) {
 export function formatHistoryForClipboard(items: HistoryRecord[]) {
   return items
     .map((item) => `[${item.source}] ${singleLineText(item.source_text)} -> ${singleLineText(item.translated_text)}`)
-    .join("\n");
-}
-
-export function formatCapabilitiesForClipboard(items: DesktopCapabilityStatus[]) {
-  return items
-    .map((item) => `[${item.capability.trim()}] ${item.status.trim()} - ${singleLineText(item.action)}`)
     .join("\n");
 }
 
