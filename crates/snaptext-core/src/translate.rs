@@ -28,6 +28,12 @@ pub struct TranslateResponse {
     pub provider: TranslatorProvider,
 }
 
+// Keep the desktop client aligned with the cloud API surface it consumes.
+#[derive(Debug, Deserialize)]
+struct SnapTextCloudTranslateResponse {
+    translated_text: String,
+}
+
 #[async_trait]
 pub trait Translator: Send + Sync {
     async fn translate(&self, req: TranslateRequest) -> Result<TranslateResponse>;
@@ -172,7 +178,7 @@ impl Translator for SnapTextCloudTranslator {
         // issuing ordered per-item requests and returning the same number of translations.
         for text in &req.texts {
             let payload = snaptext_cloud_payload(&req, text);
-            let value = self
+            let response = self
                 .client
                 .post(endpoint.clone())
                 .header("X-SnapText-Device", &self.config.device_id)
@@ -180,16 +186,9 @@ impl Translator for SnapTextCloudTranslator {
                 .json(&payload)
                 .send()
                 .await?
-                .error_for_status_json()
+                .error_for_status_json::<SnapTextCloudTranslateResponse>()
                 .await?;
-            let translated_text = value
-                .get("translated_text")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .ok_or_else(|| {
-                    Error::Translate("SnapText Cloud response missing translated_text".to_owned())
-                })?;
-            translated_texts.push(translated_text);
+            translated_texts.push(response.translated_text);
         }
         validate_translate_response_texts(&translated_texts, req.texts.len())?;
 
@@ -215,7 +214,7 @@ impl Translator for OpenAiCompatibleTranslator {
             .json(&payload)
             .send()
             .await?
-            .error_for_status_json()
+            .error_for_status_json::<Value>()
             .await?;
 
         let content = value
@@ -249,7 +248,7 @@ impl Translator for DeepLTranslator {
             .json(&payload)
             .send()
             .await?
-            .error_for_status_json()
+            .error_for_status_json::<Value>()
             .await?;
         let translated_texts = value
             .get("translations")
@@ -285,7 +284,7 @@ impl Translator for GoogleTranslator {
             .json(&payload)
             .send()
             .await?
-            .error_for_status_json()
+            .error_for_status_json::<Value>()
             .await?;
         let translated_texts = value
             .pointer("/data/translations")
@@ -322,7 +321,7 @@ impl Translator for LocalHttpTranslator {
             .json(&req)
             .send()
             .await?
-            .error_for_status_json()
+            .error_for_status_json::<Value>()
             .await?;
         let translated_texts = parse_local_http_response(value)?;
         validate_translate_response_texts(&translated_texts, req.texts.len())?;
@@ -540,11 +539,16 @@ fn parse_local_http_response(value: Value) -> Result<Vec<String>> {
 }
 
 trait JsonStatusExt {
-    async fn error_for_status_json(self) -> Result<Value>;
+    async fn error_for_status_json<T>(self) -> Result<T>
+    where
+        T: serde::de::DeserializeOwned;
 }
 
 impl JsonStatusExt for reqwest::Response {
-    async fn error_for_status_json(self) -> Result<Value> {
+    async fn error_for_status_json<T>(self) -> Result<T>
+    where
+        T: serde::de::DeserializeOwned,
+    {
         let status = self.status();
         let text = self.text().await?;
         if !status.is_success() {
@@ -758,6 +762,28 @@ mod tests {
 
         assert_eq!(payload["source_lang"], "auto");
         assert_eq!(payload["target_lang"], "zh_cn");
+    }
+
+    #[tokio::test]
+    async fn snaptext_cloud_response_does_not_require_cached_field() {
+        let server = MockServer::spawn(r#"{"translated_text":"Bonjour"}"#);
+        let config = SnapTextCloudConfig {
+            endpoint: server.url.clone(),
+            device_id: "test-device".to_owned(),
+            enabled: true,
+        };
+
+        let translator = SnapTextCloudTranslator::new(config, Client::new());
+        let response = translator
+            .translate(sample_request())
+            .await
+            .expect("snaptext cloud translation");
+        let request = server.take_request();
+
+        assert_eq!(response.translated_texts, ["Bonjour"]);
+        assert_eq!(response.provider, TranslatorProvider::SnapTextCloud);
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.path, "/v1/translate");
     }
 
     #[test]
