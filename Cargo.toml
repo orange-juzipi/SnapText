@@ -15,12 +15,16 @@ rust-version = "1.96"
 async-trait = "0.1"
 base64 = "0.22"
 directories = "6"
+ed25519-dalek = "2"
+getrandom = "0.3"
+hex = "0.4"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
+sha2 = "0.10"
 ort = "2.0.0-rc.12"
 tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-global-shortcut = "2"

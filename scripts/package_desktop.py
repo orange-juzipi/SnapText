@@ -20,6 +20,7 @@ from verify_desktop_bundles import detect_platform, main as verify_desktop_bundl
 ROOT = Path(__file__).resolve().parents[1]
 TAURI_DIR = ROOT / "crates" / "snaptext-tauri"
 LOCAL_CARGO_TAURI = ROOT / ".tools" / "bin" / "cargo-tauri"
+UNSIGNED_LOCAL_CONFIG = '{"bundle":{"createUpdaterArtifacts":false}}'
 
 
 def run(cmd: list[str], cwd: Path = ROOT) -> None:
@@ -91,17 +92,18 @@ def packaging_commands(args: argparse.Namespace, tauri: str, current_platform: s
         if current_platform == "macos":
             app_cmd = [tauri, "build", "--bundles", "app"]
             if args.no_sign:
-                app_cmd.append("--no-sign")
+                # Local unsigned builds should not require the updater private key.
+                app_cmd.extend(["--config", UNSIGNED_LOCAL_CONFIG, "--no-sign"])
             commands.append(app_cmd)
     elif args.bundles:
         build_cmd = [tauri, "build", "--bundles", args.bundles]
         if args.no_sign:
-            build_cmd.append("--no-sign")
+            build_cmd.extend(["--config", UNSIGNED_LOCAL_CONFIG, "--no-sign"])
         commands.append(build_cmd)
     else:
         build_cmd = [tauri, "build"]
         if args.no_sign:
-            build_cmd.append("--no-sign")
+            build_cmd.extend(["--config", UNSIGNED_LOCAL_CONFIG, "--no-sign"])
         commands.append(build_cmd)
     return commands
 

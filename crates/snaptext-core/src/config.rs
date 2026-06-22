@@ -4,6 +4,7 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use url::Url;
 
+use crate::cloud_auth::normalize_cloud_device_id;
 use crate::{Error, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -579,17 +580,12 @@ fn default_snaptext_cloud_endpoint() -> Url {
     snaptext_cloud_production_endpoint()
 }
 
-fn default_snaptext_cloud_device_id() -> String {
-    format!("local-{}", uuid::Uuid::new_v4())
+pub fn default_snaptext_cloud_device_id() -> String {
+    normalize_cloud_device_id(String::new())
 }
 
 fn normalize_device_id(device_id: String) -> String {
-    let device_id = device_id.trim();
-    if device_id.is_empty() {
-        default_snaptext_cloud_device_id()
-    } else {
-        device_id.to_owned()
-    }
+    normalize_cloud_device_id(device_id)
 }
 
 fn ensure_http_url(label: &str, url: &Url) -> Result<()> {

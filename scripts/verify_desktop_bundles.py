@@ -100,12 +100,29 @@ def verify_macos(
 
 
 def verify_macos_installers(product_name: str, version: str, bundle_dir: Path) -> None:
-    patterns = [f"dmg/{product_name}_{version}_*.dmg"]
-    reject_stale_snaptext_artifacts(bundle_dir, "dmg", patterns)
+    dmg_patterns = [f"dmg/{product_name}_{version}_*.dmg"]
+    updater_patterns = [f"macos/{product_name}*.tar.gz"]
+    updater_signature_patterns = [f"macos/{product_name}*.tar.gz.sig"]
+    reject_stale_snaptext_artifacts(bundle_dir, "dmg", dmg_patterns)
+    reject_stale_snaptext_artifacts(
+        bundle_dir,
+        "macos",
+        updater_patterns + updater_signature_patterns + [f"macos/{product_name}.app"],
+    )
     require_any_nonempty(
         bundle_dir,
-        patterns,
+        dmg_patterns,
         "Run cargo-tauri build --bundles dmg on macOS.",
+    )
+    require_any_nonempty(
+        bundle_dir,
+        updater_patterns,
+        "Enable createUpdaterArtifacts and run a signed macOS cargo-tauri build.",
+    )
+    require_any_nonempty(
+        bundle_dir,
+        updater_signature_patterns,
+        "Set TAURI_SIGNING_PRIVATE_KEY so Tauri signs the macOS updater artifact.",
     )
 
 

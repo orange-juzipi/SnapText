@@ -37,9 +37,11 @@ python3 scripts/package_desktop.py
 macOS 本地打包入口：
 
 ```bash
-python3 scripts/package_macos.py --skip-dmg
+python3 scripts/package_macos.py --skip-dmg --no-sign
 python3 scripts/package_macos.py --require-sha256
 ```
+
+`--no-sign` 仅用于本地验证构建，不得作为正式安装包分发。正式 macOS 打包默认要求 `APPLE_SIGNING_IDENTITY`、`APPLE_ID`、`APPLE_PASSWORD`、`APPLE_TEAM_ID` 和 `TAURI_SIGNING_PRIVATE_KEY`，以保证 `.app`、DMG 和 Tauri updater 产物使用稳定签名身份。稳定的 bundle identifier 与签名身份是 macOS Accessibility、Screen Recording 等 TCC 权限在升级后尽量保留的前提。
 
 完成 Tauri 打包后校验产物：
 
@@ -48,7 +50,7 @@ python3 scripts/verify_desktop_bundles.py
 python3 scripts/verify_desktop_bundles.py --platform all
 ```
 
-`--platform all` 只验证汇总安装包产物，要求 `dist/` 下已经收集 macOS、Windows 和 Linux 三个平台的发布安装包。发布前不要在 `dist/` 中混入其他版本或未知命名的 `SnapText` 安装包，否则产物校验会拒绝该目录。
+`--platform all` 只验证汇总安装包产物，要求 `dist/` 下已经收集 macOS、Windows 和 Linux 三个平台的发布安装包。macOS 产物除 DMG 外，还必须包含 Tauri updater 使用的 `.tar.gz` 和 `.tar.gz.sig`。发布前不要在 `dist/` 中混入其他版本或未知命名的 `SnapText` 安装包，否则产物校验会拒绝该目录。
 
 ## 发布 Manifest
 

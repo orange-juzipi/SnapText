@@ -58,3 +58,4 @@ docs/release-signing-record.json
 
 goal
 .playwright-mcp
+.env

@@ -224,6 +224,8 @@ def main() -> int:
         "verify_macos",
         "require_dmg",
         "--dry-run",
+        "APPLE_SIGNING_IDENTITY",
+        "TAURI_SIGNING_PRIVATE_KEY",
     ):
         check(
             expected in package_macos_text,
@@ -238,8 +240,11 @@ def main() -> int:
     for expected in (
         "package_desktop.py",
         "package_macos.py",
-        "cargo-tauri build --bundles msi --no-sign",
-        "cargo-tauri build --bundles dmg --no-sign",
+        "cargo-tauri build --bundles msi",
+        "createUpdaterArtifacts",
+        "--no-sign",
+        "cargo-tauri build --bundles dmg",
+        "cargo-tauri build --bundles app",
         "verify_desktop_bundles.py --platform current",
     ):
         check(

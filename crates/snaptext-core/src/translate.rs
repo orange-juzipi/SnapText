@@ -2,9 +2,14 @@ use async_trait::async_trait;
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::process::Command;
 
 use crate::{
     Error, Result,
+    cloud_auth::{
+        CloudDeviceIdentity, cloud_register_endpoint, cloud_translate_endpoint,
+        is_registered_locally, mark_registered_locally,
+    },
     config::{
         DeepLConfig, GoogleConfig, Lang, LocalHttpConfig, OpenAiCompatibleConfig,
         SnapTextCloudConfig, TranslatorConfig, TranslatorProvider,
@@ -32,6 +37,17 @@ pub struct TranslateResponse {
 #[derive(Debug, Deserialize)]
 struct SnapTextCloudTranslateResponse {
     translated_text: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SnapTextCloudErrorResponse {
+    error: Option<SnapTextCloudErrorBody>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SnapTextCloudErrorBody {
+    code: Option<String>,
+    message: Option<String>,
 }
 
 #[async_trait]
@@ -173,21 +189,33 @@ impl Translator for SnapTextCloudTranslator {
         }
 
         let endpoint = snaptext_cloud_translate_endpoint(&self.config)?;
+        let identity = CloudDeviceIdentity::load_or_create(&self.config)?;
+        ensure_snaptext_cloud_registered(&self.config, &self.client, &identity, false).await?;
         let mut translated_texts = Vec::with_capacity(req.texts.len());
         // The cloud API is intentionally single-text; keep the desktop batch contract by
         // issuing ordered per-item requests and returning the same number of translations.
         for text in &req.texts {
-            let payload = snaptext_cloud_payload(&req, text);
-            let response = self
-                .client
-                .post(endpoint.clone())
-                .header("X-SnapText-Device", &self.config.device_id)
-                .header("X-SnapText-Version", env!("CARGO_PKG_VERSION"))
-                .json(&payload)
-                .send()
-                .await?
-                .error_for_status_json::<SnapTextCloudTranslateResponse>()
-                .await?;
+            let payload = snaptext_cloud_payload(&req, text, identity.device_id());
+            let body =
+                serde_json::to_vec(&payload).map_err(|err| Error::Translate(err.to_string()))?;
+            let response = send_signed_snaptext_cloud_translate(
+                &self.client,
+                &endpoint,
+                &identity,
+                body.clone(),
+            )
+            .await?;
+            let response = match response {
+                Ok(response) => response,
+                Err(error) if error.code.as_deref() == Some("device_not_registered") => {
+                    ensure_snaptext_cloud_registered(&self.config, &self.client, &identity, true)
+                        .await?;
+                    send_signed_snaptext_cloud_translate(&self.client, &endpoint, &identity, body)
+                        .await?
+                        .map_err(snaptext_cloud_error)?
+                }
+                Err(error) => return Err(snaptext_cloud_error(error)),
+            };
             translated_texts.push(response.translated_text);
         }
         validate_translate_response_texts(&translated_texts, req.texts.len())?;
@@ -407,10 +435,134 @@ fn deepl_translate_endpoint(config: &DeepLConfig) -> Result<Url> {
 }
 
 fn snaptext_cloud_translate_endpoint(config: &SnapTextCloudConfig) -> Result<Url> {
-    join_url(&config.endpoint, "v1/translate")
+    cloud_translate_endpoint(config)
 }
 
-fn snaptext_cloud_payload(req: &TranslateRequest, text: &str) -> Value {
+async fn ensure_snaptext_cloud_registered(
+    config: &SnapTextCloudConfig,
+    client: &Client,
+    identity: &CloudDeviceIdentity,
+    force: bool,
+) -> Result<()> {
+    if !force && is_registered_locally(&config.endpoint, identity.device_id()) {
+        return Ok(());
+    }
+
+    let endpoint = cloud_register_endpoint(config)?;
+    let payload = json!({
+        "device_id": identity.device_id(),
+        "public_key": identity.public_key_base64(),
+        "client_version": env!("CARGO_PKG_VERSION"),
+        "platform": std::env::consts::OS,
+        "system_version": system_version(),
+    });
+    let response = client.post(endpoint).json(&payload).send().await?;
+    let status = response.status();
+    let body = response.text().await?;
+    if status == StatusCode::CONFLICT {
+        mark_registered_locally(&config.endpoint, identity.device_id())?;
+        return Ok(());
+    }
+    if !status.is_success() {
+        return Err(http_status_error(status, body));
+    }
+    mark_registered_locally(&config.endpoint, identity.device_id())
+}
+
+async fn send_signed_snaptext_cloud_translate(
+    client: &Client,
+    endpoint: &Url,
+    identity: &CloudDeviceIdentity,
+    body: Vec<u8>,
+) -> Result<std::result::Result<SnapTextCloudTranslateResponse, SnapTextCloudErrorBody>> {
+    let signed = identity.sign_json_request("POST", endpoint, &body)?;
+    let response = client
+        .post(endpoint.clone())
+        .header("content-type", "application/json")
+        .header("X-SnapText-Device", identity.device_id())
+        .header("X-SnapText-Timestamp", signed.timestamp_ms)
+        .header("X-SnapText-Nonce", signed.nonce)
+        .header("X-SnapText-Body-SHA256", signed.body_sha256)
+        .header("X-SnapText-Signature", signed.signature)
+        .header("X-SnapText-Version", env!("CARGO_PKG_VERSION"))
+        .header("X-SnapText-Platform", std::env::consts::OS)
+        .header("X-SnapText-System-Version", system_version())
+        .body(body)
+        .send()
+        .await?;
+    let status = response.status();
+    let text = response.text().await?;
+    if !status.is_success() {
+        return Ok(Err(parse_snaptext_cloud_error(status, &text)));
+    }
+
+    serde_json::from_str(&text)
+        .map(Ok)
+        .map_err(|err| Error::Translate(err.to_string()))
+}
+
+fn parse_snaptext_cloud_error(status: StatusCode, body: &str) -> SnapTextCloudErrorBody {
+    serde_json::from_str::<SnapTextCloudErrorResponse>(body)
+        .ok()
+        .and_then(|value| value.error)
+        .unwrap_or_else(|| SnapTextCloudErrorBody {
+            code: None,
+            message: Some(format!("HTTP {status}: {body}")),
+        })
+}
+
+fn system_version() -> String {
+    let version = platform_system_version().unwrap_or_else(|| std::env::consts::OS.to_owned());
+    format!("{} {}", std::env::consts::OS, version.trim())
+        .trim()
+        .to_owned()
+}
+
+fn platform_system_version() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        return command_output("sw_vers", &["-productVersion"]);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return command_output("cmd", &["/C", "ver"]);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        return linux_pretty_version().or_else(|| command_output("uname", &["-sr"]));
+    }
+    #[allow(unreachable_code)]
+    command_output("uname", &["-sr"])
+}
+
+fn command_output(command: &str, args: &[&str]) -> Option<String> {
+    // System version is non-sensitive operational metadata; failures fall back to OS name.
+    let output = Command::new(command).args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    (!value.is_empty()).then_some(value)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_pretty_version() -> Option<String> {
+    let content = std::fs::read_to_string("/etc/os-release").ok()?;
+    content.lines().find_map(|line| {
+        let value = line.strip_prefix("PRETTY_NAME=")?;
+        Some(value.trim_matches('"').to_owned())
+    })
+}
+
+fn snaptext_cloud_error(error: SnapTextCloudErrorBody) -> Error {
+    Error::Translate(error.message.unwrap_or_else(|| {
+        error
+            .code
+            .unwrap_or_else(|| "SnapText Cloud request failed".to_owned())
+    }))
+}
+
+fn snaptext_cloud_payload(req: &TranslateRequest, text: &str, device_id: &str) -> Value {
     let source_lang = snaptext_cloud_source_lang(req, text);
     json!({
         "text": text,
@@ -419,6 +571,7 @@ fn snaptext_cloud_payload(req: &TranslateRequest, text: &str) -> Value {
         "scene": "text",
         "mode": "balanced",
         "client_version": env!("CARGO_PKG_VERSION"),
+        "device_id": device_id,
     })
 }
 
@@ -603,25 +756,31 @@ mod tests {
 
     impl MockServer {
         fn spawn(response_body: &'static str) -> Self {
+            Self::spawn_sequence(vec![response_body])
+        }
+
+        fn spawn_sequence(response_bodies: Vec<&'static str>) -> Self {
             let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
             let url = Url::parse(&format!("http://{}", listener.local_addr().expect("addr")))
                 .expect("mock server URL");
             let (requests_tx, requests_rx) = mpsc::channel();
 
             let handle = thread::spawn(move || {
-                let (mut stream, _) = listener.accept().expect("accept request");
-                let request = read_http_request(&mut stream).expect("read request");
-                requests_tx.send(request).expect("record request");
+                for response_body in response_bodies {
+                    let (mut stream, _) = listener.accept().expect("accept request");
+                    let request = read_http_request(&mut stream).expect("read request");
+                    requests_tx.send(request).expect("record request");
 
-                // Keep the response intentionally small and deterministic so provider tests
-                // exercise reqwest's JSON/status handling without depending on the network.
-                write!(
-                    stream,
-                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-                    response_body.len(),
-                    response_body
-                )
-                .expect("write mock response");
+                    // Keep the response intentionally small and deterministic so provider tests
+                    // exercise reqwest's JSON/status handling without depending on the network.
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                        response_body.len(),
+                        response_body
+                    )
+                    .expect("write mock response");
+                }
             });
 
             Self {
@@ -744,7 +903,7 @@ mod tests {
             target: Lang("en".to_owned()),
         };
 
-        let payload = snaptext_cloud_payload(&req, "鸡");
+        let payload = snaptext_cloud_payload(&req, "鸡", "test-device");
 
         assert_eq!(payload["source_lang"], "zh_cn");
         assert_eq!(payload["target_lang"], "en");
@@ -758,15 +917,20 @@ mod tests {
             target: Lang("zh_cn".to_owned()),
         };
 
-        let payload = snaptext_cloud_payload(&req, "鸡");
+        let payload = snaptext_cloud_payload(&req, "鸡", "test-device");
 
         assert_eq!(payload["source_lang"], "auto");
         assert_eq!(payload["target_lang"], "zh_cn");
     }
 
     #[tokio::test]
-    async fn snaptext_cloud_response_does_not_require_cached_field() {
-        let server = MockServer::spawn(r#"{"translated_text":"Bonjour"}"#);
+    async fn snaptext_cloud_registers_device_and_sends_signed_translation() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        crate::cloud_auth::set_test_identity_path(tempdir.path().join("cloud-device.yaml"));
+        let server = MockServer::spawn_sequence(vec![
+            r#"{"device_id":"test-device","registered":true}"#,
+            r#"{"translated_text":"Bonjour"}"#,
+        ]);
         let config = SnapTextCloudConfig {
             endpoint: server.url.clone(),
             device_id: "test-device".to_owned(),
@@ -778,12 +942,63 @@ mod tests {
             .translate(sample_request())
             .await
             .expect("snaptext cloud translation");
-        let request = server.take_request();
+        let register_request = server
+            .requests
+            .recv_timeout(Duration::from_secs(5))
+            .expect("register request");
+        let translate_request = server.take_request();
+        let register_body: Value =
+            serde_json::from_str(&register_request.body).expect("register JSON");
+        let translate_body: Value =
+            serde_json::from_str(&translate_request.body).expect("translate JSON");
 
         assert_eq!(response.translated_texts, ["Bonjour"]);
         assert_eq!(response.provider, TranslatorProvider::SnapTextCloud);
-        assert_eq!(request.method, "POST");
-        assert_eq!(request.path, "/v1/translate");
+        assert_eq!(register_request.method, "POST");
+        assert_eq!(register_request.path, "/v1/auth/devices");
+        assert_eq!(register_body["device_id"], "test-device");
+        assert!(
+            register_body["public_key"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty())
+        );
+        assert!(
+            register_body["system_version"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty())
+        );
+        assert_eq!(translate_request.method, "POST");
+        assert_eq!(translate_request.path, "/v1/translate");
+        assert_eq!(translate_body["device_id"], "test-device");
+        assert_eq!(
+            translate_request
+                .headers
+                .get("x-snaptext-device")
+                .map(String::as_str),
+            Some("test-device")
+        );
+        assert!(
+            translate_request
+                .headers
+                .contains_key("x-snaptext-timestamp")
+        );
+        assert!(translate_request.headers.contains_key("x-snaptext-nonce"));
+        assert!(
+            translate_request
+                .headers
+                .contains_key("x-snaptext-body-sha256")
+        );
+        assert!(
+            translate_request
+                .headers
+                .contains_key("x-snaptext-signature")
+        );
+        assert!(
+            translate_request
+                .headers
+                .get("x-snaptext-system-version")
+                .is_some_and(|value| !value.is_empty())
+        );
     }
 
     #[test]

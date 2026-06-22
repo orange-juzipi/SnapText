@@ -5,18 +5,20 @@ The script keeps the release packaging steps repeatable:
 
 1. Generate the static React/Vite frontend consumed by Tauri.
 2. Verify the Tauri release binary can be built without bundling.
-3. Build an unsigned `.app` bundle.
-4. Optionally build an unsigned `.dmg` bundle.
+3. Build a signed `.app` bundle by default.
+4. Optionally build a signed and notarized `.dmg` bundle.
 
 DMG creation uses macOS `hdiutil`, which can fail inside sandboxed automation
 even when the project configuration is valid. Use `--skip-dmg` for static CI or
 restricted local environments, and run the full command on a real macOS host.
+Use `--no-sign` only for local verification builds that must not be shipped.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -29,6 +31,14 @@ ROOT = Path(__file__).resolve().parents[1]
 TAURI_DIR = ROOT / "crates" / "snaptext-tauri"
 TAURI_CONF = TAURI_DIR / "tauri.conf.json"
 LOCAL_CARGO_TAURI = ROOT / ".tools" / "bin" / "cargo-tauri"
+MACOS_SIGNING_ENV = (
+    "APPLE_SIGNING_IDENTITY",
+    "APPLE_ID",
+    "APPLE_PASSWORD",
+    "APPLE_TEAM_ID",
+    "TAURI_SIGNING_PRIVATE_KEY",
+)
+UNSIGNED_LOCAL_CONFIG = '{"bundle":{"createUpdaterArtifacts":false}}'
 
 
 def run(cmd: list[str], cwd: Path = ROOT) -> None:
@@ -82,24 +92,51 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Require real OCR model checksums instead of using the macOS Vision fallback gate.",
     )
+    parser.add_argument(
+        "--no-sign",
+        action="store_true",
+        help="Pass --no-sign to cargo-tauri for unsigned local verification builds.",
+    )
     return parser.parse_args(argv)
 
 
-def packaging_commands(tauri: str, skip_dmg: bool, require_sha256: bool) -> list[list[str]]:
+def require_macos_signing_environment() -> None:
+    missing = [name for name in MACOS_SIGNING_ENV if not os.environ.get(name)]
+    if missing:
+        raise SystemExit(
+            "Signed macOS packaging requires these environment variables: "
+            + ", ".join(missing)
+            + ". Use --no-sign only for local verification builds that will not be shipped."
+        )
+
+
+def packaging_commands(
+    tauri: str,
+    skip_dmg: bool,
+    require_sha256: bool,
+    no_sign: bool,
+) -> list[list[str]]:
     # Local macOS bundle checks can use Vision fallback; release checks should
     # pass --require-sha256 to prove the bundled Paddle ONNX assets are present.
     model_check = ["python3", "scripts/verify_ocr_models.py", "models", "--allow-macos-vision-fallback"]
     if require_sha256:
         model_check = ["python3", "scripts/verify_ocr_models.py", "models", "--require-sha256"]
 
+    app_build = [tauri, "build", "--bundles", "app"]
+    dmg_build = [tauri, "build", "--bundles", "dmg"]
+    if no_sign:
+        # Unsigned local builds should not require the updater private key.
+        app_build.extend(["--config", UNSIGNED_LOCAL_CONFIG, "--no-sign"])
+        dmg_build.extend(["--config", UNSIGNED_LOCAL_CONFIG, "--no-sign"])
+
     commands = [
         model_check,
         ["python3", "scripts/build_frontend.py"],
         [tauri, "build", "--no-bundle"],
-        [tauri, "build", "--bundles", "app", "--no-sign"],
+        app_build,
     ]
     if not skip_dmg:
-        commands.append([tauri, "build", "--bundles", "dmg", "--no-sign"])
+        commands.append(dmg_build)
     return commands
 
 
@@ -110,10 +147,14 @@ def main(argv: list[str]) -> int:
     product_name = config.get("productName", "SnapText")
     version = config.get("version", "0.1.0")
 
+    if not args.no_sign and not args.dry_run:
+        require_macos_signing_environment()
+
     commands = packaging_commands(
         tauri,
         skip_dmg=args.skip_dmg,
         require_sha256=args.require_sha256,
+        no_sign=args.no_sign,
     )
     if args.dry_run:
         for command in commands:

@@ -52,7 +52,8 @@ def main() -> int:
 
     desktop_bundle = run_script("package_desktop.py", "--bundles", "msi", "--no-sign")
     assert_success(desktop_bundle)
-    assert_contains(desktop_bundle.stdout, "cargo-tauri build --bundles msi --no-sign")
+    assert_contains(desktop_bundle.stdout, "cargo-tauri build --bundles msi")
+    assert_contains(desktop_bundle.stdout, "--config {\"bundle\":{\"createUpdaterArtifacts\":false}} --no-sign")
     assert_contains(desktop_bundle.stdout, "verify_desktop_bundles.py --platform current")
 
     macos_skip = run_script("package_macos.py", "--skip-dmg")
@@ -63,14 +64,21 @@ def main() -> int:
     )
     assert_contains(macos_skip.stdout, "python3 scripts/build_frontend.py")
     assert_contains(macos_skip.stdout, "cargo-tauri build --no-bundle")
-    assert_contains(macos_skip.stdout, "cargo-tauri build --bundles app --no-sign")
-    assert_not_contains(macos_skip.stdout, "cargo-tauri build --bundles dmg --no-sign")
+    assert_contains(macos_skip.stdout, "cargo-tauri build --bundles app")
+    assert_not_contains(macos_skip.stdout, "cargo-tauri build --bundles app --no-sign")
+    assert_not_contains(macos_skip.stdout, "cargo-tauri build --bundles dmg")
     assert_contains(macos_skip.stdout, "verify_macos_artifacts SnapText 0.1.0 require_dmg=False")
 
     macos_full = run_script("package_macos.py")
     assert_success(macos_full)
-    assert_contains(macos_full.stdout, "cargo-tauri build --bundles dmg --no-sign")
+    assert_contains(macos_full.stdout, "cargo-tauri build --bundles dmg")
+    assert_not_contains(macos_full.stdout, "cargo-tauri build --bundles dmg --no-sign")
     assert_contains(macos_full.stdout, "verify_macos_artifacts SnapText 0.1.0 require_dmg=True")
+
+    macos_unsigned = run_script("package_macos.py", "--skip-dmg", "--no-sign")
+    assert_success(macos_unsigned)
+    assert_contains(macos_unsigned.stdout, "cargo-tauri build --bundles app")
+    assert_contains(macos_unsigned.stdout, "--config {\"bundle\":{\"createUpdaterArtifacts\":false}} --no-sign")
 
     macos_release_models = run_script("package_macos.py", "--skip-dmg", "--require-sha256")
     assert_success(macos_release_models)

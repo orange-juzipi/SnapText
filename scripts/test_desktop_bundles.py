@@ -45,6 +45,8 @@ def create_all_platform_artifacts(release_dir: Path, bundle_dir: Path) -> None:
     app_root = bundle_dir / "macos" / "SnapText.app" / "Contents"
     write_file(app_root / "MacOS" / "snaptext-tauri", b"app binary")
     write_file(app_root / "Info.plist", b"plist")
+    write_file(bundle_dir / "macos" / "SnapText_0.1.0_aarch64.app.tar.gz", b"updater")
+    write_file(bundle_dir / "macos" / "SnapText_0.1.0_aarch64.app.tar.gz.sig", b"signature")
     write_file(bundle_dir / "dmg" / "SnapText_0.1.0_aarch64.dmg", b"dmg")
 
     write_file(bundle_dir / "msi" / "SnapText_0.1.0_x64.msi", b"msi")
@@ -56,6 +58,8 @@ def create_all_platform_artifacts(release_dir: Path, bundle_dir: Path) -> None:
 
 def create_installer_artifacts(bundle_dir: Path) -> None:
     write_file(bundle_dir / "dmg" / "SnapText_0.1.0_aarch64.dmg", b"dmg")
+    write_file(bundle_dir / "macos" / "SnapText_0.1.0_aarch64.app.tar.gz", b"updater")
+    write_file(bundle_dir / "macos" / "SnapText_0.1.0_aarch64.app.tar.gz.sig", b"signature")
     write_file(bundle_dir / "msi" / "SnapText_0.1.0_x64.msi", b"msi")
     write_file(bundle_dir / "nsis" / "SnapText_0.1.0_x64.exe", b"nsis")
     write_file(bundle_dir / "deb" / "SnapText_0.1.0_amd64.deb", b"deb")
