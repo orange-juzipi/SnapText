@@ -164,10 +164,12 @@ textarea {
   border-radius: 0.65rem;
   background: color-mix(in srgb, var(--color-card) 94%, var(--color-secondary));
   padding: 1.1rem;
+  scroll-margin-top: 0.75rem;
 }
 
 .settings-card {
   display: grid;
+  height: 100%;
   min-height: 100%;
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
@@ -193,17 +195,19 @@ textarea {
 .settings-shell {
   display: grid;
   gap: 1rem;
+  height: 100%;
   min-height: 0;
+  overflow: hidden;
   align-items: stretch;
 }
 
 .settings-tab-list {
   display: grid;
   min-width: 0;
-  min-height: 100%;
+  max-height: 100%;
   align-content: start;
   gap: 0.25rem;
-  overflow-x: auto;
+  overflow-y: auto;
   border: 1px solid var(--color-border);
   border-radius: 0.65rem;
   background: color-mix(in srgb, var(--color-secondary) 52%, transparent);
@@ -264,23 +268,214 @@ textarea {
 .settings-tab-panel {
   display: grid;
   gap: 1rem;
+  height: 100%;
   min-height: 0;
+  overflow-y: auto;
+  padding-right: 0.25rem;
+  scroll-behavior: smooth;
   animation: panel-enter var(--motion-base) var(--ease-out-quart) both;
 }
 
 .settings-tab-panel > .settings-block {
-  min-height: 100%;
+  min-height: auto;
+}
+
+.settings-section-heading {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.settings-section-heading h2 {
+  margin: 0;
+  color: var(--color-foreground);
+  font-size: 1.25rem;
+  font-weight: 800;
+  line-height: 1.35;
+  letter-spacing: 0;
 }
 
 .settings-grid {
   display: grid;
   gap: 0.75rem;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.settings-interface-stack {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.settings-choice-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+}
+
+.settings-theme-options {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.settings-system-theme-row {
+  display: inline-grid;
+  min-width: 0;
+  cursor: pointer;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 0.65rem;
+  color: var(--color-foreground);
+}
+
+.settings-system-theme-row button {
+  margin-top: 0.15rem;
+}
+
+.settings-system-theme-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.25rem;
+  font-size: 0.95rem;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
+.settings-system-theme-description {
+  color: var(--color-muted-foreground);
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
+.settings-choice-card {
+  display: grid;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 0.65rem;
+  background: var(--color-card);
+  padding: 0;
+  color: var(--color-foreground);
+  text-align: left;
+  transition:
+    border-color var(--motion-base) var(--ease-out-quart),
+    box-shadow var(--motion-base) var(--ease-out-quart),
+    transform var(--motion-fast) var(--ease-out-quart);
+}
+
+.settings-choice-card:hover {
+  border-color: color-mix(in srgb, var(--color-primary) 42%, var(--color-border));
+  transform: translateY(-1px);
+}
+
+.settings-choice-card:active {
+  transform: translateY(0) scale(0.99);
+}
+
+.settings-choice-card:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--color-ring);
+}
+
+.settings-choice-card.is-selected {
+  border-color: color-mix(in srgb, var(--color-primary) 54%, var(--color-border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 24%, transparent);
+}
+
+.settings-choice-preview {
+  display: grid;
+  min-height: 5.75rem;
+  place-items: center;
+  background: color-mix(in srgb, var(--color-secondary) 48%, var(--color-card));
+  color: var(--color-muted-foreground);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.settings-theme-preview {
+  display: grid;
+  width: min(10rem, calc(100% - 1.5rem));
+  gap: 0.55rem;
+}
+
+.settings-theme-preview span {
+  display: block;
+  height: 0.9rem;
+  border-radius: 999px;
+}
+
+.settings-theme-preview-light span:nth-child(1) {
+  background: #e5e7eb;
+}
+
+.settings-theme-preview-light span:nth-child(2) {
+  width: 72%;
+  background: #bfdbfe;
+}
+
+.settings-theme-preview-light span:nth-child(3) {
+  width: 52%;
+  background: #2457d6;
+}
+
+.settings-theme-preview-dark span:nth-child(1) {
+  background: #3f4654;
+}
+
+.settings-theme-preview-dark span:nth-child(2) {
+  width: 72%;
+  background: #2758bd;
+}
+
+.settings-theme-preview-dark span:nth-child(3) {
+  width: 52%;
+  background: #6f94ff;
+}
+
+.settings-choice-card:has(.settings-theme-preview-dark) .settings-choice-preview {
+  background: #10151f;
+}
+
+.settings-choice-footer {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.65rem;
+  border-top: 1px solid var(--color-border);
+  padding: 0.75rem 0.9rem;
+  font-size: 1rem;
+  font-weight: 750;
+  line-height: 1.25;
+}
+
+.settings-choice-card.is-selected .settings-choice-footer {
+  background: color-mix(in srgb, var(--color-primary) 9%, var(--color-card));
+}
+
+.settings-choice-radio {
+  display: inline-grid;
+  width: 1.25rem;
+  height: 1.25rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 2px solid color-mix(in srgb, var(--color-muted-foreground) 62%, transparent);
+  border-radius: 999px;
+  background: var(--color-card);
+}
+
+.settings-choice-card.is-selected .settings-choice-radio {
+  border-color: var(--color-primary);
+}
+
+.settings-choice-card.is-selected .settings-choice-radio::after {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 999px;
+  background: var(--color-primary);
+  content: "";
 }
 
 .settings-speech-grid {
-  align-items: end;
-  grid-template-columns: minmax(12rem, 0.85fr) repeat(3, minmax(10rem, 1fr));
+  align-items: start;
 }
 
 .settings-toggle-row {
@@ -295,6 +490,94 @@ textarea {
   color: var(--color-foreground);
   font-size: 0.875rem;
   font-weight: 650;
+}
+
+.settings-slider-label-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.settings-slider-value {
+  flex: 0 0 auto;
+  color: var(--color-muted-foreground);
+  font-size: 0.82rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.settings-slider {
+  width: 100%;
+  height: 2.25rem;
+  margin: 0;
+  cursor: pointer;
+  appearance: none;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.settings-slider:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.settings-slider:focus-visible {
+  outline: none;
+}
+
+.settings-slider::-webkit-slider-runnable-track {
+  height: 0.45rem;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-control) 78%, transparent);
+  box-shadow: var(--shadow-xs);
+}
+
+.settings-slider::-webkit-slider-thumb {
+  width: 1.15rem;
+  height: 1.15rem;
+  margin-top: -0.39rem;
+  appearance: none;
+  border: 2px solid var(--color-primary);
+  border-radius: 999px;
+  background: var(--color-card);
+  box-shadow: var(--shadow-xs);
+  transition:
+    box-shadow var(--motion-base) var(--ease-out-quart),
+    transform var(--motion-fast) var(--ease-out-quart);
+}
+
+.settings-slider:hover::-webkit-slider-thumb {
+  transform: scale(1.05);
+}
+
+.settings-slider:active::-webkit-slider-thumb {
+  transform: scale(0.96);
+}
+
+.settings-slider:focus-visible::-webkit-slider-thumb {
+  box-shadow:
+    var(--shadow-xs),
+    0 0 0 4px var(--color-ring);
+}
+
+.settings-slider::-moz-range-track {
+  height: 0.45rem;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-control) 78%, transparent);
+  box-shadow: var(--shadow-xs);
+}
+
+.settings-slider::-moz-range-thumb {
+  width: 1.15rem;
+  height: 1.15rem;
+  border: 2px solid var(--color-primary);
+  border-radius: 999px;
+  background: var(--color-card);
+  box-shadow: var(--shadow-xs);
 }
 
 .settings-save-row {
@@ -680,6 +963,11 @@ textarea {
     grid-template-columns: minmax(11rem, 0.22fr) minmax(0, 1fr);
   }
 
+  .settings-tab-list {
+    position: sticky;
+    top: 0;
+  }
+
   .settings-tab-panel {
     min-width: 0;
   }
@@ -761,15 +1049,6 @@ textarea {
     padding: 0.9rem;
   }
 
-  .settings-speech-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-@media (min-width: 760px) and (max-width: 1179px) {
-  .settings-speech-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
 
 @media (prefers-color-scheme: dark) {

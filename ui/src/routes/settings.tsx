@@ -12,6 +12,7 @@ import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 
 type SettingsTab = "interface" | "hotkeys" | "speech" | "provider";
 type QueuedSave = {
@@ -29,6 +30,8 @@ export function SettingsPage() {
   const savingRef = useRef(false);
   const queuedSaveRef = useRef<QueuedSave | null>(null);
   const editVersionRef = useRef(0);
+  const scrollPanelRef = useRef<HTMLDivElement | null>(null);
+  const sectionRefs = useRef<Partial<Record<SettingsTab, HTMLElement | null>>>({});
   const speechEnabled = draft?.speech.enabled ?? false;
   const labels = labelsForLanguage(
     draft?.ui.language ?? configQuery.data?.ui.language,
@@ -51,11 +54,12 @@ export function SettingsPage() {
     () => visibleProvider(draft?.translator.provider),
     [draft],
   );
+  const sectionOrder: SettingsTab[] = ["interface", "hotkeys", "provider", "speech"];
 
   if (!draft) {
     return (
       <Card>
-        <CardContent>Loading settings...</CardContent>
+        <CardContent>{labels.loadingSettings}</CardContent>
       </Card>
     );
   }
@@ -75,6 +79,7 @@ export function SettingsPage() {
         setDraft(ensureSpeechDefaults(saved));
       }
     } catch (error) {
+      applyDocumentTheme(configQuery.data?.ui.theme);
       workspace.showError(
         error instanceof Error ? error.message : String(error),
       );
@@ -88,11 +93,36 @@ export function SettingsPage() {
     }
   }
 
+  function scrollToSettingsSection(tab: SettingsTab) {
+    setActiveTab(tab);
+    sectionRefs.current[tab]?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function handleSettingsScroll() {
+    const container = scrollPanelRef.current;
+    if (!container) return;
+    const containerTop = container.getBoundingClientRect().top;
+    let currentSection = sectionOrder[0];
+    let closestDistance = Number.POSITIVE_INFINITY;
+
+    for (const section of sectionOrder) {
+      const node = sectionRefs.current[section];
+      if (!node) continue;
+      const distance = Math.abs(node.getBoundingClientRect().top - containerTop);
+      if (distance < closestDistance) {
+        currentSection = section;
+        closestDistance = distance;
+      }
+    }
+
+    setActiveTab((current) => (current === currentSection ? current : currentSection));
+  }
+
   return (
     <Card className="settings-card">
       <CardHeader className="settings-header">
         <div className="settings-title-row">
-          <Button asChild variant="ghost" size="icon" aria-label="返回主页">
+          <Button asChild variant="ghost" size="icon" aria-label={labels.backHome}>
             <Link to="/">
               <ArrowLeft size={17} />
             </Link>
@@ -105,78 +135,88 @@ export function SettingsPage() {
           <SettingsTabButton
             active={activeTab === "interface"}
             icon={<MonitorCog size={16} />}
-            label="界面"
-            onClick={() => setActiveTab("interface")}
+            label={labels.settingsInterface}
+            onClick={() => scrollToSettingsSection("interface")}
           />
           <SettingsTabButton
             active={activeTab === "hotkeys"}
             icon={<Keyboard size={16} />}
-            label="快捷键"
-            onClick={() => setActiveTab("hotkeys")}
+            label={labels.settingsHotkeys}
+            onClick={() => scrollToSettingsSection("hotkeys")}
           />
           <SettingsTabButton
             active={activeTab === "provider"}
             icon={<ServerCog size={16} />}
             label={labels.provider}
-            onClick={() => setActiveTab("provider")}
+            onClick={() => scrollToSettingsSection("provider")}
           />
           <SettingsTabButton
             active={activeTab === "speech"}
             icon={<Volume2 size={16} />}
             label={labels.speech}
-            onClick={() => setActiveTab("speech")}
+            onClick={() => scrollToSettingsSection("speech")}
           />
         </nav>
 
-        <div className="settings-tab-panel">
-        {activeTab === "interface" ? (
-          <section className="settings-block">
-          <div className="settings-grid">
-            <Field>
-              <FieldLabel>{labels.interfaceLanguage}</FieldLabel>
-              <Select
-                value={draft.ui.language}
-                onChange={(event) =>
-                  updateDraft(
-                    setDraft,
-                    userEditedRef,
-                    editVersionRef,
-                    (next) => (next.ui.language = event.target.value),
-                  )
-                }
-              >
-                <option value="zh_cn">中文</option>
-                <option value="en">English</option>
-              </Select>
-            </Field>
+        <div className="settings-tab-panel" ref={scrollPanelRef} onScroll={handleSettingsScroll}>
+          <section
+            className="settings-block"
+            ref={(node) => {
+              sectionRefs.current.interface = node;
+            }}
+          >
+          <div className="settings-section-heading">
+            <h2>{labels.settingsInterface}</h2>
+          </div>
+          <div className="settings-interface-stack">
             <Field>
               <FieldLabel>{labels.theme}</FieldLabel>
-              <Select
+              <ThemeChoiceGroup
                 value={draft.ui.theme}
-                onChange={(event) =>
+                labels={labels}
+                onChange={(value) => {
+                  applyDocumentTheme(value);
                   updateDraft(
                     setDraft,
                     userEditedRef,
                     editVersionRef,
-                    (next) => (next.ui.theme = event.target.value),
+                    (next) => (next.ui.theme = value),
+                  );
+                }}
+              />
+            </Field>
+            <Field>
+              <FieldLabel>{labels.interfaceLanguage}</FieldLabel>
+              <LanguageChoiceGroup
+                value={draft.ui.language}
+                labels={labels}
+                onChange={(value) =>
+                  updateDraft(
+                    setDraft,
+                    userEditedRef,
+                    editVersionRef,
+                    (next) => (next.ui.language = value),
                   )
                 }
-              >
-                <option value="system">{labels.themeSystem}</option>
-                <option value="light">{labels.themeLight}</option>
-                <option value="dark">{labels.themeDark}</option>
-              </Select>
+              />
             </Field>
           </div>
           </section>
-        ) : null}
 
-        {activeTab === "hotkeys" ? (
-          <section className="settings-block">
+          <section
+            className="settings-block"
+            ref={(node) => {
+              sectionRefs.current.hotkeys = node;
+            }}
+          >
+          <div className="settings-section-heading">
+            <h2>{labels.settingsHotkeys}</h2>
+          </div>
           <div className="settings-grid">
             <Field>
               <FieldLabel>{labels.screenshotHotkey}</FieldLabel>
               <HotkeyInput
+                labels={labels}
                 value={draft.hotkeys.screenshot}
                 onChange={(value) =>
                   updateDraft(
@@ -191,6 +231,7 @@ export function SettingsPage() {
             <Field>
               <FieldLabel>{labels.selectionHotkey}</FieldLabel>
               <HotkeyInput
+                labels={labels}
                 value={draft.hotkeys.selection}
                 onChange={(value) =>
                   updateDraft(
@@ -204,10 +245,16 @@ export function SettingsPage() {
             </Field>
           </div>
           </section>
-        ) : null}
 
-        {activeTab === "provider" ? (
-          <section className="settings-block">
+          <section
+            className="settings-block"
+            ref={(node) => {
+              sectionRefs.current.provider = node;
+            }}
+          >
+          <div className="settings-section-heading">
+            <h2>{labels.provider}</h2>
+          </div>
           <Field>
             <FieldLabel>{labels.provider}</FieldLabel>
             <Select
@@ -221,7 +268,7 @@ export function SettingsPage() {
                 )
               }
             >
-              <option value="snaptext_cloud">SnapText 官方源</option>
+              <option value="snaptext_cloud">{labels.snaptextCloudProvider}</option>
               <option value="deepl">DeepL</option>
               <option value="google">Google</option>
             </Select>
@@ -234,10 +281,16 @@ export function SettingsPage() {
             provider={providerConfig}
           />
           </section>
-        ) : null}
 
-        {activeTab === "speech" ? (
-          <section className="settings-block">
+          <section
+            className="settings-block"
+            ref={(node) => {
+              sectionRefs.current.speech = node;
+            }}
+          >
+          <div className="settings-section-heading">
+            <h2>{labels.speech}</h2>
+          </div>
           <div className="settings-grid settings-speech-grid">
             <label className="settings-toggle-row">
               <Switch
@@ -271,47 +324,42 @@ export function SettingsPage() {
                 <option value="british">{labels.englishAccentBritish}</option>
               </Select>
             </Field>
-            <Field>
-              <FieldLabel>{labels.speechRate}</FieldLabel>
-              <Input
-                disabled={!speechEnabled}
-                type="number"
-                min="0.1"
-                max="3"
-                step="0.1"
-                value={draft.speech.rate}
-                onChange={(event) =>
-                  updateDraft(
-                    setDraft,
-                    userEditedRef,
-                    editVersionRef,
-                    (next) => (next.speech.rate = Number(event.target.value)),
-                  )
-                }
-              />
-            </Field>
-            <Field>
-              <FieldLabel>{labels.speechVolume}</FieldLabel>
-              <Input
-                disabled={!speechEnabled}
-                type="number"
-                min="0"
-                max="1"
-                step="0.05"
-                value={draft.speech.volume}
-                onChange={(event) =>
-                  updateDraft(
-                    setDraft,
-                    userEditedRef,
-                    editVersionRef,
-                    (next) => (next.speech.volume = Number(event.target.value)),
-                  )
-                }
-              />
-            </Field>
+            <SpeechSliderField
+              disabled={!speechEnabled}
+              label={labels.speechRate}
+              min={0.1}
+              max={3}
+              step={0.1}
+              value={draft.speech.rate}
+              formatValue={(value) => `${value.toFixed(1)}x`}
+              onChange={(value) =>
+                updateDraft(
+                  setDraft,
+                  userEditedRef,
+                  editVersionRef,
+                  (next) => (next.speech.rate = value),
+                )
+              }
+            />
+            <SpeechSliderField
+              disabled={!speechEnabled}
+              label={labels.speechVolume}
+              min={0}
+              max={1}
+              step={0.05}
+              value={draft.speech.volume}
+              formatValue={(value) => `${Math.round(value * 100)}%`}
+              onChange={(value) =>
+                updateDraft(
+                  setDraft,
+                  userEditedRef,
+                  editVersionRef,
+                  (next) => (next.speech.volume = value),
+                )
+              }
+            />
           </div>
           </section>
-        ) : null}
         </div>
       </CardContent>
     </Card>
@@ -380,6 +428,143 @@ function ProviderFields({
     );
   }
   return null;
+}
+
+function SpeechSliderField({
+  disabled,
+  formatValue,
+  label,
+  max,
+  min,
+  onChange,
+  step,
+  value,
+}: {
+  disabled: boolean;
+  formatValue: (value: number) => string;
+  label: string;
+  max: number;
+  min: number;
+  onChange: (value: number) => void;
+  step: number;
+  value: number;
+}) {
+  return (
+    <Field>
+      <div className="settings-slider-label-row">
+        <FieldLabel>{label}</FieldLabel>
+        <span className="settings-slider-value">{formatValue(value)}</span>
+      </div>
+      <input
+        className="settings-slider"
+        disabled={disabled}
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+    </Field>
+  );
+}
+
+function LanguageChoiceGroup({
+  value,
+  labels,
+  onChange,
+}: {
+  value: string;
+  labels: ReturnType<typeof labelsForLanguage>;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <Select value={value} onChange={(event) => onChange(event.target.value)}>
+      <option value="zh_cn">{labels.languageChinese}</option>
+      <option value="en">{labels.languageEnglish}</option>
+    </Select>
+  );
+}
+
+function ThemeChoiceGroup({
+  labels,
+  value,
+  onChange,
+}: {
+  labels: ReturnType<typeof labelsForLanguage>;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="settings-theme-options" role="radiogroup" aria-label={labels.theme}>
+      <label className="settings-system-theme-row">
+        <Checkbox
+          checked={value === "system"}
+          onCheckedChange={(checked) => onChange(checked ? "system" : "light")}
+        />
+        <span className="settings-system-theme-copy">
+          <span>{labels.themeSystem}</span>
+          <span className="settings-system-theme-description">
+            {labels.themeSystemDescription}
+          </span>
+        </span>
+      </label>
+      <div className="settings-choice-grid">
+        <SettingsChoiceCard
+          checked={value === "light"}
+          label={labels.themeLight}
+          preview={<ThemePreview tone="light" />}
+          onClick={() => onChange("light")}
+        />
+        <SettingsChoiceCard
+          checked={value === "dark"}
+          label={labels.themeDark}
+          preview={<ThemePreview tone="dark" />}
+          onClick={() => onChange("dark")}
+        />
+      </div>
+    </div>
+  );
+}
+
+function ThemePreview({ tone }: { tone: "light" | "dark" }) {
+  return (
+    <span className={`settings-theme-preview settings-theme-preview-${tone}`}>
+      <span />
+      <span />
+      <span />
+    </span>
+  );
+}
+
+function SettingsChoiceCard({
+  checked,
+  label,
+  onClick,
+  preview,
+}: {
+  checked: boolean;
+  label: string;
+  onClick: () => void;
+  preview: React.ReactNode;
+}) {
+  return (
+    <button
+      className={checked ? "settings-choice-card is-selected" : "settings-choice-card"}
+      type="button"
+      role="radio"
+      aria-checked={checked}
+      onClick={onClick}
+    >
+      <span className="settings-choice-preview" aria-hidden="true">
+        {preview}
+      </span>
+      <span className="settings-choice-footer">
+        <span className="settings-choice-radio" aria-hidden="true" />
+        <span>{label}</span>
+      </span>
+    </button>
+  );
 }
 
 type ProviderInputPath =
@@ -477,9 +662,11 @@ function SettingsTabButton({
 }
 
 function HotkeyInput({
+  labels,
   value,
   onChange,
 }: {
+  labels: ReturnType<typeof labelsForLanguage>;
   value: string;
   onChange: (value: string) => void;
 }) {
@@ -496,7 +683,7 @@ function HotkeyInput({
         const shortcut = shortcutFromKeyboardEvent(event, shortcutPlatform);
         if (shortcut) onChange(shortcut);
       }}
-      placeholder="按下快捷键"
+      placeholder={labels.hotkeyInputPlaceholder}
     />
   );
 }
@@ -742,6 +929,10 @@ function visibleProvider(provider?: string) {
   return provider === "deepl" || provider === "google" || provider === "snaptext_cloud"
     ? provider
     : "snaptext_cloud";
+}
+
+function applyDocumentTheme(theme?: string) {
+  document.documentElement.dataset.theme = theme?.trim() || "system";
 }
 
 function updateDraft(

@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type * as React from "react";
-import { Copy, Languages, LoaderCircle, Pin, ScanText, Trash2, Volume2 } from "lucide-react";
+import { Copy, LoaderCircle, Pin, ScanText, Trash2, Volume2 } from "lucide-react";
 import { startScreenshotOverlay, unpinResultWindow } from "@/lib/api";
 import { translatorProviderDetailLabel } from "@/lib/format";
 import { labelsForLanguage } from "@/lib/labels";
@@ -22,6 +22,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 type SpeechAccent = "american" | "british";
+const AUTO_TRANSLATE_DEBOUNCE_MS = 800;
 
 export function WorkspacePage() {
   const configQuery = useConfigQuery();
@@ -31,6 +32,9 @@ export function WorkspacePage() {
   const translateTextMutation = useTranslateTextMutation();
   const pinMutation = usePinResultMutation();
   const [activeSpeechKey, setActiveSpeechKey] = useState<string | null>(null);
+  const autoTranslatingRef = useRef(false);
+  const autoTranslatePendingRef = useRef<{ sourceText: string; targetLang: string } | null>(null);
+  const lastAutoTranslatedKeyRef = useRef("");
   const speechReady =
     Boolean(configQuery.data) && isSpeechSupported(configQuery.data?.speech);
   const hasWorkspaceText = Boolean(
@@ -46,25 +50,96 @@ export function WorkspacePage() {
     setActiveSpeechKey(null);
   }, [activeSpeechKey, speechReady]);
 
-  async function handleTranslateText() {
-    if (!workspace.textInput.trim()) {
-      workspace.showError(labels.textInputRequired);
+  useEffect(() => {
+    if (workspace.ocrLoading) return;
+    const sourceText = workspace.textInput.trim();
+    if (!sourceText) {
+      autoTranslatePendingRef.current = null;
+      lastAutoTranslatedKeyRef.current = "";
+      workspace.clearTranslation();
       return;
     }
-    const targetLang = resolveTargetLang(workspace.textInput, workspace.targetLang);
+    if (
+      sourceText === workspace.snapshot.sourceText.trim() &&
+      (workspace.snapshot.sourceKind === "screenshot" || workspace.snapshot.sourceKind === "selection")
+    ) {
+      return;
+    }
+    const targetLang = resolveTargetLang(sourceText, workspace.targetLang);
+    const requestKey = autoTranslateKey(sourceText, targetLang);
+    if (requestKey === lastAutoTranslatedKeyRef.current) return;
+
+    const timeout = window.setTimeout(() => {
+      void runAutoTranslate(sourceText, targetLang);
+    }, AUTO_TRANSLATE_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(timeout);
+  }, [workspace.ocrLoading, workspace.targetLang, workspace.textInput]);
+
+  useEffect(() => {
+    if (workspace.translating) return;
+    const pending = autoTranslatePendingRef.current;
+    if (!pending) return;
+    autoTranslatePendingRef.current = null;
+    void runAutoTranslate(pending.sourceText, pending.targetLang);
+  }, [workspace.translating]);
+
+  useEffect(() => {
+    const sourceText = workspace.snapshot.sourceText.trim();
+    if (!workspace.snapshot.result.trim() || sourceText !== workspace.textInput.trim()) return;
+    const targetLang = workspace.snapshot.targetLang || resolveTargetLang(sourceText, workspace.targetLang);
+    lastAutoTranslatedKeyRef.current = autoTranslateKey(sourceText, targetLang);
+  }, [
+    workspace.snapshot.result,
+    workspace.snapshot.sourceText,
+    workspace.snapshot.targetLang,
+    workspace.targetLang,
+    workspace.textInput,
+  ]);
+
+  async function runTranslateText(sourceText: string, targetLang: string, mode: "manual" | "auto") {
     try {
       workspace.setTranslating(true);
       const record = await translateTextMutation.mutateAsync({
-        sourceText: workspace.textInput,
+        sourceText,
         targetLang,
       });
       setTextResult(record);
       workspace.setStatus(labels.textTranslated);
     } catch (error) {
-      workspace.showError(errorMessage(error));
+      if (mode === "manual") {
+        workspace.showError(errorMessage(error));
+      } else {
+        workspace.setStatus(errorMessage(error));
+      }
     } finally {
       workspace.setTranslating(false);
     }
+  }
+
+  async function runAutoTranslate(sourceText: string, targetLang: string) {
+    const requestKey = autoTranslateKey(sourceText, targetLang);
+    if (requestKey === lastAutoTranslatedKeyRef.current) return;
+    if (autoTranslatingRef.current || workspace.translating || translateTextMutation.isPending) {
+      autoTranslatePendingRef.current = { sourceText, targetLang };
+      return;
+    }
+
+    autoTranslatingRef.current = true;
+    autoTranslatePendingRef.current = null;
+    await runTranslateText(sourceText, targetLang, "auto");
+    autoTranslatingRef.current = false;
+  }
+
+  async function handleTranslateText() {
+    const sourceText = workspace.textInput.trim();
+    if (!sourceText) {
+      workspace.showError(labels.textInputRequired);
+      return;
+    }
+    const targetLang = resolveTargetLang(sourceText, workspace.targetLang);
+    autoTranslatePendingRef.current = null;
+    await runTranslateText(sourceText, targetLang, "manual");
   }
 
   async function handleStartOverlay() {
@@ -202,16 +277,7 @@ export function WorkspacePage() {
     <section className="workspace-grid">
       <section className="workspace-panel">
         <div className="workspace-panel-toolbar">
-          <div className="workspace-badge-row">
-            <IconTooltipButton
-              disabled={pinMutation.isPending}
-              label={workspace.pinned ? labels.unpin : labels.pin}
-              onClick={handleTogglePin}
-              variant={workspace.pinned ? "primary" : "secondary"}
-            >
-              <Pin size={16} />
-            </IconTooltipButton>
-          </div>
+          <div className="workspace-badge-row" />
           <div className="workspace-actions">
             {renderSpeechButtons(
               workspace.textInput,
@@ -228,9 +294,6 @@ export function WorkspacePage() {
             </IconTooltipButton>
             <IconTooltipButton label={labels.startOverlay} onClick={handleStartOverlay}>
               <ScanText size={16} />
-            </IconTooltipButton>
-            <IconTooltipButton label={labels.translateText} onClick={handleTranslateText} variant="primary">
-              <Languages size={16} />
             </IconTooltipButton>
           </div>
         </div>
@@ -304,6 +367,14 @@ export function WorkspacePage() {
             <IconTooltipButton label={labels.copy} onClick={handleCopyResult} variant="primary">
               <Copy size={16} />
             </IconTooltipButton>
+            <IconTooltipButton
+              disabled={pinMutation.isPending}
+              label={workspace.pinned ? labels.unpin : labels.pin}
+              onClick={handleTogglePin}
+              variant={workspace.pinned ? "primary" : "secondary"}
+            >
+              <Pin size={16} />
+            </IconTooltipButton>
           </div>
         </div>
         <div className="workspace-textarea-shell" aria-busy={workspace.translating}>
@@ -357,7 +428,7 @@ function SpeechButton({
       onClick={onClick}
       label={tooltipLabel ?? ariaLabel}
       variant={active ? "primary" : "secondary"}
-      size={accentLabel ? "sm" : "icon"}
+      size={accentLabel ? "md" : "icon"}
       disabled={disabled}
     >
       <Volume2 size={16} />
@@ -405,4 +476,8 @@ function IconTooltipButton({
 
 function isScreenshotSelectionCancelled(error: unknown) {
   return errorMessage(error).includes("screenshot selection produced no image; status=0");
+}
+
+function autoTranslateKey(sourceText: string, targetLang: string) {
+  return `${targetLang}\n${sourceText.trim()}`;
 }

@@ -41,6 +41,7 @@ type WorkspaceState = {
     translated_text: string;
     target_lang: string;
   }) => void;
+  clearTranslation: () => void;
   clearTextPanels: () => void;
   clearResult: () => void;
 };
@@ -120,6 +121,11 @@ export function WorkspaceStateProvider({ children }: { children: ReactNode }) {
     [setResultSnapshot],
   );
 
+  const clearTranslation = useCallback(() => {
+    setSnapshot(emptySnapshot);
+    setLastRequest(null);
+  }, []);
+
   const clearTextPanels = useCallback(() => {
     // 首页清空只处理两侧文本内容，不改变目标语言、历史记录或固钉窗口状态。
     setSnapshot(emptySnapshot);
@@ -158,12 +164,14 @@ export function WorkspaceStateProvider({ children }: { children: ReactNode }) {
       setResultSnapshot,
       setResultFromHistory,
       setResultFromTranslation,
+      clearTranslation,
       clearTextPanels,
       clearResult,
     }),
     [
       clearTextPanels,
       clearResult,
+      clearTranslation,
       lastRequest,
       ocrLoading,
       pinned,
