@@ -380,7 +380,6 @@ function ProviderFields({
   provider: string;
 }) {
   if (provider === "snaptext_cloud") {
-    // 官方源的客户端 ID 由配置自动维护，普通设置页不暴露可编辑入口。
     return null;
   }
   if (provider === "deepl") {
@@ -959,7 +958,6 @@ function sanitizeConfig(config: AppConfig): AppConfig {
   next.hotkeys.screenshot = normalizeShortcutForConfig(next.hotkeys.screenshot);
   next.hotkeys.selection = normalizeShortcutForConfig(next.hotkeys.selection);
   next.translator.provider = visibleProvider(next.translator.provider.trim());
-  // SnapText 官方源地址由客户端构建配置决定，设置页不展示地址选择。
   next.translator.snaptext_cloud.endpoint = clientSnapTextCloudEndpoint();
   // 选择并保存某个翻译服务即表示启用该服务，UI 不再提供额外开关。
   next.translator.snaptext_cloud.enabled =

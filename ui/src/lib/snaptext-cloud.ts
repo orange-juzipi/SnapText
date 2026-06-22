@@ -1,12 +1,8 @@
-export const SNAPTEXT_CLOUD_ENDPOINTS = {
-  production: "https://snaptext.uuidcx.com",
-  local: "http://127.0.0.1:8080",
-} as const;
+export const SNAPTEXT_CLOUD_ENDPOINT = "https://snaptext.uuidcx.com";
 
 export function clientSnapTextCloudEndpoint() {
-  return import.meta.env.VITE_SNAPTEXT_CLOUD_ENV === "local"
-    ? SNAPTEXT_CLOUD_ENDPOINTS.local
-    : SNAPTEXT_CLOUD_ENDPOINTS.production;
+  // 官方源默认固定，调试覆盖由桌面进程运行时处理。
+  return SNAPTEXT_CLOUD_ENDPOINT;
 }
 
 export function sameEndpoint(left: string, right: string) {

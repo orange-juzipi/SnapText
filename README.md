@@ -131,8 +131,10 @@ python3 scripts/build_frontend.py
 默认线上服务地址是 `https://snaptext.uuidcx.com`。本地调试云端接口时可以使用：
 
 ```bash
-VITE_SNAPTEXT_CLOUD_ENV=local cargo run -p snaptext-tauri
+SNAPTEXT_CLOUD_ENV=local cargo run -p snaptext-tauri
 ```
+
+该变量只在开发运行时临时覆盖 translator，不会写入 `config.yaml`，设置页也不会展示本地调试入口。
 
 ## 常用检查
 

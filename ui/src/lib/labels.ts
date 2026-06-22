@@ -81,7 +81,7 @@ const zhCN = {
   provider: "翻译服务",
   snaptextCloudProvider: "SnapText 官方源",
   providerSaveHint:
-    "切换翻译源后需要保存；SnapText 官方源地址由客户端环境配置决定。",
+    "切换翻译源后会自动保存，新翻译请求会使用最新设置。",
   unsavedChanges: "有未保存更改",
   refresh: "刷新",
   clear: "清空",
@@ -213,7 +213,7 @@ const en: Labels = {
   provider: "Translation service",
   snaptextCloudProvider: "SnapText Cloud",
   providerSaveHint:
-    "Save after changing the translation provider; SnapText Cloud uses the client environment setting.",
+    "Provider changes are saved automatically for new translation requests.",
   unsavedChanges: "Unsaved changes",
   noHistoryTitle: "No history yet",
   noHistoryDescription:

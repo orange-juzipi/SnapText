@@ -773,36 +773,52 @@ def main() -> int:
     core_config = read_text(ROOT / "crates/snaptext-core/src/config.rs")
     for expected in (
         "snaptext_cloud_production_endpoint",
-        "snaptext_cloud_local_endpoint",
         "https://snaptext.uuidcx.com",
         "http://127.0.0.1:8080",
     ):
         check(expected in core_config, f"snaptext-core config is missing SnapText source endpoint: {expected}")
     check(
+        "snaptext_cloud_local_endpoint" not in core_config,
+        "snaptext-core should not expose a hidden local SnapText Cloud endpoint",
+    )
+    check(
         "SNAPTEXT_CLOUD_ENDPOINT" not in core_config,
         "snaptext-core should not read client SnapText endpoint environment variables",
     )
+    for expected in (
+        "SNAPTEXT_CLOUD_ENV",
+        "SNAPTEXT_CLOUD_LOCAL_ENDPOINT",
+        "translator_registry_for_config",
+        "apply_snaptext_cloud_runtime_override",
+    ):
+        check(expected in tauri_lib, f"snaptext-tauri is missing runtime SnapText Cloud override: {expected}")
 
     snaptext_cloud_client = read_text(ROOT / "ui/src/lib/snaptext-cloud.ts")
     settings_page = read_text(ROOT / "ui/src/routes/settings.tsx")
     client_snaptext_source = settings_page + snaptext_cloud_client
     for expected in (
-        "VITE_SNAPTEXT_CLOUD_ENV",
         "clientSnapTextCloudEndpoint",
-        'production: "https://snaptext.uuidcx.com"',
-        'local: "http://127.0.0.1:8080"',
+        'SNAPTEXT_CLOUD_ENDPOINT = "https://snaptext.uuidcx.com"',
         'option value="snaptext_cloud"',
-        "SnapText 官方源",
     ):
         check(expected in client_snaptext_source, f"settings page is missing SnapText source controls: {expected}")
+    # 官方源默认直连线上地址；本地调试只允许 Tauri 开发运行时临时覆盖。
     for unexpected in (
+        "VITE_SNAPTEXT_CLOUD_ENV",
+        "SNAPTEXT_CLOUD_ENV",
+        "http://127.0.0.1:8080",
+        "snapTextCloudEnvironmentForEndpoint",
+        "snapTextCloudEndpointForEnvironment",
+        "snaptextCloudEnvironment",
+        "snaptextCloudProduction",
+        "snaptextCloudLocal",
         "运行环境",
         "线上地址",
         "本地调试",
         "内置地址",
-        "snaptextCloudEnvironment",
     ):
         check(unexpected not in settings_page, f"settings page should not expose SnapText endpoint UI: {unexpected}")
+        check(unexpected not in snaptext_cloud_client, f"frontend SnapText source should not expose local routing: {unexpected}")
     check(
         "SnapText Cloud endpoint" not in settings_page,
         "settings page should not expose editable SnapText Cloud endpoint input",

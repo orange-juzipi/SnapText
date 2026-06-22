@@ -73,6 +73,52 @@ const MAIN_WINDOW_LABEL: &str = "main";
 #[cfg(not(target_os = "macos"))]
 const OVERLAY_WINDOW_LABEL: &str = "overlay";
 const MAIN_WINDOW_HIDE_SETTLE_MS: u64 = 160;
+#[cfg(all(debug_assertions, not(test)))]
+const SNAPTEXT_CLOUD_ENV_VAR: &str = "SNAPTEXT_CLOUD_ENV";
+#[cfg(all(debug_assertions, not(test)))]
+const SNAPTEXT_CLOUD_LOCAL_ENDPOINT: &str = "http://127.0.0.1:8080";
+
+pub(crate) fn translator_registry_for_config(config: &AppConfig) -> Result<TranslatorRegistry> {
+    let mut translator = config.translator.clone();
+    apply_snaptext_cloud_runtime_override(&mut translator)?;
+    Ok(TranslatorRegistry::new(translator))
+}
+
+#[cfg(all(debug_assertions, not(test)))]
+fn apply_snaptext_cloud_runtime_override(
+    translator: &mut snaptext_core::config::TranslatorConfig,
+) -> Result<()> {
+    let Ok(value) = std::env::var(SNAPTEXT_CLOUD_ENV_VAR) else {
+        return Ok(());
+    };
+    let env = value.trim();
+    if env.is_empty() || env.eq_ignore_ascii_case("production") || env.eq_ignore_ascii_case("prod")
+    {
+        return Ok(());
+    }
+    if !env.eq_ignore_ascii_case("local") {
+        return Err(Error::Config(format!(
+            "{SNAPTEXT_CLOUD_ENV_VAR} must be local or production"
+        )));
+    }
+
+    // 仅在开发运行时覆盖 translator，不写入配置文件，也不暴露到设置页。
+    translator.snaptext_cloud.endpoint = SNAPTEXT_CLOUD_LOCAL_ENDPOINT
+        .parse()
+        .map_err(|err| Error::Config(format!("invalid local SnapText Cloud endpoint: {err}")))?;
+    tracing::warn!(
+        endpoint = SNAPTEXT_CLOUD_LOCAL_ENDPOINT,
+        "using local SnapText Cloud runtime override"
+    );
+    Ok(())
+}
+
+#[cfg(not(all(debug_assertions, not(test))))]
+fn apply_snaptext_cloud_runtime_override(
+    _translator: &mut snaptext_core::config::TranslatorConfig,
+) -> Result<()> {
+    Ok(())
+}
 
 #[cfg(not(test))]
 pub fn run_tauri(config: AppConfig, history: HistoryStore) -> Result<()> {
@@ -919,7 +965,7 @@ fn update_config_inner(state: &AppState, config: AppConfig) -> Result<AppConfig>
             .translator
             .write()
             .map_err(|err| Error::Translate(err.to_string()))?;
-        *translator = TranslatorRegistry::new(config.translator.clone());
+        *translator = translator_registry_for_config(&config)?;
     }
 
     {

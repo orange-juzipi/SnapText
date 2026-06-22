@@ -16,7 +16,7 @@ use snaptext_core::{
     selection::SelectionWatcher, translate::TranslatorRegistry,
 };
 
-use crate::{ScreenshotPayload, model::resolve_model_dir};
+use crate::{ScreenshotPayload, model::resolve_model_dir, translator_registry_for_config};
 
 pub struct AppState {
     pub(crate) config_path: Option<PathBuf>,
@@ -77,7 +77,7 @@ impl AppState {
         let config = config.normalized_for_save();
         config.validate()?;
         let ocr = OcrEngine::new(resolve_model_dir(&config, resource_dir.as_deref()))?;
-        let translator = TranslatorRegistry::new(config.translator.clone());
+        let translator = translator_registry_for_config(&config)?;
         Ok(Self {
             config_path,
             resource_dir,

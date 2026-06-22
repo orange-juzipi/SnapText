@@ -6,7 +6,6 @@ import { queryKeys, useConfigQuery, useUpdateConfigMutation } from "@/lib/querie
 import { labelsForLanguage } from "@/lib/labels";
 import { resolveTargetLang } from "@/lib/language";
 import { errorMessage } from "@/lib/errors";
-import { clientSnapTextCloudEndpoint, sameEndpoint } from "@/lib/snaptext-cloud";
 import { translateText } from "@/lib/api";
 import { TabsLink, TabsNav } from "@/components/ui/tabs";
 import { Toast, ToastClose, ToastDescription, ToastTitle, ToastViewport } from "@/components/ui/toast";
@@ -55,13 +54,11 @@ export function AppShell() {
     const config = configQuery.data;
     if (!config || updateConfig.isPending) return;
 
-    const endpoint = clientSnapTextCloudEndpoint();
-    const shouldUpdateEndpoint = !sameEndpoint(config.translator.snaptext_cloud.endpoint, endpoint);
     const shouldUpdateTargetLang = config.target_lang?.trim() !== "zh_cn";
     const shouldUpdateProvider = !isVisibleProvider(config.translator.provider);
-    if (!shouldUpdateEndpoint && !shouldUpdateTargetLang && !shouldUpdateProvider) return;
+    if (!shouldUpdateTargetLang && !shouldUpdateProvider) return;
 
-    // Keep stale persisted desktop config aligned with client-only defaults.
+    // Keep stale persisted desktop config aligned without changing explicit endpoint choices.
     updateConfig
       .mutateAsync({
         ...config,
@@ -69,10 +66,6 @@ export function AppShell() {
         translator: {
           ...config.translator,
           provider: shouldUpdateProvider ? "snaptext_cloud" : config.translator.provider,
-          snaptext_cloud: {
-            ...config.translator.snaptext_cloud,
-            endpoint,
-          },
         },
       })
       .catch((error) => {

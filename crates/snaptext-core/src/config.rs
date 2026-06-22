@@ -295,6 +295,8 @@ impl AppConfig {
         self.hotkeys.screenshot = self.hotkeys.screenshot.trim().to_owned();
         self.hotkeys.selection = self.hotkeys.selection.trim().to_owned();
         self.translator.provider = normalize_translator_provider(self.translator.provider);
+        // 官方源地址不作为用户配置保存；本地调试由桌面进程运行时覆盖。
+        self.translator.snaptext_cloud.endpoint = snaptext_cloud_production_endpoint();
         self.translator.snaptext_cloud.device_id =
             normalize_device_id(self.translator.snaptext_cloud.device_id);
         self.translator.openai_compatible.model =
@@ -572,10 +574,6 @@ pub fn snaptext_cloud_production_endpoint() -> Url {
     Url::parse("https://snaptext.uuidcx.com").expect("valid default URL")
 }
 
-pub fn snaptext_cloud_local_endpoint() -> Url {
-    Url::parse("http://127.0.0.1:8080").expect("valid local debug URL")
-}
-
 fn default_snaptext_cloud_endpoint() -> Url {
     snaptext_cloud_production_endpoint()
 }
@@ -613,10 +611,6 @@ mod tests {
         assert_eq!(
             config.translator.snaptext_cloud.endpoint,
             snaptext_cloud_production_endpoint()
-        );
-        assert_eq!(
-            snaptext_cloud_local_endpoint().as_str(),
-            "http://127.0.0.1:8080/"
         );
     }
 
