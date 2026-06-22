@@ -1,5 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
-import { FileText, RotateCw, Trash2 } from "lucide-react";
+import { FileText, Trash2 } from "lucide-react";
 import { historyItemMeta } from "@/lib/format";
 import { labelsForLanguage } from "@/lib/labels";
 import { useClearHistoryMutation, useConfigQuery, useHistoryQuery } from "@/lib/queries";
@@ -34,10 +34,6 @@ export function HistoryPage() {
       </CardHeader>
       <CardContent>
         <div className="mb-4 flex flex-wrap gap-2">
-          <Button onClick={() => historyQuery.refetch()}>
-            <RotateCw size={16} />
-            {labels.refresh}
-          </Button>
           <Button onClick={handleClear} variant="destructive">
             <Trash2 size={16} />
             {labels.clear}

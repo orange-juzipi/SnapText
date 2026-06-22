@@ -1,12 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Keyboard, MonitorCog, Save, ServerCog, Volume2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, Keyboard, MonitorCog, ServerCog, Volume2 } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { labelsForLanguage } from "@/lib/labels";
 import { useConfigQuery, useUpdateConfigMutation } from "@/lib/queries";
 import type { AppConfig } from "@/lib/types";
 import { useWorkspaceState } from "@/app/workspace-state";
 import { clientSnapTextCloudEndpoint } from "@/lib/snaptext-cloud";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldLabel } from "@/components/ui/field";
@@ -15,6 +14,10 @@ import { Select } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 
 type SettingsTab = "interface" | "hotkeys" | "speech" | "provider";
+type QueuedSave = {
+  draft: AppConfig;
+  version: number;
+};
 
 export function SettingsPage() {
   const configQuery = useConfigQuery();
@@ -22,18 +25,27 @@ export function SettingsPage() {
   const workspace = useWorkspaceState();
   const [draft, setDraft] = useState<AppConfig | null>(null);
   const [activeTab, setActiveTab] = useState<SettingsTab>("interface");
+  const userEditedRef = useRef(false);
+  const savingRef = useRef(false);
+  const queuedSaveRef = useRef<QueuedSave | null>(null);
+  const editVersionRef = useRef(0);
   const speechEnabled = draft?.speech.enabled ?? false;
   const labels = labelsForLanguage(
     draft?.ui.language ?? configQuery.data?.ui.language,
   );
-  const hasUnsavedChanges = useMemo(() => {
-    if (!draft || !configQuery.data) return false;
-    return hasTabUnsavedChanges(activeTab, ensureSpeechDefaults(draft), ensureSpeechDefaults(configQuery.data));
-  }, [activeTab, configQuery.data, draft]);
 
   useEffect(() => {
-    if (configQuery.data) setDraft(ensureSpeechDefaults(configQuery.data));
+    if (!configQuery.data || userEditedRef.current) return;
+    setDraft(ensureSpeechDefaults(configQuery.data));
   }, [configQuery.data]);
+
+  useEffect(() => {
+    if (!draft || !configQuery.data || !userEditedRef.current) return;
+    const timeout = window.setTimeout(() => {
+      void saveConfig(draft, editVersionRef.current);
+    }, 600);
+    return () => window.clearTimeout(timeout);
+  }, [configQuery.data, draft]);
 
   const providerConfig = useMemo(
     () => visibleProvider(draft?.translator.provider),
@@ -48,18 +60,31 @@ export function SettingsPage() {
     );
   }
 
-  async function handleSave(tab: SettingsTab) {
-    if (!draft) return;
+  async function saveConfig(nextDraft: AppConfig, version: number) {
+    if (savingRef.current) {
+      queuedSaveRef.current = { draft: nextDraft, version };
+      return;
+    }
+    savingRef.current = true;
     try {
       const saved = await updateConfig.mutateAsync(
-        sanitizeConfig(mergeConfigForTab(tab, configQuery.data ?? draft, draft)),
+        sanitizeConfig(nextDraft),
       );
-      setDraft(saved);
-      workspace.setStatus(labels.configSaved);
+      if (!queuedSaveRef.current && editVersionRef.current === version) {
+        userEditedRef.current = false;
+        setDraft(ensureSpeechDefaults(saved));
+      }
     } catch (error) {
       workspace.showError(
         error instanceof Error ? error.message : String(error),
       );
+    } finally {
+      savingRef.current = false;
+      const queuedSave = queuedSaveRef.current;
+      queuedSaveRef.current = null;
+      if (queuedSave) {
+        await saveConfig(queuedSave.draft, queuedSave.version);
+      }
     }
   }
 
@@ -74,9 +99,6 @@ export function SettingsPage() {
           </Button>
           <CardTitle>{labels.settings}</CardTitle>
         </div>
-        <Badge variant={hasUnsavedChanges ? "primary" : "default"}>
-          {hasUnsavedChanges ? labels.unsavedChanges : labels.saved}
-        </Badge>
       </CardHeader>
       <CardContent className="settings-shell">
         <nav className="settings-tab-list" aria-label={labels.settings}>
@@ -117,6 +139,8 @@ export function SettingsPage() {
                 onChange={(event) =>
                   updateDraft(
                     setDraft,
+                    userEditedRef,
+                    editVersionRef,
                     (next) => (next.ui.language = event.target.value),
                   )
                 }
@@ -132,6 +156,8 @@ export function SettingsPage() {
                 onChange={(event) =>
                   updateDraft(
                     setDraft,
+                    userEditedRef,
+                    editVersionRef,
                     (next) => (next.ui.theme = event.target.value),
                   )
                 }
@@ -141,28 +167,7 @@ export function SettingsPage() {
                 <option value="dark">{labels.themeDark}</option>
               </Select>
             </Field>
-            <Field>
-              <FieldLabel>{labels.resultDock}</FieldLabel>
-              <Select
-                value={draft.ui.result_panel_dock}
-                onChange={(event) =>
-                  updateDraft(
-                    setDraft,
-                    (next) => (next.ui.result_panel_dock = event.target.value),
-                  )
-                }
-              >
-                <option value="cursor">{labels.dockCursor}</option>
-                <option value="fixed">{labels.dockFixed}</option>
-              </Select>
-            </Field>
           </div>
-          <SettingsSaveRow
-            disabled={!hasUnsavedChanges || updateConfig.isPending}
-            labels={labels}
-            loading={updateConfig.isPending}
-            onSave={() => handleSave("interface")}
-          />
           </section>
         ) : null}
 
@@ -176,6 +181,8 @@ export function SettingsPage() {
                 onChange={(value) =>
                   updateDraft(
                     setDraft,
+                    userEditedRef,
+                    editVersionRef,
                     (next) => (next.hotkeys.screenshot = value),
                   )
                 }
@@ -188,18 +195,14 @@ export function SettingsPage() {
                 onChange={(value) =>
                   updateDraft(
                     setDraft,
+                    userEditedRef,
+                    editVersionRef,
                     (next) => (next.hotkeys.selection = value),
                   )
                 }
               />
             </Field>
           </div>
-          <SettingsSaveRow
-            disabled={!hasUnsavedChanges || updateConfig.isPending}
-            labels={labels}
-            loading={updateConfig.isPending}
-            onSave={() => handleSave("hotkeys")}
-          />
           </section>
         ) : null}
 
@@ -212,6 +215,8 @@ export function SettingsPage() {
               onChange={(event) =>
                 updateDraft(
                   setDraft,
+                  userEditedRef,
+                  editVersionRef,
                   (next) => (next.translator.provider = event.target.value),
                 )
               }
@@ -224,16 +229,9 @@ export function SettingsPage() {
           <ProviderFields
             draft={draft}
             setDraft={setDraft}
+            userEditedRef={userEditedRef}
+            editVersionRef={editVersionRef}
             provider={providerConfig}
-          />
-          {hasUnsavedChanges ? (
-            <Badge variant="primary">{labels.unsavedChanges}</Badge>
-          ) : null}
-          <SettingsSaveRow
-            disabled={!hasUnsavedChanges || updateConfig.isPending}
-            labels={labels}
-            loading={updateConfig.isPending}
-            onSave={() => handleSave("provider")}
           />
           </section>
         ) : null}
@@ -247,6 +245,8 @@ export function SettingsPage() {
                 onCheckedChange={(checked) =>
                   updateDraft(
                     setDraft,
+                    userEditedRef,
+                    editVersionRef,
                     (next) => (next.speech.enabled = checked),
                   )
                 }
@@ -261,6 +261,8 @@ export function SettingsPage() {
                 onChange={(event) =>
                   updateDraft(
                     setDraft,
+                    userEditedRef,
+                    editVersionRef,
                     (next) => (next.speech.english_accent = event.target.value),
                   )
                 }
@@ -281,6 +283,8 @@ export function SettingsPage() {
                 onChange={(event) =>
                   updateDraft(
                     setDraft,
+                    userEditedRef,
+                    editVersionRef,
                     (next) => (next.speech.rate = Number(event.target.value)),
                   )
                 }
@@ -298,18 +302,14 @@ export function SettingsPage() {
                 onChange={(event) =>
                   updateDraft(
                     setDraft,
+                    userEditedRef,
+                    editVersionRef,
                     (next) => (next.speech.volume = Number(event.target.value)),
                   )
                 }
               />
             </Field>
           </div>
-          <SettingsSaveRow
-            disabled={!hasUnsavedChanges || updateConfig.isPending}
-            labels={labels}
-            loading={updateConfig.isPending}
-            onSave={() => handleSave("speech")}
-          />
           </section>
         ) : null}
         </div>
@@ -321,10 +321,14 @@ export function SettingsPage() {
 function ProviderFields({
   draft,
   setDraft,
+  userEditedRef,
+  editVersionRef,
   provider,
 }: {
   draft: AppConfig;
   setDraft: React.Dispatch<React.SetStateAction<AppConfig | null>>;
+  userEditedRef: React.MutableRefObject<boolean>;
+  editVersionRef: React.MutableRefObject<number>;
   provider: string;
 }) {
   if (provider === "snaptext_cloud") {
@@ -337,12 +341,16 @@ function ProviderFields({
         <ProviderInput
           draft={draft}
           setDraft={setDraft}
+          userEditedRef={userEditedRef}
+          editVersionRef={editVersionRef}
           path="deepl_base_url"
           label="DeepL base URL"
         />
         <ProviderInput
           draft={draft}
           setDraft={setDraft}
+          userEditedRef={userEditedRef}
+          editVersionRef={editVersionRef}
           path="deepl_api_key"
           label="DeepL API key"
         />
@@ -355,12 +363,16 @@ function ProviderFields({
         <ProviderInput
           draft={draft}
           setDraft={setDraft}
+          userEditedRef={userEditedRef}
+          editVersionRef={editVersionRef}
           path="google_base_url"
           label="Google base URL"
         />
         <ProviderInput
           draft={draft}
           setDraft={setDraft}
+          userEditedRef={userEditedRef}
+          editVersionRef={editVersionRef}
           path="google_api_key"
           label="Google API key"
         />
@@ -379,11 +391,15 @@ type ProviderInputPath =
 function ProviderInput({
   draft,
   setDraft,
+  userEditedRef,
+  editVersionRef,
   path,
   label,
 }: {
   draft: AppConfig;
   setDraft: React.Dispatch<React.SetStateAction<AppConfig | null>>;
+  userEditedRef: React.MutableRefObject<boolean>;
+  editVersionRef: React.MutableRefObject<number>;
   path: ProviderInputPath;
   label: string;
 }) {
@@ -394,7 +410,7 @@ function ProviderInput({
       <Input
         value={value}
         onChange={(event) =>
-          updateDraft(setDraft, (next) =>
+          updateDraft(setDraft, userEditedRef, editVersionRef, (next) =>
             setProviderValue(next, path, event.target.value),
           )
         }
@@ -435,27 +451,6 @@ function setProviderValue(
       config.translator.google.api_key = value;
       break;
   }
-}
-
-function SettingsSaveRow({
-  disabled,
-  labels,
-  loading,
-  onSave,
-}: {
-  disabled: boolean;
-  labels: ReturnType<typeof labelsForLanguage>;
-  loading: boolean;
-  onSave: () => void;
-}) {
-  return (
-    <section className="settings-save-row settings-save-bar">
-      <Button onClick={onSave} variant="primary" disabled={disabled}>
-        <Save size={16} />
-        {loading ? labels.saving : labels.save}
-      </Button>
-    </section>
-  );
 }
 
 function SettingsTabButton({
@@ -749,35 +744,14 @@ function visibleProvider(provider?: string) {
     : "snaptext_cloud";
 }
 
-function hasTabUnsavedChanges(tab: SettingsTab, draft: AppConfig, saved: AppConfig) {
-  const next = sanitizeConfig(mergeConfigForTab(tab, saved, draft));
-  const current = sanitizeConfig(saved);
-  return JSON.stringify(next) !== JSON.stringify(current);
-}
-
-function mergeConfigForTab(tab: SettingsTab, base: AppConfig, draft: AppConfig) {
-  const next = structuredClone(base);
-  switch (tab) {
-    case "interface":
-      next.ui = structuredClone(draft.ui);
-      break;
-    case "hotkeys":
-      next.hotkeys = structuredClone(draft.hotkeys);
-      break;
-    case "provider":
-      next.translator = structuredClone(draft.translator);
-      break;
-    case "speech":
-      next.speech = structuredClone(draft.speech);
-      break;
-  }
-  return next;
-}
-
 function updateDraft(
   setDraft: React.Dispatch<React.SetStateAction<AppConfig | null>>,
+  userEditedRef: React.MutableRefObject<boolean>,
+  editVersionRef: React.MutableRefObject<number>,
   updater: (draft: AppConfig) => void,
 ) {
+  userEditedRef.current = true;
+  editVersionRef.current += 1;
   setDraft((current) => {
     if (!current) return current;
     const next = structuredClone(current);
@@ -791,7 +765,6 @@ function sanitizeConfig(config: AppConfig): AppConfig {
   next.target_lang = next.target_lang.trim();
   next.ui.theme = next.ui.theme.trim();
   next.ui.language = next.ui.language.trim();
-  next.ui.result_panel_dock = next.ui.result_panel_dock.trim();
   next.hotkeys.screenshot = normalizeShortcutForConfig(next.hotkeys.screenshot);
   next.hotkeys.selection = normalizeShortcutForConfig(next.hotkeys.selection);
   next.translator.provider = visibleProvider(next.translator.provider.trim());

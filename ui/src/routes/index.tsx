@@ -203,7 +203,6 @@ export function WorkspacePage() {
       <section className="workspace-panel">
         <div className="workspace-panel-toolbar">
           <div className="workspace-badge-row">
-            <Badge variant="primary">Source</Badge>
             <IconTooltipButton
               disabled={pinMutation.isPending}
               label={workspace.pinned ? labels.unpin : labels.pin}
@@ -272,7 +271,6 @@ export function WorkspacePage() {
       <section className="workspace-panel">
         <div className="workspace-panel-toolbar">
           <div className="workspace-badge-row">
-            <Badge variant="success">Translation</Badge>
             <span className="workspace-provider-label">
               {translatorProviderDetailLabel(
                 configQuery.data?.translator.provider,
