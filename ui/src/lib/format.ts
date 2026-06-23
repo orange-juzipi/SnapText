@@ -49,24 +49,30 @@ export function historyItemMeta(item: HistoryRecord, labels: Labels) {
   return item.target_lang.trim() ? `${source} -> ${languageDisplayName(item.target_lang)}` : source;
 }
 
-export function translatorProviderLabel(provider?: string) {
+export function translatorProviderLabel(provider: string | undefined, labels: Labels) {
   switch (provider?.trim()) {
     case "deepl":
       return "DeepL";
     case "google":
-      return "Google";
+      return "Google Translate";
     case "snaptext_cloud":
     case "openai_compatible":
     case "local_http":
     case undefined:
     case "":
-      return "SnapText 官方源";
+      return labels.snaptextCloudProvider;
     default:
       return provider;
   }
 }
 
-export function translatorProviderDetailLabel(provider?: string, _endpoint?: string) {
-  if (provider?.trim() !== "snaptext_cloud") return translatorProviderLabel(provider);
-  return "SnapText 官方源";
+export function translatorProviderDetailLabel(
+  provider: string | undefined,
+  _endpoint: string | undefined,
+  labels: Labels,
+) {
+  if (provider?.trim() !== "snaptext_cloud") {
+    return translatorProviderLabel(provider, labels);
+  }
+  return labels.snaptextCloudProvider;
 }

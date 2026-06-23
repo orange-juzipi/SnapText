@@ -443,12 +443,14 @@ export function WorkspacePage() {
               aria-label={`${labels.configureProvider}: ${translatorProviderDetailLabel(
                 configQuery.data?.translator.provider,
                 configQuery.data?.translator.snaptext_cloud.endpoint,
+                labels,
               )}`}
             >
               <span>
                 {translatorProviderDetailLabel(
                   configQuery.data?.translator.provider,
                   configQuery.data?.translator.snaptext_cloud.endpoint,
+                  labels,
                 )}
               </span>
               <ChevronDown size={14} aria-hidden="true" />
