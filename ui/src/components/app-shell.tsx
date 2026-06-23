@@ -4,7 +4,7 @@ import { Home, History, Settings } from "lucide-react";
 import { useCallback, useEffect } from "react";
 import { queryKeys, useConfigQuery, useUpdateConfigMutation } from "@/lib/queries";
 import { labelsForLanguage } from "@/lib/labels";
-import { normalizeTargetLang } from "@/lib/language";
+import { AUTO_SOURCE_LANG, normalizeTargetLang, resolveSourceLang } from "@/lib/language";
 import { errorMessage } from "@/lib/errors";
 import { translateText } from "@/lib/api";
 import { TabsLink, TabsNav } from "@/components/ui/tabs";
@@ -111,7 +111,7 @@ export function AppShell() {
       setOcrTextInput(sourceText, "selection");
       setStatus(labels.selectionTextExtracted);
       setTranslating(true);
-      translateText(sourceText, normalizeTargetLang(targetLang), sourceLang)
+      translateText(sourceText, normalizeTargetLang(targetLang), resolveSourceLang(sourceText, sourceLang) ?? AUTO_SOURCE_LANG)
         .then((record) => {
           setResultSnapshot({ ...record, source: "selection" });
           setStatus(labels.textTranslated);
@@ -144,7 +144,7 @@ export function AppShell() {
       setOcrTextInput(sourceText, "screenshot");
       setStatus(labels.ocrTextExtracted);
       setTranslating(true);
-      translateText(sourceText, normalizeTargetLang(targetLang), sourceLang)
+      translateText(sourceText, normalizeTargetLang(targetLang), resolveSourceLang(sourceText, sourceLang) ?? AUTO_SOURCE_LANG)
         .then((record) => {
           setResultSnapshot({ ...record, source: "screenshot" });
           setStatus(labels.regionTranslated);

@@ -1039,30 +1039,39 @@ textarea {
 
 .language-combobox-content {
   z-index: 55;
-  width: min(21rem, calc(100vw - 2rem));
+  width: min(19rem, calc(100vw - 2rem));
   border: 1px solid var(--color-border);
   border-radius: 0.75rem;
-  background: var(--color-popover);
-  color: var(--color-popover-foreground);
-  box-shadow: var(--shadow-lg);
+  background: var(--color-card);
+  color: var(--color-foreground);
+  box-shadow: var(--shadow-panel);
 }
 
 .language-combobox-search {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 0.5rem;
+  position: relative;
   border-bottom: 1px solid var(--color-border);
+  background: var(--color-card);
   padding: 0.55rem;
 }
 
 .language-combobox-search svg {
+  position: absolute;
+  top: 50%;
+  left: 1.25rem;
+  z-index: 1;
   color: var(--color-muted-foreground);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.language-combobox-search-input {
+  padding-left: 2.35rem;
 }
 
 .language-combobox-list {
   max-height: min(20rem, 52vh);
   overflow-y: auto;
+  background: var(--color-card);
   padding: 0.35rem;
 }
 
@@ -1168,11 +1177,78 @@ textarea {
 .workspace-textarea {
   min-height: 14rem;
   height: 100%;
+  padding-bottom: 3.65rem;
   resize: none;
   transition:
     background-color var(--motion-base) var(--ease-out-quart),
     border-color var(--motion-base) var(--ease-out-quart),
     box-shadow var(--motion-base) var(--ease-out-quart);
+}
+
+.workspace-source-textarea,
+.workspace-result-textarea {
+  /* Reserve first-line space for the top-right textarea action so content wraps before it. */
+  padding-right: 4.6rem;
+}
+
+.workspace-textarea-controls {
+  position: absolute;
+  right: 0.75rem;
+  bottom: 0.75rem;
+  left: 0.75rem;
+  z-index: 2;
+  display: flex;
+  min-width: 0;
+  align-items: flex-end;
+  justify-content: flex-start;
+  gap: 0.65rem;
+  pointer-events: none;
+}
+
+.workspace-textarea-controls-left {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  pointer-events: auto;
+}
+
+.workspace-textarea-controls .group\/snaptext-button {
+  background: color-mix(in srgb, var(--color-card) 92%, transparent);
+  box-shadow: var(--shadow-xs);
+  backdrop-filter: blur(10px);
+}
+
+.workspace-speech-button-active.group\/snaptext-button {
+  border-color: color-mix(in srgb, var(--color-primary) 38%, var(--color-border));
+  background: color-mix(in srgb, var(--color-primary) 14%, var(--color-card));
+  color: var(--color-primary);
+}
+
+.workspace-speech-button-active.group\/snaptext-button:hover {
+  background: color-mix(in srgb, var(--color-primary) 18%, var(--color-card));
+  color: var(--color-primary);
+}
+
+.workspace-source-clear-control,
+.workspace-result-copy-control {
+  position: absolute;
+  top: 0.78rem;
+  right: 0.75rem;
+  z-index: 3;
+  pointer-events: auto;
+}
+
+.workspace-source-clear-control .group\/snaptext-button,
+.workspace-result-copy-control .group\/snaptext-button {
+  background: color-mix(in srgb, var(--color-card) 94%, transparent);
+  box-shadow: var(--shadow-xs);
+  backdrop-filter: blur(10px);
+}
+
+.workspace-textarea-control-button {
+  border-color: color-mix(in srgb, var(--color-border) 88%, transparent);
 }
 
 .workspace-result-textarea,

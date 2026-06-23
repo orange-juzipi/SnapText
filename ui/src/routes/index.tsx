@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type * as React from "react";
-import { ArrowLeftRight, ChevronDown, Copy, LoaderCircle, Pin, ScanText, Trash2, Volume2 } from "lucide-react";
+import { ArrowLeftRight, ChevronDown, Copy, LoaderCircle, Pin, ScanText, Volume2, X } from "lucide-react";
 import { startScreenshotOverlay, unpinResultWindow } from "@/lib/api";
 import { translatorProviderDetailLabel } from "@/lib/format";
 import { labelsForLanguage } from "@/lib/labels";
@@ -35,7 +35,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 type SpeechAccent = "american" | "british";
-const AUTO_TRANSLATE_DEBOUNCE_MS = 800;
+const AUTO_TRANSLATE_DEBOUNCE_MS = 500;
 
 export function WorkspacePage() {
   const configQuery = useConfigQuery();
@@ -59,11 +59,8 @@ export function WorkspacePage() {
       : languageDisplayName(detectedSourceLang, configQuery.data?.ui.language);
   const speechReady =
     Boolean(configQuery.data) && isSpeechSupported(configQuery.data?.speech);
-  const hasWorkspaceText = Boolean(
-    workspace.textInput.trim() ||
-      workspace.snapshot.sourceText.trim() ||
-      workspace.snapshot.result.trim(),
-  );
+  const hasSourceText = Boolean(workspace.textInput.trim());
+  const hasTranslationText = Boolean(workspace.snapshot.result.trim());
   const canSwapTranslation = Boolean(
     workspace.textInput.trim() &&
       workspace.snapshot.result.trim() &&
@@ -88,13 +85,7 @@ export function WorkspacePage() {
       workspace.clearTranslation();
       return;
     }
-    if (
-      sourceText === workspace.snapshot.sourceText.trim() &&
-      (workspace.snapshot.sourceKind === "screenshot" || workspace.snapshot.sourceKind === "selection")
-    ) {
-      return;
-    }
-    const sourceLang = workspace.sourceLang;
+    const sourceLang = resolveSourceLang(sourceText, workspace.sourceLang) ?? AUTO_SOURCE_LANG;
     const targetLang = normalizeTargetLang(workspace.targetLang);
     const requestKey = autoTranslateKey(sourceText, sourceLang, targetLang);
     if (requestKey === lastAutoTranslatedKeyRef.current) return;
@@ -117,15 +108,13 @@ export function WorkspacePage() {
   useEffect(() => {
     const sourceText = workspace.snapshot.sourceText.trim();
     if (!workspace.snapshot.result.trim() || sourceText !== workspace.textInput.trim()) return;
-    const sourceLang = workspace.sourceLang;
-    const targetLang = normalizeTargetLang(workspace.snapshot.targetLang || workspace.targetLang);
+    const sourceLang = resolveSourceLang(sourceText, workspace.sourceLang) ?? AUTO_SOURCE_LANG;
+    const targetLang = normalizeTargetLang(workspace.snapshot.targetLang);
     lastAutoTranslatedKeyRef.current = autoTranslateKey(sourceText, sourceLang, targetLang);
   }, [
     workspace.snapshot.result,
     workspace.snapshot.sourceText,
     workspace.snapshot.targetLang,
-    workspace.sourceLang,
-    workspace.targetLang,
     workspace.textInput,
   ]);
 
@@ -137,6 +126,7 @@ export function WorkspacePage() {
         sourceLang,
         targetLang,
       });
+      lastAutoTranslatedKeyRef.current = autoTranslateKey(sourceText, sourceLang, targetLang);
       setTextResult(record);
       workspace.setStatus(labels.textTranslated);
     } catch (error) {
@@ -170,7 +160,7 @@ export function WorkspacePage() {
       workspace.showError(labels.textInputRequired);
       return;
     }
-    const sourceLang = workspace.sourceLang;
+    const sourceLang = resolveSourceLang(sourceText, workspace.sourceLang) ?? AUTO_SOURCE_LANG;
     const targetLang = normalizeTargetLang(workspace.targetLang);
     autoTranslatePendingRef.current = null;
     await runTranslateText(sourceText, sourceLang, targetLang, "manual");
@@ -203,11 +193,11 @@ export function WorkspacePage() {
     }
   }
 
-  function handleClearTextPanels() {
+  function handleClearSourceText() {
     stopSpeech();
     setActiveSpeechKey(null);
     workspace.clearTextPanels();
-    workspace.setStatus(labels.workspaceTextCleared);
+    workspace.setStatus(labels.sourceTextCleared);
   }
 
   function handleSwapTranslation() {
@@ -299,8 +289,8 @@ export function WorkspacePage() {
           {englishAccents.includes("american") ? (
             <SpeechButton
               active={activeSpeechKey === `${scope}:american`}
-              accentLabel="美"
-              ariaLabel={disabled ? tooltipLabel : `${label}：美式发音`}
+              accentLabel={labels.englishAccentAmericanShort}
+              ariaLabel={disabled ? tooltipLabel : `${label}: ${labels.englishAccentAmerican}`}
               disabled={disabled}
               tooltipLabel={disabled ? tooltipLabel : undefined}
               onClick={() => handleSpeak(text, lang, `${scope}:american`, "american")}
@@ -309,8 +299,8 @@ export function WorkspacePage() {
           {englishAccents.includes("british") ? (
             <SpeechButton
               active={activeSpeechKey === `${scope}:british`}
-              accentLabel="英"
-              ariaLabel={disabled ? tooltipLabel : `${label}：英式发音`}
+              accentLabel={labels.englishAccentBritishShort}
+              ariaLabel={disabled ? tooltipLabel : `${label}: ${labels.englishAccentBritish}`}
               disabled={disabled}
               tooltipLabel={disabled ? tooltipLabel : undefined}
               onClick={() => handleSpeak(text, lang, `${scope}:british`, "british")}
@@ -369,19 +359,6 @@ export function WorkspacePage() {
             />
           </div>
           <div className="workspace-actions">
-            {renderSpeechButtons(
-              workspace.textInput,
-              sourceSpeechLang,
-              "source",
-              labels.playSource,
-            )}
-            <IconTooltipButton
-              disabled={!hasWorkspaceText || workspace.ocrLoading || workspace.translating}
-              label={labels.clearWorkspaceText}
-              onClick={handleClearTextPanels}
-            >
-              <Trash2 size={16} />
-            </IconTooltipButton>
             <IconTooltipButton label={labels.startOverlay} onClick={handleStartOverlay}>
               <ScanText size={16} />
             </IconTooltipButton>
@@ -391,8 +368,8 @@ export function WorkspacePage() {
           <Textarea
             className={
               workspace.ocrLoading
-                ? "workspace-textarea workspace-textarea-busy bg-control"
-                : "workspace-textarea bg-control"
+                ? "workspace-textarea workspace-source-textarea workspace-textarea-busy bg-control"
+                : "workspace-textarea workspace-source-textarea bg-control"
             }
             value={workspace.ocrLoading ? "" : workspace.textInput}
             onChange={(event) => workspace.setTextInput(event.target.value)}
@@ -408,6 +385,30 @@ export function WorkspacePage() {
             placeholder={workspace.ocrLoading ? labels.ocrSelectedRegion : labels.textInputPlaceholder}
             disabled={workspace.ocrLoading}
           />
+          {!workspace.ocrLoading ? (
+            <div className="workspace-textarea-controls">
+              <div className="workspace-textarea-controls-left">
+                {renderSpeechButtons(
+                  workspace.textInput,
+                  sourceSpeechLang,
+                  "source",
+                  labels.playSource,
+                )}
+              </div>
+            </div>
+          ) : null}
+          {!workspace.ocrLoading && hasSourceText ? (
+            <div className="workspace-source-clear-control">
+              <IconTooltipButton
+                className="workspace-textarea-control-button"
+                disabled={workspace.translating}
+                label={labels.clearSourceText}
+                onClick={handleClearSourceText}
+              >
+                <X size={16} />
+              </IconTooltipButton>
+            </div>
+          ) : null}
           {workspace.ocrLoading ? (
             // OCR happens outside the main window, so the source input needs its own busy state.
             <div className="workspace-textarea-loading" aria-live="polite">
@@ -465,15 +466,6 @@ export function WorkspacePage() {
             />
           </div>
           <div className="workspace-actions">
-            {renderSpeechButtons(
-              workspace.snapshot.result,
-              workspace.snapshot.targetLang || workspace.targetLang,
-              "translation",
-              labels.playTranslation,
-            )}
-            <IconTooltipButton label={labels.copy} onClick={handleCopyResult}>
-              <Copy size={16} />
-            </IconTooltipButton>
             <IconTooltipButton
               disabled={pinMutation.isPending}
               label={workspace.pinned ? labels.unpin : labels.pin}
@@ -495,6 +487,29 @@ export function WorkspacePage() {
             readOnly
             placeholder={workspace.translating ? labels.translating : labels.translationPlaceholder}
           />
+          {!workspace.translating ? (
+            <div className="workspace-textarea-controls">
+              <div className="workspace-textarea-controls-left">
+                {renderSpeechButtons(
+                  workspace.snapshot.result,
+                  workspace.snapshot.targetLang || workspace.targetLang,
+                  "translation",
+                  labels.playTranslation,
+                )}
+              </div>
+            </div>
+          ) : null}
+          {!workspace.translating && hasTranslationText ? (
+            <div className="workspace-result-copy-control">
+              <IconTooltipButton
+                className="workspace-textarea-control-button"
+                label={labels.copy}
+                onClick={handleCopyResult}
+              >
+                <Copy size={16} />
+              </IconTooltipButton>
+            </div>
+          ) : null}
           {workspace.translating ? (
             // Translation can follow OCR immediately, so the result box mirrors the same busy treatment.
             <div className="workspace-textarea-loading" aria-live="polite">
@@ -547,6 +562,7 @@ function SpeechButton({
 }) {
   return (
     <IconTooltipButton
+      className={active ? "workspace-speech-button-active" : undefined}
       onClick={onClick}
       label={tooltipLabel ?? ariaLabel}
       variant={active ? "primary" : "secondary"}

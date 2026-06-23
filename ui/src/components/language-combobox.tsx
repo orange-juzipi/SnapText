@@ -9,7 +9,8 @@ import {
   GOOGLE_TRANSLATE_LANGUAGES,
   languageByCode,
   languageDisplayName,
-  languageOptionSearchText,
+  languageMatchesSearch,
+  normalizeLanguageSearchText,
   normalizeLangCode,
 } from "@/lib/language";
 import { cn } from "@/lib/cn";
@@ -45,11 +46,18 @@ export function LanguageCombobox({
         ? languageDisplayName(selectedLanguage.code, uiLanguage)
         : normalizedValue || labels.noTarget;
   const filteredLanguages = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
+    const normalizedQuery = normalizeLanguageSearchText(query);
     if (!normalizedQuery) return GOOGLE_TRANSLATE_LANGUAGES;
-    return GOOGLE_TRANSLATE_LANGUAGES.filter((language) =>
-      languageOptionSearchText(language).includes(normalizedQuery),
+    if (normalizedQuery === "zh") {
+      // "zh" is a language family prefix, so keep both Simplified and Traditional Chinese visible.
+      return GOOGLE_TRANSLATE_LANGUAGES.filter((language) => normalizeLangCode(language.code).startsWith("zh_"));
+    }
+    const normalizedCodeQuery = normalizeLangCode(query);
+    const exactCodeMatches = GOOGLE_TRANSLATE_LANGUAGES.filter(
+      (language) => normalizeLangCode(language.code) === normalizedCodeQuery,
     );
+    if (exactCodeMatches.length) return exactCodeMatches;
+    return GOOGLE_TRANSLATE_LANGUAGES.filter((language) => languageMatchesSearch(language, normalizedQuery));
   }, [query]);
 
   function selectValue(nextValue: string) {
@@ -106,6 +114,7 @@ export function LanguageCombobox({
             <Search size={15} aria-hidden="true" />
             <Input
               autoFocus
+              className="language-combobox-search-input"
               value={query}
               placeholder={labels.searchLanguage}
               onChange={(event) => setQuery(event.target.value)}

@@ -241,6 +241,7 @@ function SpeechButton({
 }) {
   return (
     <IconTooltipButton
+      className={active ? "workspace-speech-button-active" : undefined}
       onClick={onClick}
       label={tooltipLabel ?? ariaLabel}
       variant={active ? "primary" : "secondary"}
@@ -255,6 +256,7 @@ function SpeechButton({
 
 function IconTooltipButton({
   children,
+  className,
   disabled,
   label,
   onClick,
@@ -262,6 +264,7 @@ function IconTooltipButton({
   variant = "secondary",
 }: {
   children: React.ReactNode;
+  className?: string;
   disabled?: boolean;
   label: string;
   onClick: () => void;
@@ -271,6 +274,7 @@ function IconTooltipButton({
   const button = (
     <Button
       aria-label={label}
+      className={className}
       disabled={disabled}
       onClick={onClick}
       size={size}

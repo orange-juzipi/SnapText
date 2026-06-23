@@ -172,16 +172,274 @@ export function languageDisplayName(code: string, uiLanguage?: string) {
   return uiLanguage === "en" ? language.englishName : language.chineseName;
 }
 
+const LANGUAGE_SEARCH_ALIASES: Record<string, string[]> = {
+  af: ["nanfeihelan", "nan fei he lan yu", "nfhly"],
+  sq: ["aerbaniya", "a er ba ni ya yu", "aebnyy"],
+  am: ["amuhala", "a mu ha la yu", "am hara", "amhly"],
+  ar: ["alabo", "a la bo yu", "alby"],
+  hy: ["yameiniya", "ya mei ni ya yu", "ymnyy"],
+  as: ["asamu", "a sa mu yu", "asmy"],
+  de: ["deyu", "de yu", "dy"],
+  en: ["yingyu", "ying yu", "yy"],
+  es: ["xibanya", "xi ban ya yu", "xbyy"],
+  fr: ["fayu", "fa yu", "fy"],
+  it: ["yidali", "yi da li yu", "ydly"],
+  ja: ["riyu", "ri yu", "riwen", "ri wen", "rw"],
+  ko: ["hanyu", "han yu", "hanwen", "han wen", "hw"],
+  nl: ["helan", "he lan yu", "hly"],
+  pt: ["putaoya", "pu tao ya yu", "ptyy"],
+  ru: ["eyu", "e yu", "ey"],
+  zh_cn: ["zhongwen", "zhong wen", "jianti", "jian ti", "zw", "jt", "zhongwenjianti"],
+  zh_tw: ["zhongwen", "zhong wen", "fanti", "fan ti", "zw", "ft", "zhongwenfanti"],
+};
+
+const LANGUAGE_NAME_PINYIN: Record<string, string> = {
+  阿: "a",
+  埃: "ai",
+  艾: "ai",
+  爱: "ai",
+  奥: "ao",
+  巴: "ba",
+  白: "bai",
+  拜: "bai",
+  班: "ban",
+  保: "bao",
+  堡: "bao",
+  北: "bei",
+  别: "bie",
+  宾: "bin",
+  冰: "bing",
+  波: "bo",
+  伯: "bo",
+  博: "bo",
+  聪: "cong",
+  达: "da",
+  靼: "da",
+  鞑: "da",
+  大: "da",
+  丹: "dan",
+  岛: "dao",
+  德: "de",
+  地: "di",
+  迪: "di",
+  第: "di",
+  蒂: "di",
+  典: "dian",
+  甸: "dian",
+  丁: "ding",
+  都: "du",
+  顿: "dun",
+  多: "duo",
+  俄: "e",
+  尔: "er",
+  耳: "er",
+  伐: "fa",
+  法: "fa",
+  繁: "fan",
+  梵: "fan",
+  非: "fei",
+  菲: "fei",
+  芬: "fen",
+  弗: "fu",
+  盖: "gai",
+  干: "gan",
+  高: "gao",
+  格: "ge",
+  古: "gu",
+  固: "gu",
+  瓜: "gua",
+  哈: "ha",
+  海: "hai",
+  韩: "han",
+  豪: "hao",
+  荷: "he",
+  吉: "ji",
+  加: "jia",
+  伽: "jia",
+  嘉: "jia",
+  简: "jian",
+  疆: "jiang",
+  杰: "jie",
+  捷: "jie",
+  界: "jie",
+  卡: "ka",
+  坎: "kan",
+  科: "ke",
+  克: "ke",
+  孔: "kong",
+  库: "ku",
+  拉: "la",
+  腊: "la",
+  来: "lai",
+  兰: "lan",
+  老: "lao",
+  里: "li",
+  立: "li",
+  利: "li",
+  林: "lin",
+  卢: "lu",
+  鲁: "lu",
+  禄: "lu",
+  律: "lv",
+  罗: "luo",
+  洛: "luo",
+  马: "ma",
+  迈: "mai",
+  麦: "mai",
+  曼: "man",
+  毛: "mao",
+  梅: "mei",
+  美: "mei",
+  蒙: "meng",
+  孟: "meng",
+  米: "mi",
+  棉: "mian",
+  缅: "mian",
+  苗: "miao",
+  摩: "mo",
+  莫: "mo",
+  姆: "mu",
+  纳: "na",
+  南: "nan",
+  尼: "ni",
+  挪: "nuo",
+  诺: "nuo",
+  旁: "pang",
+  泊: "po",
+  葡: "pu",
+  普: "pu",
+  齐: "qi",
+  其: "qi",
+  契: "qi",
+  切: "qie",
+  丘: "qiu",
+  日: "ri",
+  瑞: "rui",
+  萨: "sa",
+  塞: "sai",
+  森: "sen",
+  僧: "seng",
+  沙: "sha",
+  什: "shen",
+  士: "shi",
+  世: "shi",
+  斯: "si",
+  苏: "su",
+  宿: "su",
+  索: "suo",
+  他: "ta",
+  塔: "ta",
+  泰: "tai",
+  陶: "tao",
+  萄: "tao",
+  特: "te",
+  提: "ti",
+  体: "ti",
+  图: "tu",
+  土: "tu",
+  托: "tuo",
+  脱: "tuo",
+  瓦: "wa",
+  哇: "wa",
+  宛: "wan",
+  旺: "wang",
+  威: "wei",
+  维: "wei",
+  文: "wen",
+  挝: "wo",
+  乌: "wu",
+  吾: "wu",
+  务: "wu",
+  西: "xi",
+  希: "xi",
+  夏: "xia",
+  信: "xin",
+  匈: "xiong",
+  修: "xiu",
+  绪: "xu",
+  巽: "xun",
+  牙: "ya",
+  雅: "ya",
+  亚: "ya",
+  伊: "yi",
+  夷: "yi",
+  意: "yi",
+  印: "yin",
+  英: "ying",
+  语: "yu",
+  约: "yue",
+  越: "yue",
+  爪: "zhao",
+  遮: "zhe",
+  中: "zhong",
+  兹: "zi",
+  祖: "zu",
+  佐: "zuo",
+};
+
+export function normalizeLanguageSearchText(value: string) {
+  return value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[_\-()（）·,，.。/]+/g, " ")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function languageWordInitials(value: string) {
+  return normalizeLanguageSearchText(value)
+    .split(" ")
+    .filter(Boolean)
+    .map((word) => word[0])
+    .join("");
+}
+
+function compactLanguageSearchText(value: string) {
+  return normalizeLanguageSearchText(value).replace(/\s+/g, "");
+}
+
+function chineseLanguageNameSearchTokens(value: string) {
+  const syllables = Array.from(value)
+    .map((character) => LANGUAGE_NAME_PINYIN[character])
+    .filter((syllable): syllable is string => Boolean(syllable));
+  if (!syllables.length) return [];
+  const spaced = syllables.join(" ");
+  const compact = syllables.join("");
+  const initials = syllables.map((syllable) => syllable[0]).join("");
+  return [spaced, compact, initials];
+}
+
 export function languageOptionSearchText(language: GoogleTranslateLanguage) {
-  return [
+  const aliases = LANGUAGE_SEARCH_ALIASES[normalizeLangCode(language.code)] ?? [];
+  // Build search tokens from every visible language label so fuzzy search works across the whole list.
+  const generatedAliases = [
+    compactLanguageSearchText(language.englishName),
+    compactLanguageSearchText(language.nativeName),
+    languageWordInitials(language.englishName),
+    languageWordInitials(language.nativeName),
+    ...chineseLanguageNameSearchTokens(language.chineseName),
+  ].filter(Boolean);
+  const searchableParts = [
     language.code,
     normalizeLangCode(language.code),
     language.englishName,
     language.chineseName,
     language.nativeName,
-  ]
-    .join(" ")
-    .toLowerCase();
+    ...aliases,
+    ...generatedAliases,
+    ...aliases.map((alias) => alias.replace(/\s+/g, "")),
+  ];
+  return normalizeLanguageSearchText(searchableParts.join(" "));
+}
+
+export function languageMatchesSearch(language: GoogleTranslateLanguage, query: string) {
+  const normalizedQuery = normalizeLanguageSearchText(query);
+  if (!normalizedQuery) return true;
+  const searchText = languageOptionSearchText(language);
+  if (normalizedQuery.includes(" ")) return searchText.includes(normalizedQuery);
+  // Single-token queries should match token starts, not arbitrary suffixes inside other language names.
+  return searchText.split(" ").some((token) => token.startsWith(normalizedQuery));
 }
 
 export function detectSourceLang(text: string) {
@@ -234,8 +492,10 @@ export function detectSourceLang(text: string) {
 
 export function resolveSourceLang(sourceText: string, sourceLang: string) {
   const normalized = normalizeLangCode(sourceLang);
-  if (normalized && normalized !== AUTO_SOURCE_LANG) return normalized;
   const detected = detectSourceLang(sourceText);
+  // Script-based detection is reliable enough to override a stale manual picker value.
+  if (detected !== AUTO_SOURCE_LANG && detected !== DEFAULT_TARGET_LANG) return detected;
+  if (normalized && normalized !== AUTO_SOURCE_LANG) return normalized;
   return detected === AUTO_SOURCE_LANG ? undefined : detected;
 }
 
