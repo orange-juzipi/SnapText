@@ -6,7 +6,7 @@ import { useClearHistoryMutation, useConfigQuery, useHistoryQuery } from "@/lib/
 import { useWorkspaceState } from "@/app/workspace-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 export function HistoryPage() {
   const configQuery = useConfigQuery();
@@ -16,6 +16,7 @@ export function HistoryPage() {
   const workspace = useWorkspaceState();
   const navigate = useNavigate();
   const items = historyQuery.data ?? [];
+  const isClearDisabled = items.length === 0 || clearMutation.isPending;
 
   async function handleClear() {
     try {
@@ -28,17 +29,15 @@ export function HistoryPage() {
 
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="flex flex-row items-center justify-between gap-3">
         <CardTitle>{labels.history}</CardTitle>
-        <CardDescription>{labels.historyLoaded}</CardDescription>
+        {/* 历史列表为空或清空请求进行中时禁用按钮，避免重复清空操作。 */}
+        <Button onClick={handleClear} variant="destructive" disabled={isClearDisabled}>
+          <Trash2 size={16} />
+          {labels.clear}
+        </Button>
       </CardHeader>
       <CardContent>
-        <div className="mb-4 flex flex-wrap gap-2">
-          <Button onClick={handleClear} variant="destructive">
-            <Trash2 size={16} />
-            {labels.clear}
-          </Button>
-        </div>
         {items.length === 0 ? (
           <div className="grid min-h-44 place-items-center rounded-lg border border-dashed border-border bg-secondary/35 p-6 text-center">
             <div>
