@@ -142,6 +142,12 @@ textarea {
   backdrop-filter: blur(14px);
 }
 
+.app-title-lockup {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
 .app-content {
   min-width: 0;
   min-height: 0;
@@ -149,11 +155,14 @@ textarea {
 }
 
 .app-header h1 {
-  font-size: 1rem;
-}
-
-.app-header p {
-  margin-top: 0.125rem;
+  overflow: hidden;
+  color: var(--color-foreground);
+  font-size: clamp(1.15rem, 1.6vw, 1.35rem);
+  font-weight: 850;
+  letter-spacing: 0;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .settings-block {

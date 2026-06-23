@@ -188,9 +188,8 @@ export function AppShell() {
     <main className={hideHeader ? "app-frame app-frame-no-header" : "app-frame"}>
       {hideHeader ? null : (
         <header className="app-header">
-          <div className="min-w-0">
-            <h1 className="text-lg font-bold leading-tight sm:text-xl">SnapText</h1>
-            <p className="mt-1 text-sm text-muted-foreground">{labels.subtitle}</p>
+          <div className="app-title-lockup">
+            <h1>SnapText</h1>
           </div>
           <TabsNav>
             <TabsLink to="/">
