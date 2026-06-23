@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type * as React from "react";
-import { Copy, LoaderCircle, Pin, ScanText, Trash2, Volume2 } from "lucide-react";
+import { ArrowLeftRight, Copy, LoaderCircle, Pin, ScanText, Trash2, Volume2 } from "lucide-react";
 import { startScreenshotOverlay, unpinResultWindow } from "@/lib/api";
 import { translatorProviderDetailLabel } from "@/lib/format";
 import { labelsForLanguage } from "@/lib/labels";
@@ -15,7 +15,6 @@ import {
 import { copyText } from "@/lib/tauri";
 import type { HistoryRecord } from "@/lib/types";
 import { useWorkspaceState } from "@/app/workspace-state";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -41,6 +40,13 @@ export function WorkspacePage() {
     workspace.textInput.trim() ||
       workspace.snapshot.sourceText.trim() ||
       workspace.snapshot.result.trim(),
+  );
+  const canSwapTranslation = Boolean(
+    workspace.textInput.trim() &&
+      workspace.snapshot.result.trim() &&
+      !workspace.ocrLoading &&
+      !workspace.translating &&
+      !translateTextMutation.isPending,
   );
 
   useEffect(() => {
@@ -176,6 +182,21 @@ export function WorkspacePage() {
     workspace.setStatus(labels.workspaceTextCleared);
   }
 
+  function handleSwapTranslation() {
+    const nextTextInput = workspace.snapshot.result.trim();
+    if (!nextTextInput || !canSwapTranslation) return;
+    const nextTargetLang = inferSourceLang(
+      workspace.snapshot.sourceText.trim() || workspace.textInput,
+    );
+    stopSpeech();
+    setActiveSpeechKey(null);
+    autoTranslatePendingRef.current = null;
+    lastAutoTranslatedKeyRef.current = "";
+    workspace.setTextInput(nextTextInput);
+    workspace.setTargetLang(nextTargetLang);
+    workspace.clearTranslation();
+  }
+
   async function handleSpeak(text: string, lang: string, key: string, accent?: SpeechAccent) {
     if (!text.trim()) {
       workspace.showError(labels.noSpeechText);
@@ -215,6 +236,7 @@ export function WorkspacePage() {
     const speechText = text.trim();
     // 空态不展示播放入口，避免把占位提示误认为可朗读内容。
     if (!speechText) return null;
+    if (!speechReady) return null;
     const disabled = !speechReady;
     const tooltipLabel = configQuery.data?.speech.enabled === false
       ? labels.speechEnableToPlay
@@ -222,24 +244,29 @@ export function WorkspacePage() {
         ? labels.speechUnsupported
         : label;
     if (lang === "en") {
+      const englishAccents = visibleEnglishAccents(configQuery.data?.speech.english_accents);
       return (
         <>
-          <SpeechButton
-            active={activeSpeechKey === `${scope}:american`}
-            accentLabel="美"
-            ariaLabel={disabled ? tooltipLabel : `${label}：美式发音`}
-            disabled={disabled}
-            tooltipLabel={disabled ? tooltipLabel : undefined}
-            onClick={() => handleSpeak(text, lang, `${scope}:american`, "american")}
-          />
-          <SpeechButton
-            active={activeSpeechKey === `${scope}:british`}
-            accentLabel="英"
-            ariaLabel={disabled ? tooltipLabel : `${label}：英式发音`}
-            disabled={disabled}
-            tooltipLabel={disabled ? tooltipLabel : undefined}
-            onClick={() => handleSpeak(text, lang, `${scope}:british`, "british")}
-          />
+          {englishAccents.includes("american") ? (
+            <SpeechButton
+              active={activeSpeechKey === `${scope}:american`}
+              accentLabel="美"
+              ariaLabel={disabled ? tooltipLabel : `${label}：美式发音`}
+              disabled={disabled}
+              tooltipLabel={disabled ? tooltipLabel : undefined}
+              onClick={() => handleSpeak(text, lang, `${scope}:american`, "american")}
+            />
+          ) : null}
+          {englishAccents.includes("british") ? (
+            <SpeechButton
+              active={activeSpeechKey === `${scope}:british`}
+              accentLabel="英"
+              ariaLabel={disabled ? tooltipLabel : `${label}：英式发音`}
+              disabled={disabled}
+              tooltipLabel={disabled ? tooltipLabel : undefined}
+              onClick={() => handleSpeak(text, lang, `${scope}:british`, "british")}
+            />
+          ) : null}
         </>
       );
     }
@@ -275,7 +302,7 @@ export function WorkspacePage() {
 
   return (
     <section className="workspace-grid">
-      <section className="workspace-panel">
+      <section className="workspace-panel workspace-panel-source">
         <div className="workspace-panel-toolbar">
           <div className="workspace-badge-row" />
           <div className="workspace-actions">
@@ -331,6 +358,17 @@ export function WorkspacePage() {
         </div>
       </section>
 
+      <div className="workspace-swap-button-wrap">
+        <IconTooltipButton
+          className="workspace-swap-button"
+          disabled={!canSwapTranslation}
+          label={labels.swapSourceTranslation}
+          onClick={handleSwapTranslation}
+        >
+          <ArrowLeftRight size={16} />
+        </IconTooltipButton>
+      </div>
+
       <section className="workspace-panel">
         <div className="workspace-panel-toolbar">
           <div className="workspace-badge-row">
@@ -364,7 +402,7 @@ export function WorkspacePage() {
               "translation",
               labels.playTranslation,
             )}
-            <IconTooltipButton label={labels.copy} onClick={handleCopyResult} variant="primary">
+            <IconTooltipButton label={labels.copy} onClick={handleCopyResult}>
               <Copy size={16} />
             </IconTooltipButton>
             <IconTooltipButton
@@ -381,8 +419,8 @@ export function WorkspacePage() {
           <Textarea
             className={
               workspace.translating
-                ? "workspace-textarea workspace-textarea-busy bg-background text-[15px]"
-                : "workspace-textarea bg-background text-[15px]"
+                ? "workspace-textarea workspace-result-textarea workspace-textarea-busy bg-background text-[15px]"
+                : "workspace-textarea workspace-result-textarea bg-background text-[15px]"
             }
             value={workspace.translating ? "" : workspace.snapshot.result}
             readOnly
@@ -439,6 +477,7 @@ function SpeechButton({
 
 function IconTooltipButton({
   children,
+  className,
   disabled,
   label,
   onClick,
@@ -446,6 +485,7 @@ function IconTooltipButton({
   variant = "secondary",
 }: {
   children: React.ReactNode;
+  className?: string;
   disabled?: boolean;
   label: string;
   onClick: () => void;
@@ -455,6 +495,7 @@ function IconTooltipButton({
   const button = (
     <Button
       aria-label={label}
+      className={className}
       disabled={disabled}
       onClick={onClick}
       size={size}
@@ -480,4 +521,15 @@ function isScreenshotSelectionCancelled(error: unknown) {
 
 function autoTranslateKey(sourceText: string, targetLang: string) {
   return `${targetLang}\n${sourceText.trim()}`;
+}
+
+function inferSourceLang(text: string) {
+  if (/[\u4e00-\u9fff]/.test(text)) return "zh_cn";
+  if (/[a-zA-Z]/.test(text)) return "en";
+  return "zh_cn";
+}
+
+function visibleEnglishAccents(accents?: string[]): SpeechAccent[] {
+  if (!accents) return ["american", "british"];
+  return accents.filter((accent): accent is SpeechAccent => accent === "american" || accent === "british");
 }

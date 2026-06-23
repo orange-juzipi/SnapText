@@ -124,6 +124,7 @@ export function ResultWindowApp() {
   }
 
   function renderSpeechButtons(text: string, lang: string, scope: "source" | "translation", label: string) {
+    if (!speechReady || !text.trim()) return null;
     const disabled = !speechReady || !text.trim();
     const tooltipLabel = !text.trim()
       ? labels.noSpeechText
@@ -133,24 +134,29 @@ export function ResultWindowApp() {
           ? labels.speechUnsupported
           : label;
     if (lang === "en") {
+      const englishAccents = visibleEnglishAccents(config?.speech.english_accents);
       return (
         <>
-          <SpeechButton
-            active={activeSpeechKey === `${scope}:american`}
-            accentLabel="美"
-            ariaLabel={disabled ? tooltipLabel : `${label}：美式发音`}
-            disabled={disabled}
-            tooltipLabel={disabled ? tooltipLabel : undefined}
-            onClick={() => handleSpeak(text, lang, `${scope}:american`, "american")}
-          />
-          <SpeechButton
-            active={activeSpeechKey === `${scope}:british`}
-            accentLabel="英"
-            ariaLabel={disabled ? tooltipLabel : `${label}：英式发音`}
-            disabled={disabled}
-            tooltipLabel={disabled ? tooltipLabel : undefined}
-            onClick={() => handleSpeak(text, lang, `${scope}:british`, "british")}
-          />
+          {englishAccents.includes("american") ? (
+            <SpeechButton
+              active={activeSpeechKey === `${scope}:american`}
+              accentLabel="美"
+              ariaLabel={disabled ? tooltipLabel : `${label}：美式发音`}
+              disabled={disabled}
+              tooltipLabel={disabled ? tooltipLabel : undefined}
+              onClick={() => handleSpeak(text, lang, `${scope}:american`, "american")}
+            />
+          ) : null}
+          {englishAccents.includes("british") ? (
+            <SpeechButton
+              active={activeSpeechKey === `${scope}:british`}
+              accentLabel="英"
+              ariaLabel={disabled ? tooltipLabel : `${label}：英式发音`}
+              disabled={disabled}
+              tooltipLabel={disabled ? tooltipLabel : undefined}
+              onClick={() => handleSpeak(text, lang, `${scope}:british`, "british")}
+            />
+          ) : null}
         </>
       );
     }
@@ -282,4 +288,9 @@ function IconTooltipButton({
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>
   );
+}
+
+function visibleEnglishAccents(accents?: string[]): SpeechAccent[] {
+  if (!accents) return ["american", "british"];
+  return accents.filter((accent): accent is SpeechAccent => accent === "american" || accent === "british");
 }

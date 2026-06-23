@@ -61,6 +61,7 @@ export type OcrConfig = {
 export type SpeechConfig = {
   enabled: boolean;
   english_accent: string;
+  english_accents: string[];
   rate: number;
   volume: number;
 };

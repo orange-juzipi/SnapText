@@ -1,13 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Keyboard, MonitorCog, ServerCog, Volume2 } from "lucide-react";
+import { ArrowLeft, Check, Eye, EyeOff, Keyboard, MonitorCog, ServerCog, Volume2 } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { labelsForLanguage } from "@/lib/labels";
 import { useConfigQuery, useUpdateConfigMutation } from "@/lib/queries";
-import type { AppConfig } from "@/lib/types";
+import type { AppConfig, HotkeyConfig } from "@/lib/types";
 import { useWorkspaceState } from "@/app/workspace-state";
 import { clientSnapTextCloudEndpoint } from "@/lib/snaptext-cloud";
+import deeplProviderIcon from "@/assets/provider-icons/deepl.svg";
+import googleTranslateProviderIcon from "@/assets/provider-icons/google-translate.ico";
+import snaptextProviderIcon from "@/assets/provider-icons/snaptext.svg";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -20,12 +30,19 @@ type QueuedSave = {
   version: number;
 };
 
+const DEFAULT_HOTKEYS: HotkeyConfig = {
+  screenshot: "Alt+W",
+  selection: "Alt+E",
+};
+
 export function SettingsPage() {
   const configQuery = useConfigQuery();
   const updateConfig = useUpdateConfigMutation();
   const workspace = useWorkspaceState();
   const [draft, setDraft] = useState<AppConfig | null>(null);
   const [activeTab, setActiveTab] = useState<SettingsTab>("interface");
+  const [providerDialogOpen, setProviderDialogOpen] = useState(false);
+  const [providerSaveError, setProviderSaveError] = useState("");
   const userEditedRef = useRef(false);
   const savingRef = useRef(false);
   const queuedSaveRef = useRef<QueuedSave | null>(null);
@@ -90,6 +107,23 @@ export function SettingsPage() {
       if (queuedSave) {
         await saveConfig(queuedSave.draft, queuedSave.version);
       }
+    }
+  }
+
+  async function saveProviderConfig(nextDraft: AppConfig) {
+    if (!draft) return;
+    try {
+      setProviderSaveError("");
+      const mergedDraft = mergeProviderConfig(draft, nextDraft);
+      const saved = await updateConfig.mutateAsync(sanitizeConfig(mergedDraft));
+      userEditedRef.current = false;
+      queuedSaveRef.current = null;
+      setDraft(ensureSpeechDefaults(saved));
+      setProviderDialogOpen(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setProviderSaveError(message);
+      workspace.showError(message);
     }
   }
 
@@ -213,36 +247,34 @@ export function SettingsPage() {
             <h2>{labels.settingsHotkeys}</h2>
           </div>
           <div className="settings-grid">
-            <Field>
-              <FieldLabel>{labels.screenshotHotkey}</FieldLabel>
-              <HotkeyInput
-                labels={labels}
-                value={draft.hotkeys.screenshot}
-                onChange={(value) =>
-                  updateDraft(
-                    setDraft,
-                    userEditedRef,
-                    editVersionRef,
-                    (next) => (next.hotkeys.screenshot = value),
-                  )
-                }
-              />
-            </Field>
-            <Field>
-              <FieldLabel>{labels.selectionHotkey}</FieldLabel>
-              <HotkeyInput
-                labels={labels}
-                value={draft.hotkeys.selection}
-                onChange={(value) =>
-                  updateDraft(
-                    setDraft,
-                    userEditedRef,
-                    editVersionRef,
-                    (next) => (next.hotkeys.selection = value),
-                  )
-                }
-              />
-            </Field>
+            <HotkeySettingField
+              labels={labels}
+              label={labels.screenshotHotkey}
+              value={draft.hotkeys.screenshot}
+              defaultValue={DEFAULT_HOTKEYS.screenshot}
+              onChange={(value) =>
+                updateDraft(
+                  setDraft,
+                  userEditedRef,
+                  editVersionRef,
+                  (next) => (next.hotkeys.screenshot = value),
+                )
+              }
+            />
+            <HotkeySettingField
+              labels={labels}
+              label={labels.selectionHotkey}
+              value={draft.hotkeys.selection}
+              defaultValue={DEFAULT_HOTKEYS.selection}
+              onChange={(value) =>
+                updateDraft(
+                  setDraft,
+                  userEditedRef,
+                  editVersionRef,
+                  (next) => (next.hotkeys.selection = value),
+                )
+              }
+            />
           </div>
           </section>
 
@@ -255,30 +287,14 @@ export function SettingsPage() {
           <div className="settings-section-heading">
             <h2>{labels.provider}</h2>
           </div>
-          <Field>
-            <FieldLabel>{labels.provider}</FieldLabel>
-            <Select
-              value={providerConfig}
-              onChange={(event) =>
-                updateDraft(
-                  setDraft,
-                  userEditedRef,
-                  editVersionRef,
-                  (next) => (next.translator.provider = event.target.value),
-                )
-              }
-            >
-              <option value="snaptext_cloud">{labels.snaptextCloudProvider}</option>
-              <option value="deepl">DeepL</option>
-              <option value="google">Google</option>
-            </Select>
-          </Field>
-          <ProviderFields
-            draft={draft}
-            setDraft={setDraft}
-            userEditedRef={userEditedRef}
-            editVersionRef={editVersionRef}
+          <ProviderSummary
+            config={draft}
+            labels={labels}
             provider={providerConfig}
+            onConfigure={() => {
+              setProviderSaveError("");
+              setProviderDialogOpen(true);
+            }}
           />
           </section>
 
@@ -292,9 +308,9 @@ export function SettingsPage() {
             <h2>{labels.speech}</h2>
           </div>
           <div className="settings-grid settings-speech-grid">
-            <label className="settings-toggle-row">
+            <label className="settings-switch-row">
               <Switch
-                checked={draft.speech.enabled}
+                checked={speechEnabled}
                 onCheckedChange={(checked) =>
                   updateDraft(
                     setDraft,
@@ -307,28 +323,63 @@ export function SettingsPage() {
               {labels.speechEnabled}
             </label>
             <Field>
-              <FieldLabel>{labels.englishAccent}</FieldLabel>
-              <Select
-                disabled={!speechEnabled}
-                value={draft.speech.english_accent}
-                onChange={(event) =>
-                  updateDraft(
-                    setDraft,
-                    userEditedRef,
-                    editVersionRef,
-                    (next) => (next.speech.english_accent = event.target.value),
-                  )
-                }
-              >
-                <option value="american">{labels.englishAccentAmerican}</option>
-                <option value="british">{labels.englishAccentBritish}</option>
-              </Select>
+              <FieldLabel>{labels.speechAccents}</FieldLabel>
+              <div className="settings-checkbox-stack">
+                <label className="settings-checkbox-row">
+                  <Checkbox
+                    checked={draft.speech.english_accents.includes("american")}
+                    disabled={!speechEnabled}
+                    onCheckedChange={(checked) =>
+                      updateDraft(
+                        setDraft,
+                        userEditedRef,
+                        editVersionRef,
+                        (next) => {
+                          next.speech.english_accents = toggleSpeechAccent(
+                            next.speech.english_accents,
+                            "american",
+                            checked === true,
+                          );
+                          next.speech.english_accent = preferredSpeechAccent(
+                            next.speech.english_accents,
+                          );
+                        },
+                      )
+                    }
+                  />
+                  <span>{labels.englishAccentAmerican}</span>
+                </label>
+                <label className="settings-checkbox-row">
+                  <Checkbox
+                    checked={draft.speech.english_accents.includes("british")}
+                    disabled={!speechEnabled}
+                    onCheckedChange={(checked) =>
+                      updateDraft(
+                        setDraft,
+                        userEditedRef,
+                        editVersionRef,
+                        (next) => {
+                          next.speech.english_accents = toggleSpeechAccent(
+                            next.speech.english_accents,
+                            "british",
+                            checked === true,
+                          );
+                          next.speech.english_accent = preferredSpeechAccent(
+                            next.speech.english_accents,
+                          );
+                        },
+                      )
+                    }
+                  />
+                  <span>{labels.englishAccentBritish}</span>
+                </label>
+              </div>
             </Field>
             <SpeechSliderField
               disabled={!speechEnabled}
               label={labels.speechRate}
-              min={0.1}
               max={3}
+              min={0.1}
               step={0.1}
               value={draft.speech.rate}
               formatValue={(value) => `${value.toFixed(1)}x`}
@@ -344,8 +395,8 @@ export function SettingsPage() {
             <SpeechSliderField
               disabled={!speechEnabled}
               label={labels.speechVolume}
-              min={0}
               max={1}
+              min={0}
               step={0.05}
               value={draft.speech.volume}
               formatValue={(value) => `${Math.round(value * 100)}%`}
@@ -362,71 +413,262 @@ export function SettingsPage() {
           </section>
         </div>
       </CardContent>
+      <ProviderDialog
+        config={draft}
+        error={providerSaveError}
+        labels={labels}
+        open={providerDialogOpen}
+        saving={updateConfig.isPending}
+        onOpenChange={(open) => {
+          setProviderDialogOpen(open);
+          if (!open) setProviderSaveError("");
+        }}
+        onSave={saveProviderConfig}
+      />
     </Card>
   );
 }
 
-function ProviderFields({
-  draft,
-  setDraft,
-  userEditedRef,
-  editVersionRef,
+function HotkeySettingField({
+  defaultValue,
+  label,
+  labels,
+  onChange,
+  value,
+}: {
+  defaultValue: string;
+  label: string;
+  labels: ReturnType<typeof labelsForLanguage>;
+  onChange: (value: string) => void;
+  value: string;
+}) {
+  const normalizedValue = normalizeShortcutForConfig(value);
+  const normalizedDefaultValue = normalizeShortcutForConfig(defaultValue);
+
+  return (
+    <div className="settings-hotkey-field">
+      <FieldLabel>{label}</FieldLabel>
+      <div className="settings-hotkey-row">
+        <HotkeyInput
+          labels={labels}
+          value={value}
+          onChange={onChange}
+        />
+        <Button
+          type="button"
+          variant="secondary"
+          disabled={normalizedValue === normalizedDefaultValue}
+          onClick={() => onChange(defaultValue)}
+        >
+          {labels.resetHotkey}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+type ProviderId = "snaptext_cloud" | "deepl" | "google";
+
+function ProviderSummary({
+  config,
+  labels,
+  onConfigure,
   provider,
 }: {
-  draft: AppConfig;
-  setDraft: React.Dispatch<React.SetStateAction<AppConfig | null>>;
-  userEditedRef: React.MutableRefObject<boolean>;
-  editVersionRef: React.MutableRefObject<number>;
+  config: AppConfig;
+  labels: ReturnType<typeof labelsForLanguage>;
+  onConfigure: () => void;
   provider: string;
 }) {
-  if (provider === "snaptext_cloud") {
-    return null;
-  }
-  if (provider === "deepl") {
-    return (
-      <div className="settings-grid">
-        <ProviderInput
-          draft={draft}
-          setDraft={setDraft}
-          userEditedRef={userEditedRef}
-          editVersionRef={editVersionRef}
-          path="deepl_base_url"
-          label="DeepL base URL"
-        />
-        <ProviderInput
-          draft={draft}
-          setDraft={setDraft}
-          userEditedRef={userEditedRef}
-          editVersionRef={editVersionRef}
-          path="deepl_api_key"
-          label="DeepL API key"
-        />
+  const providerId = visibleProvider(provider) as ProviderId;
+  const meta = providerMeta(providerId, labels);
+  return (
+    <div className="settings-provider-summary">
+      <div className="settings-provider-summary-main">
+        <span className={`settings-provider-logo settings-provider-logo-${providerId}`}>
+          <img src={meta.icon} alt="" aria-hidden="true" />
+        </span>
+        <div className="settings-provider-summary-copy">
+          <span className="settings-provider-eyebrow">{labels.currentProvider}</span>
+          <strong>{meta.name}</strong>
+        </div>
       </div>
-    );
+      <Button type="button" onClick={onConfigure}>
+        {labels.configureProvider}
+      </Button>
+    </div>
+  );
+}
+
+function ProviderDialog({
+  config,
+  error,
+  labels,
+  onOpenChange,
+  onSave,
+  open,
+  saving,
+}: {
+  config: AppConfig;
+  error: string;
+  labels: ReturnType<typeof labelsForLanguage>;
+  onOpenChange: (open: boolean) => void;
+  onSave: (config: AppConfig) => Promise<void>;
+  open: boolean;
+  saving: boolean;
+}) {
+  const [localConfig, setLocalConfig] = useState<AppConfig>(() => structuredClone(config));
+  const [showApiKey, setShowApiKey] = useState(false);
+  const selectedProvider = visibleProvider(localConfig.translator.provider) as ProviderId;
+  const selectedMeta = providerMeta(selectedProvider, labels);
+  const requiresApiKey = selectedProvider === "deepl" || selectedProvider === "google";
+  const apiKey = selectedProvider === "deepl"
+    ? localConfig.translator.deepl.api_key ?? ""
+    : selectedProvider === "google"
+      ? localConfig.translator.google.api_key ?? ""
+      : "";
+  const canSave = !saving && (!requiresApiKey || apiKey.trim().length > 0);
+
+  useEffect(() => {
+    if (!open) return;
+    setLocalConfig(structuredClone(config));
+    setShowApiKey(false);
+  }, [config, open]);
+
+  function updateLocal(updater: (next: AppConfig) => void) {
+    setLocalConfig((current) => {
+      const next = structuredClone(current);
+      updater(next);
+      return next;
+    });
   }
-  if (provider === "google") {
-    return (
-      <div className="settings-grid">
-        <ProviderInput
-          draft={draft}
-          setDraft={setDraft}
-          userEditedRef={userEditedRef}
-          editVersionRef={editVersionRef}
-          path="google_base_url"
-          label="Google base URL"
-        />
-        <ProviderInput
-          draft={draft}
-          setDraft={setDraft}
-          userEditedRef={userEditedRef}
-          editVersionRef={editVersionRef}
-          path="google_api_key"
-          label="Google API key"
-        />
-      </div>
-    );
+
+  function selectProvider(provider: ProviderId) {
+    updateLocal((next) => {
+      next.translator.provider = provider;
+      next.translator.snaptext_cloud.enabled = provider === "snaptext_cloud";
+    });
   }
-  return null;
+
+  function setProviderInput(path: ProviderInputPath, value: string) {
+    updateLocal((next) => setProviderValue(next, path, value));
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="settings-provider-dialog">
+        <DialogHeader>
+          <DialogTitle>{labels.providerDialogTitle}</DialogTitle>
+        </DialogHeader>
+
+        <div className="settings-provider-dialog-body">
+          <div className="settings-provider-list" role="radiogroup" aria-label={labels.provider}>
+            {PROVIDER_IDS.map((provider) => {
+              const meta = providerMeta(provider, labels);
+              const selected = provider === selectedProvider;
+              return (
+                <button
+                  key={provider}
+                  type="button"
+                  className={selected ? "settings-provider-card is-selected" : "settings-provider-card"}
+                  role="radio"
+                  aria-checked={selected}
+                  onClick={() => selectProvider(provider)}
+                >
+                  <span className={`settings-provider-logo settings-provider-logo-${provider}`}>
+                    <img src={meta.icon} alt="" aria-hidden="true" />
+                  </span>
+                  <span className="settings-provider-card-copy">
+                    <strong>{meta.name}</strong>
+                  </span>
+                  {selected ? <Check size={16} aria-hidden="true" /> : null}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="settings-provider-config-panel">
+            <div className="settings-provider-config-heading">
+              <span className={`settings-provider-logo settings-provider-logo-${selectedProvider}`}>
+                <img src={selectedMeta.icon} alt="" aria-hidden="true" />
+              </span>
+              <div>
+                <h3>{selectedMeta.name}</h3>
+              </div>
+            </div>
+
+            {selectedProvider === "snaptext_cloud" ? (
+              null
+            ) : (
+              <div className="settings-provider-form">
+                <Field>
+                  <FieldLabel>{selectedMeta.name} Base URL</FieldLabel>
+                  <Input
+                    value={
+                      selectedProvider === "deepl"
+                        ? localConfig.translator.deepl.base_url
+                        : localConfig.translator.google.base_url
+                    }
+                    onChange={(event) =>
+                      setProviderInput(
+                        selectedProvider === "deepl" ? "deepl_base_url" : "google_base_url",
+                        event.target.value,
+                      )
+                    }
+                  />
+                </Field>
+
+                <Field>
+                  <FieldLabel>{selectedMeta.name} API Key</FieldLabel>
+                  <div className="settings-secret-input-row">
+                    <Input
+                      value={apiKey}
+                      type={showApiKey ? "text" : "password"}
+                      placeholder={labels.providerApiKeyPlaceholder}
+                      onChange={(event) =>
+                        setProviderInput(
+                          selectedProvider === "deepl" ? "deepl_api_key" : "google_api_key",
+                          event.target.value,
+                        )
+                      }
+                    />
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      aria-label={showApiKey ? labels.hideApiKey : labels.showApiKey}
+                      onClick={() => setShowApiKey((current) => !current)}
+                    >
+                      {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </Button>
+                  </div>
+                </Field>
+              </div>
+            )}
+
+            {requiresApiKey && !apiKey.trim() ? (
+              <p className="settings-provider-error">{labels.providerApiKeyRequired}</p>
+            ) : null}
+            {error ? <p className="settings-provider-error">{error}</p> : null}
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
+            {labels.cancel}
+          </Button>
+          <Button
+            type="button"
+            variant="primary"
+            disabled={!canSave}
+            onClick={() => onSave(localConfig)}
+          >
+            {saving ? labels.saving : labels.saveAndEnableProvider}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 function SpeechSliderField({
@@ -439,7 +681,7 @@ function SpeechSliderField({
   step,
   value,
 }: {
-  disabled: boolean;
+  disabled?: boolean;
   formatValue: (value: number) => string;
   label: string;
   max: number;
@@ -454,8 +696,7 @@ function SpeechSliderField({
         <FieldLabel>{label}</FieldLabel>
         <span className="settings-slider-value">{formatValue(value)}</span>
       </div>
-      <input
-        className="settings-slider"
+      <Input
         disabled={disabled}
         type="range"
         min={min}
@@ -469,13 +710,13 @@ function SpeechSliderField({
 }
 
 function LanguageChoiceGroup({
-  value,
   labels,
   onChange,
+  value,
 }: {
-  value: string;
   labels: ReturnType<typeof labelsForLanguage>;
   onChange: (value: string) => void;
+  value: string;
 }) {
   return (
     <Select value={value} onChange={(event) => onChange(event.target.value)}>
@@ -487,12 +728,12 @@ function LanguageChoiceGroup({
 
 function ThemeChoiceGroup({
   labels,
-  value,
   onChange,
+  value,
 }: {
   labels: ReturnType<typeof labelsForLanguage>;
-  value: string;
   onChange: (value: string) => void;
+  value: string;
 }) {
   return (
     <div className="settings-theme-options" role="radiogroup" aria-label={labels.theme}>
@@ -572,50 +813,6 @@ type ProviderInputPath =
   | "google_base_url"
   | "google_api_key";
 
-function ProviderInput({
-  draft,
-  setDraft,
-  userEditedRef,
-  editVersionRef,
-  path,
-  label,
-}: {
-  draft: AppConfig;
-  setDraft: React.Dispatch<React.SetStateAction<AppConfig | null>>;
-  userEditedRef: React.MutableRefObject<boolean>;
-  editVersionRef: React.MutableRefObject<number>;
-  path: ProviderInputPath;
-  label: string;
-}) {
-  const value = providerValue(draft, path);
-  return (
-    <Field>
-      <FieldLabel>{label}</FieldLabel>
-      <Input
-        value={value}
-        onChange={(event) =>
-          updateDraft(setDraft, userEditedRef, editVersionRef, (next) =>
-            setProviderValue(next, path, event.target.value),
-          )
-        }
-      />
-    </Field>
-  );
-}
-
-function providerValue(config: AppConfig, path: ProviderInputPath) {
-  switch (path) {
-    case "deepl_base_url":
-      return config.translator.deepl.base_url;
-    case "deepl_api_key":
-      return config.translator.deepl.api_key ?? "";
-    case "google_base_url":
-      return config.translator.google.base_url;
-    case "google_api_key":
-      return config.translator.google.api_key ?? "";
-  }
-}
-
 function setProviderValue(
   config: AppConfig,
   path: ProviderInputPath,
@@ -634,6 +831,28 @@ function setProviderValue(
     case "google_api_key":
       config.translator.google.api_key = value;
       break;
+  }
+}
+
+const PROVIDER_IDS: ProviderId[] = ["snaptext_cloud", "deepl", "google"];
+
+function providerMeta(provider: ProviderId, labels: ReturnType<typeof labelsForLanguage>) {
+  switch (provider) {
+    case "snaptext_cloud":
+      return {
+        icon: snaptextProviderIcon,
+        name: labels.snaptextCloudProvider,
+      };
+    case "deepl":
+      return {
+        icon: deeplProviderIcon,
+        name: "DeepL",
+      };
+    case "google":
+      return {
+        icon: googleTranslateProviderIcon,
+        name: "Google Translate",
+      };
   }
 }
 
@@ -950,6 +1169,15 @@ function updateDraft(
   });
 }
 
+function mergeProviderConfig(current: AppConfig, providerDraft: AppConfig): AppConfig {
+  const next = structuredClone(current);
+  next.translator.provider = providerDraft.translator.provider;
+  next.translator.snaptext_cloud = structuredClone(providerDraft.translator.snaptext_cloud);
+  next.translator.deepl = structuredClone(providerDraft.translator.deepl);
+  next.translator.google = structuredClone(providerDraft.translator.google);
+  return next;
+}
+
 function sanitizeConfig(config: AppConfig): AppConfig {
   const next = ensureSpeechDefaults(config);
   next.target_lang = next.target_lang.trim();
@@ -977,8 +1205,8 @@ function sanitizeConfig(config: AppConfig): AppConfig {
   next.translator.google.api_key = optionalTrim(next.translator.google.api_key);
   next.translator.local_http.endpoint =
     next.translator.local_http.endpoint.trim();
-  next.speech.english_accent =
-    next.speech.english_accent === "british" ? "british" : "american";
+  next.speech.english_accents = normalizeSpeechAccents(next.speech.english_accents);
+  next.speech.english_accent = preferredSpeechAccent(next.speech.english_accents);
   next.speech.rate = clampNumber(next.speech.rate, 0.1, 3);
   next.speech.volume = clampNumber(next.speech.volume, 0, 1);
   return next;
@@ -995,6 +1223,8 @@ function ensureSpeechDefaults(config: AppConfig): AppConfig {
     ...defaultSpeechConfig(),
     ...(next.speech ?? {}),
   };
+  next.speech.english_accents = normalizeSpeechAccents(next.speech.english_accents);
+  next.speech.english_accent = preferredSpeechAccent(next.speech.english_accents);
   return next;
 }
 
@@ -1002,9 +1232,32 @@ function defaultSpeechConfig() {
   return {
     enabled: true,
     english_accent: "american",
+    english_accents: ["american", "british"],
     rate: 1,
     volume: 1,
   };
+}
+
+function toggleSpeechAccent(accents: string[], accent: string, enabled: boolean) {
+  const current = normalizeSpeechAccents(accents);
+  if (!enabled) return current.filter((value) => value !== accent);
+  return normalizeSpeechAccents([...current, accent]);
+}
+
+function preferredSpeechAccent(accents: string[]) {
+  return accents.includes("british") && !accents.includes("american")
+    ? "british"
+    : "american";
+}
+
+function normalizeSpeechAccents(accents: string[] | undefined) {
+  const normalized: string[] = [];
+  for (const accent of accents ?? []) {
+    if ((accent === "american" || accent === "british") && !normalized.includes(accent)) {
+      normalized.push(accent);
+    }
+  }
+  return normalized;
 }
 
 function clampNumber(value: number, min: number, max: number) {

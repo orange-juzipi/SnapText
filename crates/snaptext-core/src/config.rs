@@ -175,6 +175,8 @@ pub struct SpeechConfig {
     pub enabled: bool,
     #[serde(default = "default_english_accent")]
     pub english_accent: EnglishAccent,
+    #[serde(default = "default_english_accents")]
+    pub english_accents: Vec<EnglishAccent>,
     pub rate: f32,
     pub volume: f32,
 }
@@ -191,6 +193,7 @@ impl Default for SpeechConfig {
         Self {
             enabled: true,
             english_accent: EnglishAccent::American,
+            english_accents: default_english_accents(),
             rate: 1.0,
             volume: 1.0,
         }
@@ -199,6 +202,10 @@ impl Default for SpeechConfig {
 
 fn default_english_accent() -> EnglishAccent {
     EnglishAccent::American
+}
+
+fn default_english_accents() -> Vec<EnglishAccent> {
+    vec![EnglishAccent::American, EnglishAccent::British]
 }
 
 impl Default for AppConfig {
@@ -556,6 +563,13 @@ fn normalize_model_dir(model_dir: ModelDir) -> ModelDir {
 }
 
 fn normalize_speech_config(mut config: SpeechConfig) -> SpeechConfig {
+    let mut english_accents = Vec::new();
+    for accent in config.english_accents {
+        if !english_accents.contains(&accent) {
+            english_accents.push(accent);
+        }
+    }
+    config.english_accents = english_accents;
     config.rate = config.rate.clamp(0.1, 3.0);
     config.volume = config.volume.clamp(0.0, 1.0);
     config
@@ -609,6 +623,10 @@ mod tests {
         assert_eq!(config.ui.language, UiLanguage::ZhCn);
         assert_eq!(config.speech.english_accent, EnglishAccent::American);
         assert_eq!(
+            config.speech.english_accents,
+            vec![EnglishAccent::American, EnglishAccent::British]
+        );
+        assert_eq!(
             config.translator.snaptext_cloud.endpoint,
             snaptext_cloud_production_endpoint()
         );
@@ -636,6 +654,11 @@ mod tests {
         config.ocr.model_dir = ModelDir::Custom(PathBuf::from(" ./models "));
         config.speech.rate = 4.0;
         config.speech.volume = -1.0;
+        config.speech.english_accents = vec![
+            EnglishAccent::American,
+            EnglishAccent::American,
+            EnglishAccent::British,
+        ];
 
         let normalized = config.normalized_for_save();
 
@@ -655,6 +678,10 @@ mod tests {
         assert_eq!(
             normalized.ocr.model_dir,
             ModelDir::Custom(PathBuf::from("./models"))
+        );
+        assert_eq!(
+            normalized.speech.english_accents,
+            vec![EnglishAccent::American, EnglishAccent::British]
         );
         assert_eq!(normalized.speech.rate, 3.0);
         assert_eq!(normalized.speech.volume, 0.0);
@@ -692,6 +719,8 @@ ocr:
 speech:
   enabled: true
   english_accent: british
+  english_accents:
+    - american
   rate: 1.5
   volume: 0.8
 "#;
@@ -717,6 +746,7 @@ speech:
             ModelDir::Custom(PathBuf::from("./models"))
         );
         assert_eq!(loaded.speech.english_accent, EnglishAccent::British);
+        assert_eq!(loaded.speech.english_accents, vec![EnglishAccent::American]);
         assert_eq!(loaded.speech.rate, 1.5);
         assert_eq!(loaded.speech.volume, 0.8);
 
@@ -730,6 +760,8 @@ speech:
         assert!(saved.contains("api_key: sk-test"));
         assert!(saved.contains("model: gpt-test"));
         assert!(saved.contains("english_accent: british"));
+        assert!(saved.contains("english_accents:"));
+        assert!(saved.contains("- american"));
         assert!(!saved.contains("\" fr \""));
         assert!(!saved.contains("\" sk-test \""));
     }
