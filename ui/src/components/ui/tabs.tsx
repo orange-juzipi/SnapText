@@ -27,11 +27,11 @@ export function TabsLink({
     <Link
       to={to}
       className={cn(
-        "inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-md px-3 text-sm font-semibold text-muted-foreground transition-[background-color,box-shadow,color,transform] duration-[var(--motion-base)] ease-[var(--ease-out-quart)] hover:-translate-y-px hover:bg-background hover:text-foreground active:translate-y-0 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring [&_svg]:transition-transform [&_svg]:duration-[var(--motion-fast)] [&_svg]:ease-[var(--ease-out-quart)] hover:[&_svg]:scale-[1.05]",
+        "inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-md px-3 text-sm font-semibold text-muted-foreground transition-[background-color,box-shadow,color] duration-[var(--motion-base)] ease-[var(--ease-out-quart)] hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring [&_svg]:shrink-0",
         className,
       )}
       activeProps={{
-        className: "bg-background text-foreground shadow-xs",
+        className: "bg-card text-foreground shadow-xs",
       }}
     >
       {children}

@@ -240,8 +240,7 @@ textarea {
   transition:
     background-color var(--motion-base) var(--ease-out-quart),
     color var(--motion-base) var(--ease-out-quart),
-    box-shadow var(--motion-base) var(--ease-out-quart),
-    transform var(--motion-fast) var(--ease-out-quart);
+    box-shadow var(--motion-base) var(--ease-out-quart);
 }
 
 .settings-tab:hover,
@@ -251,27 +250,11 @@ textarea {
   box-shadow: var(--shadow-xs);
 }
 
-.settings-tab:hover {
-  transform: translateY(-1px);
-}
-
-.settings-tab:active {
-  transform: translateY(0) scale(0.98);
-}
-
 .settings-tab:focus-visible {
   outline: none;
   box-shadow:
     var(--shadow-xs),
     0 0 0 3px var(--color-ring);
-}
-
-.settings-tab svg {
-  transition: transform var(--motion-fast) var(--ease-out-quart);
-}
-
-.settings-tab:hover svg {
-  transform: scale(1.05);
 }
 
 .settings-tab-panel {
@@ -986,8 +969,7 @@ textarea {
     background-color var(--motion-base) var(--ease-out-quart),
     border-color var(--motion-base) var(--ease-out-quart),
     color var(--motion-base) var(--ease-out-quart),
-    box-shadow var(--motion-base) var(--ease-out-quart),
-    transform var(--motion-base) var(--ease-out-quart);
+    box-shadow var(--motion-base) var(--ease-out-quart);
 }
 
 .workspace-provider-label span {
@@ -1007,13 +989,11 @@ textarea {
   background: color-mix(in srgb, var(--color-primary) 10%, var(--color-control));
   color: var(--color-foreground);
   box-shadow: var(--shadow-xs);
-  transform: translateY(-1px);
 }
 
 .workspace-provider-label:disabled {
   cursor: not-allowed;
   opacity: 0.55;
-  transform: none;
 }
 
 .workspace-provider-label:focus-visible {

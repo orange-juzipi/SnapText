@@ -4,7 +4,7 @@ import type * as React from "react";
 import { cn } from "@/lib/cn";
 
 const buttonVariants = cva(
-  "group/snaptext-button inline-flex h-9 items-center justify-center gap-2 rounded-md px-3 text-sm font-semibold transition-[background-color,border-color,box-shadow,color,filter,transform] duration-[var(--motion-base)] ease-[var(--ease-out-quart)] hover:-translate-y-px active:translate-y-0 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring disabled:pointer-events-none disabled:translate-y-0 disabled:scale-100 disabled:opacity-55 [&_svg]:shrink-0 [&_svg]:transition-transform [&_svg]:duration-[var(--motion-fast)] [&_svg]:ease-[var(--ease-out-quart)] hover:[&_svg]:scale-[1.05]",
+  "group/snaptext-button inline-flex h-9 items-center justify-center gap-2 rounded-md px-3 text-sm font-semibold transition-[background-color,border-color,box-shadow,color,filter] duration-[var(--motion-base)] ease-[var(--ease-out-quart)] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-55 [&_svg]:shrink-0",
   {
     variants: {
       variant: {
