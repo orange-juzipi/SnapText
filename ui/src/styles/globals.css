@@ -1171,6 +1171,11 @@ textarea {
   padding-right: 4.6rem;
 }
 
+.workspace-source-textarea {
+  /* Reserve bottom space for pinyin, speech controls, and the character counter. */
+  padding-bottom: 6.15rem;
+}
+
 .workspace-textarea-controls {
   position: absolute;
   right: 0.75rem;
@@ -1192,6 +1197,41 @@ textarea {
   align-items: center;
   gap: 0.5rem;
   pointer-events: auto;
+}
+
+.workspace-source-pinyin {
+  position: absolute;
+  right: 3.4rem;
+  bottom: 3.2rem;
+  left: 0.95rem;
+  z-index: 2;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--color-muted-foreground) 88%, var(--color-foreground));
+  font-size: 0.74rem;
+  font-weight: 520;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.workspace-source-count {
+  position: absolute;
+  right: 0.95rem;
+  bottom: 0.75rem;
+  z-index: 2;
+  display: inline-flex;
+  height: 2.5rem;
+  min-width: 1.55rem;
+  align-items: center;
+  justify-content: flex-end;
+  color: color-mix(in srgb, var(--color-muted-foreground) 82%, var(--color-foreground));
+  font-size: 0.76rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 620;
+  line-height: 1;
+  text-align: right;
+  pointer-events: none;
 }
 
 .workspace-textarea-controls .group\/snaptext-button {

@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type * as React from "react";
 import { ArrowLeftRight, ChevronDown, Copy, LoaderCircle, Pin, ScanText, Volume2, X } from "lucide-react";
+import { pinyin } from "pinyin-pro";
 import { startScreenshotOverlay, unpinResultWindow } from "@/lib/api";
 import { translatorProviderDetailLabel } from "@/lib/format";
 import { labelsForLanguage } from "@/lib/labels";
@@ -9,6 +10,7 @@ import {
   DEFAULT_TARGET_LANG,
   detectSourceLang,
   languageDisplayName,
+  looksLikeChinese,
   normalizeTargetLang,
   resolveSourceLang,
   resolveSourceSpeechLang,
@@ -61,6 +63,20 @@ export function WorkspacePage() {
     Boolean(configQuery.data) && isSpeechSupported(configQuery.data?.speech);
   const hasSourceText = Boolean(workspace.textInput.trim());
   const hasTranslationText = Boolean(workspace.snapshot.result.trim());
+  const sourceCharacterCount = useMemo(
+    () => Array.from(workspace.textInput.replace(/\s/g, "")).length,
+    [workspace.textInput],
+  );
+  const sourcePinyin = useMemo(() => {
+    const sourceText = workspace.textInput.trim();
+    if (!sourceText || !looksLikeChinese(sourceText)) return "";
+    // Limit the helper line so a long OCR block cannot cover the textarea controls.
+    const pinyinText = pinyin(sourceText, {
+      nonZh: "removed",
+      toneType: "symbol",
+    }).replace(/\s+/g, " ").trim();
+    return pinyinText.length > 180 ? `${pinyinText.slice(0, 180)}...` : pinyinText;
+  }, [workspace.textInput]);
   const canSwapTranslation = Boolean(
     workspace.textInput.trim() &&
       workspace.snapshot.result.trim() &&
@@ -206,14 +222,18 @@ export function WorkspacePage() {
     const previousSourceText = workspace.snapshot.sourceText.trim() || workspace.textInput;
     const nextSourceLang = normalizeTargetLang(workspace.snapshot.targetLang || workspace.targetLang);
     const nextTargetLang = resolveSourceLang(previousSourceText, workspace.sourceLang) ?? DEFAULT_TARGET_LANG;
+    const nextSourceRequestLang = resolveSourceLang(nextTextInput, nextSourceLang) ?? AUTO_SOURCE_LANG;
     stopSpeech();
     setActiveSpeechKey(null);
     autoTranslatePendingRef.current = null;
-    lastAutoTranslatedKeyRef.current = "";
-    workspace.setTextInput(nextTextInput);
+    lastAutoTranslatedKeyRef.current = autoTranslateKey(nextTextInput, nextSourceRequestLang, nextTargetLang);
     workspace.setSourceLang(nextSourceLang);
     workspace.setTargetLang(nextTargetLang);
-    workspace.clearTranslation();
+    workspace.swapTextPanels({
+      sourceText: nextTextInput,
+      translatedText: previousSourceText,
+      targetLang: nextTargetLang,
+    });
   }
 
   function handleConfigureProvider() {
@@ -395,6 +415,16 @@ export function WorkspacePage() {
                   labels.playSource,
                 )}
               </div>
+            </div>
+          ) : null}
+          {!workspace.ocrLoading && sourcePinyin ? (
+            <div className="workspace-source-pinyin" aria-label={labels.sourcePinyin}>
+              {sourcePinyin}
+            </div>
+          ) : null}
+          {!workspace.ocrLoading && hasSourceText ? (
+            <div className="workspace-source-count" aria-label={labels.sourceCharacterCount}>
+              {sourceCharacterCount}
             </div>
           ) : null}
           {!workspace.ocrLoading && hasSourceText ? (

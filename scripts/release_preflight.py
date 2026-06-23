@@ -799,7 +799,9 @@ def main() -> int:
     for expected in (
         "clientSnapTextCloudEndpoint",
         'SNAPTEXT_CLOUD_ENDPOINT = "https://snaptext.uuidcx.com"',
-        'option value="snaptext_cloud"',
+        'const PROVIDER_IDS: ProviderId[] = ["snaptext_cloud", "deepl", "google"]',
+        'next.translator.provider = provider',
+        'next.translator.snaptext_cloud.enabled = provider === "snaptext_cloud"',
     ):
         check(expected in client_snaptext_source, f"settings page is missing SnapText source controls: {expected}")
     # 官方源默认直连线上地址；本地调试只允许 Tauri 开发运行时临时覆盖。
@@ -996,7 +998,7 @@ def main() -> int:
     )
 
     ci_workflow = read_text(ROOT / ".github/workflows/ci.yml")
-    for os_name in ("ubuntu-latest", "macos-latest", "windows-latest"):
+    for os_name in ("ubuntu-latest", "macos-15", "windows-latest"):
         check(os_name in ci_workflow, f"CI workflow is missing {os_name}")
     check(
         "Run Python self-tests" in ci_workflow,

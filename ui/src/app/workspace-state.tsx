@@ -44,6 +44,11 @@ type WorkspaceState = {
     translated_text: string;
     target_lang: string;
   }) => void;
+  swapTextPanels: (next: {
+    sourceText: string;
+    translatedText: string;
+    targetLang: string;
+  }) => void;
   clearTranslation: () => void;
   clearTextPanels: () => void;
   clearResult: () => void;
@@ -129,6 +134,21 @@ export function WorkspaceStateProvider({ children }: { children: ReactNode }) {
     [setResultSnapshot],
   );
 
+  const swapTextPanels = useCallback(
+    (next: { sourceText: string; translatedText: string; targetLang: string }) => {
+      // Swap is a local panel operation; do not create a history request or retranslate immediately.
+      setTextInput(next.sourceText);
+      setSnapshot({
+        result: next.translatedText,
+        sourceText: next.sourceText,
+        sourceKind: "text",
+        targetLang: next.targetLang,
+      });
+      setLastRequest(null);
+    },
+    [],
+  );
+
   const clearTranslation = useCallback(() => {
     setSnapshot(emptySnapshot);
     setLastRequest(null);
@@ -172,6 +192,7 @@ export function WorkspaceStateProvider({ children }: { children: ReactNode }) {
       setPinned,
       setOcrTextInput,
       setResultSnapshot,
+      swapTextPanels,
       setResultFromHistory,
       setResultFromTranslation,
       clearTranslation,
@@ -190,6 +211,7 @@ export function WorkspaceStateProvider({ children }: { children: ReactNode }) {
       setResultFromHistory,
       setResultFromTranslation,
       setResultSnapshot,
+      swapTextPanels,
       showToast,
       showError,
       snapshot,

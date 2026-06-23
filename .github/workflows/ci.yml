@@ -14,7 +14,9 @@ jobs:
         include:
           - os: ubuntu-latest
             install_linux_deps: true
-          - os: macos-latest
+          # Keep macOS CI on a stable image; macos-latest can jump to new Xcode images
+          # before Rust/native dependencies have updated linker search paths.
+          - os: macos-15
             install_linux_deps: false
           - os: windows-latest
             install_linux_deps: false
