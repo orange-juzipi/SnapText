@@ -111,7 +111,7 @@ textarea {
 .app-frame {
   display: grid;
   align-content: stretch;
-  width: min(100%, 82rem);
+  width: min(100%, 74rem);
   height: 100vh;
   gap: 0.85rem;
   margin-inline: auto;
