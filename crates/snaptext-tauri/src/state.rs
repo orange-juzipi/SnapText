@@ -16,6 +16,8 @@ use snaptext_core::{
     selection::SelectionWatcher, translate::TranslatorRegistry,
 };
 
+#[cfg(target_os = "macos")]
+use crate::voice_input::VoiceInputSession;
 use crate::{ScreenshotPayload, model::resolve_model_dir, translator_registry_for_config};
 
 pub struct AppState {
@@ -27,6 +29,8 @@ pub struct AppState {
     pub(crate) screencap: Screencap,
     pub(crate) selection: SelectionWatcher,
     pub(crate) pending_overlay: Mutex<Option<OverlaySession>>,
+    #[cfg(target_os = "macos")]
+    pub(crate) voice_input: Mutex<Option<VoiceInputSession>>,
     pub(crate) translator: RwLock<TranslatorRegistry>,
     #[cfg(test)]
     pub(crate) fake_translated_text: Mutex<Option<String>>,
@@ -87,6 +91,8 @@ impl AppState {
             screencap: Screencap::new()?,
             selection: SelectionWatcher::new()?,
             pending_overlay: Mutex::new(None),
+            #[cfg(target_os = "macos")]
+            voice_input: Mutex::new(None),
             translator: RwLock::new(translator),
             #[cfg(test)]
             fake_translated_text: Mutex::new(None),

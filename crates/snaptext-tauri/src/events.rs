@@ -16,6 +16,8 @@ const OVERLAY_OCR_STARTED_EVENT: &str = "snaptext://overlay-ocr-started";
 #[cfg(target_os = "macos")]
 const OVERLAY_OCR_FAILED_EVENT: &str = "snaptext://overlay-ocr-failed";
 const OVERLAY_OCR_EVENT: &str = "snaptext://overlay-ocr";
+#[cfg(target_os = "macos")]
+pub(crate) const VOICE_INPUT_PARTIAL_EVENT: &str = "snaptext://voice-input-partial";
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct OverlayTranslationPayload {
@@ -39,6 +41,12 @@ pub struct SelectionFailurePayload {
 pub struct SelectionTextPayload {
     pub text: String,
     pub app_bundle_id: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct VoiceInputPartialPayload {
+    pub text: String,
+    pub final_result: bool,
 }
 
 pub(crate) fn overlay_translation_event() -> &'static str {

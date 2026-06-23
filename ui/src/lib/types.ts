@@ -160,6 +160,15 @@ export type TranslationRequest = {
   target_lang?: string;
 };
 
+export type VoiceInputResult = {
+  text: string;
+};
+
+export type VoiceInputPartialPayload = {
+  text: string;
+  final_result: boolean;
+};
+
 export type WindowKind = "main" | "overlay" | "result";
 
 export type WorkspaceSnapshot = {

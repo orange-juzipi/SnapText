@@ -1253,8 +1253,15 @@ textarea {
   color: var(--color-primary);
 }
 
-.workspace-speech-button-active.group\/snaptext-button:hover {
+.workspace-speech-button-active.group\/snaptext-button:hover,
+.workspace-voice-input-active.group\/snaptext-button:hover {
   background: color-mix(in srgb, var(--color-primary) 18%, var(--color-card));
+  color: var(--color-primary);
+}
+
+.workspace-voice-input-active.group\/snaptext-button {
+  border-color: color-mix(in srgb, var(--color-primary) 42%, var(--color-border));
+  background: color-mix(in srgb, var(--color-primary) 16%, var(--color-card));
   color: var(--color-primary);
 }
 

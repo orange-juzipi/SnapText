@@ -26,6 +26,7 @@ mod payload;
 mod screenshots;
 mod state;
 mod tray;
+mod voice_input;
 mod window;
 use capabilities::{OcrModelStatus, validate_ocr_models_inner};
 use events::{
@@ -172,6 +173,9 @@ pub fn run_tauri(config: AppConfig, history: HistoryStore) -> Result<()> {
             close_overlay,
             pin_result_window,
             unpin_result_window,
+            voice_input_supported,
+            start_voice_input,
+            stop_voice_input,
             translate_current_selection,
             translate_text,
             translate_selection,
@@ -232,6 +236,30 @@ fn clear_history(state: State<'_, AppState>) -> Result<()> {
         .lock()
         .map_err(|err| Error::History(err.to_string()))?;
     history.clear()
+}
+
+#[derive(Debug, serde::Serialize)]
+struct VoiceInputResult {
+    text: String,
+}
+
+#[tauri::command]
+#[allow(dead_code)]
+fn voice_input_supported() -> bool {
+    cfg!(target_os = "macos")
+}
+
+#[tauri::command]
+#[allow(dead_code)]
+fn start_voice_input(app: AppHandle, state: State<'_, AppState>, locale: String) -> Result<()> {
+    voice_input::start_voice_input(state.inner(), app, locale)
+}
+
+#[tauri::command]
+#[allow(dead_code)]
+async fn stop_voice_input(state: State<'_, AppState>) -> Result<VoiceInputResult> {
+    let text = voice_input::stop_voice_input(state.inner()).await?;
+    Ok(VoiceInputResult { text })
 }
 
 #[tauri::command]

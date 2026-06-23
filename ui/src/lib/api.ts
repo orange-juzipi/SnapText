@@ -9,6 +9,7 @@ import type {
   ScreenshotPayload,
   TranslationRequest,
   TranslationResult,
+  VoiceInputResult,
 } from "@/lib/types";
 
 export const events = {
@@ -22,6 +23,7 @@ export const events = {
   resultSelectionFailed: "snaptext://result-selection-failed",
   resultSnapshot: "snaptext://result-snapshot",
   resultWindowState: "snaptext://result-window-state",
+  voiceInputPartial: "snaptext://voice-input-partial",
 } as const;
 
 export function getConfig() {
@@ -122,4 +124,16 @@ export function pinResultWindow() {
 
 export function unpinResultWindow() {
   return tauriInvoke<void>("unpin_result_window");
+}
+
+export function voiceInputSupported() {
+  return tauriInvoke<boolean>("voice_input_supported");
+}
+
+export function startVoiceInput(locale: string) {
+  return tauriInvoke<void>("start_voice_input", { locale });
+}
+
+export function stopVoiceInput() {
+  return tauriInvoke<VoiceInputResult>("stop_voice_input");
 }

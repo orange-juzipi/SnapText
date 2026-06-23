@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>SnapText 需要访问麦克风，用于将你的语音输入识别为原文。</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>SnapText 需要使用 macOS 语音识别，将录音内容转换为文本。</string>
+</dict>
+</plist>

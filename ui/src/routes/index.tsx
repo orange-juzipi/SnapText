@@ -1,8 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type * as React from "react";
-import { ArrowLeftRight, ChevronDown, Copy, LoaderCircle, Pin, ScanText, Volume2, X } from "lucide-react";
+import { ArrowLeftRight, ChevronDown, Copy, LoaderCircle, Mic, Pin, ScanText, Volume2, X } from "lucide-react";
 import { pinyin } from "pinyin-pro";
-import { startScreenshotOverlay, unpinResultWindow } from "@/lib/api";
+import {
+  startScreenshotOverlay,
+  startVoiceInput as startNativeVoiceInput,
+  stopVoiceInput as stopNativeVoiceInput,
+  unpinResultWindow,
+  voiceInputSupported,
+  events,
+} from "@/lib/api";
 import { translatorProviderDetailLabel } from "@/lib/format";
 import { labelsForLanguage } from "@/lib/labels";
 import {
@@ -23,8 +30,8 @@ import {
   useTranslateTextMutation,
   useUpdateConfigMutation,
 } from "@/lib/queries";
-import { copyText } from "@/lib/tauri";
-import type { HistoryRecord } from "@/lib/types";
+import { copyText, tauriListen } from "@/lib/tauri";
+import type { HistoryRecord, VoiceInputPartialPayload } from "@/lib/types";
 import { useWorkspaceState } from "@/app/workspace-state";
 import {
   mergeProviderConfig,
@@ -48,8 +55,15 @@ export function WorkspacePage() {
   const updateConfigMutation = useUpdateConfigMutation();
   const pinMutation = usePinResultMutation();
   const [activeSpeechKey, setActiveSpeechKey] = useState<string | null>(null);
+  const [voiceInputActive, setVoiceInputActive] = useState(false);
+  const [voiceInputAvailable, setVoiceInputAvailable] = useState(false);
+  const [voiceInputStopping, setVoiceInputStopping] = useState(false);
   const [providerDialogOpen, setProviderDialogOpen] = useState(false);
   const [providerSaveError, setProviderSaveError] = useState("");
+  const voiceInputActiveRef = useRef(false);
+  const voiceInputBaseTextRef = useRef("");
+  const voiceInputDraftRef = useRef("");
+  const textInputRef = useRef(workspace.textInput);
   const autoTranslatingRef = useRef(false);
   const autoTranslatePendingRef = useRef<{ sourceText: string; sourceLang: string; targetLang: string } | null>(null);
   const lastAutoTranslatedKeyRef = useRef("");
@@ -84,6 +98,55 @@ export function WorkspacePage() {
       !workspace.translating &&
       !translateTextMutation.isPending,
   );
+
+  useEffect(() => {
+    textInputRef.current = workspace.textInput;
+  }, [workspace.textInput]);
+
+  useEffect(() => {
+    let mounted = true;
+    voiceInputSupported()
+      .then((supported) => {
+        if (mounted) setVoiceInputAvailable(supported);
+      })
+      .catch(() => {
+        if (mounted) setVoiceInputAvailable(false);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    voiceInputActiveRef.current = voiceInputActive;
+  }, [voiceInputActive]);
+
+  useEffect(() => {
+    return () => {
+      if (voiceInputActiveRef.current) {
+        void stopNativeVoiceInput().catch(() => undefined);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void tauriListen<VoiceInputPartialPayload>(events.voiceInputPartial, (event) => {
+      if (!voiceInputActiveRef.current) return;
+      applyVoiceInputPartial(event.payload.text);
+    }).then((cleanup) => {
+      if (disposed) {
+        cleanup();
+      } else {
+        unlisten = cleanup;
+      }
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
     if (speechReady || !activeSpeechKey) return;
@@ -212,6 +275,7 @@ export function WorkspacePage() {
   function handleClearSourceText() {
     stopSpeech();
     setActiveSpeechKey(null);
+    void stopVoiceInput(false);
     workspace.clearTextPanels();
     workspace.setStatus(labels.sourceTextCleared);
   }
@@ -225,6 +289,7 @@ export function WorkspacePage() {
     const nextSourceRequestLang = resolveSourceLang(nextTextInput, nextSourceLang) ?? AUTO_SOURCE_LANG;
     stopSpeech();
     setActiveSpeechKey(null);
+    void stopVoiceInput(false);
     autoTranslatePendingRef.current = null;
     lastAutoTranslatedKeyRef.current = autoTranslateKey(nextTextInput, nextSourceRequestLang, nextTargetLang);
     workspace.setSourceLang(nextSourceLang);
@@ -289,6 +354,72 @@ export function WorkspacePage() {
       setActiveSpeechKey((current) => (current === key ? null : current));
       workspace.showError(errorMessage(error));
     }
+  }
+
+  async function handleToggleVoiceInput() {
+    if (voiceInputActive) {
+      await stopVoiceInput(true);
+      return;
+    }
+    if (!voiceInputAvailable) {
+      workspace.showError(labels.voiceInputUnsupported);
+      return;
+    }
+
+    stopSpeech();
+    setActiveSpeechKey(null);
+    voiceInputBaseTextRef.current = textInputRef.current;
+    voiceInputDraftRef.current = "";
+
+    try {
+      await startNativeVoiceInput(nativeVoiceInputLocaleForLanguage(
+        workspace.sourceLang,
+        workspace.textInput,
+        configQuery.data?.ui.language,
+      ));
+      setVoiceInputActive(true);
+      workspace.setStatus(labels.voiceInputListening);
+    } catch (error) {
+      setVoiceInputActive(false);
+      workspace.showError(errorMessage(error));
+    }
+  }
+
+  async function stopVoiceInput(appendResult: boolean) {
+    if (!voiceInputActiveRef.current) {
+      setVoiceInputActive(false);
+      return;
+    }
+    try {
+      setVoiceInputStopping(true);
+      if (appendResult) workspace.setStatus(labels.voiceInputRecognizing);
+      const result = await stopNativeVoiceInput();
+      if (appendResult && result.text.trim() && !voiceInputDraftRef.current.trim()) {
+        applyVoiceInputPartial(result.text);
+      }
+      if (appendResult && textInputRef.current.trim()) {
+        workspace.setStatus(labels.voiceInputCompleted);
+      } else {
+        workspace.setStatus(labels.ready);
+      }
+    } catch (error) {
+      if (appendResult) workspace.showError(errorMessage(error));
+    } finally {
+      setVoiceInputActive(false);
+      voiceInputActiveRef.current = false;
+      voiceInputBaseTextRef.current = "";
+      voiceInputDraftRef.current = "";
+      setVoiceInputStopping(false);
+    }
+  }
+
+  function applyVoiceInputPartial(transcript: string) {
+    const normalizedTranscript = transcript.trim();
+    if (!normalizedTranscript) return;
+    voiceInputDraftRef.current = normalizedTranscript;
+    const nextText = appendRecognizedText(voiceInputBaseTextRef.current, normalizedTranscript);
+    textInputRef.current = nextText;
+    workspace.setTextInput(nextText);
   }
 
   function renderSpeechButtons(text: string, lang: string, scope: "source" | "translation", label: string) {
@@ -408,6 +539,17 @@ export function WorkspacePage() {
           {!workspace.ocrLoading ? (
             <div className="workspace-textarea-controls">
               <div className="workspace-textarea-controls-left">
+                {voiceInputAvailable ? (
+                  <IconTooltipButton
+                    className={voiceInputActive ? "workspace-voice-input-active" : undefined}
+                    disabled={workspace.translating || voiceInputStopping}
+                    label={voiceInputActive ? labels.stopVoiceInput : labels.startVoiceInput}
+                    onClick={handleToggleVoiceInput}
+                    variant={voiceInputActive ? "primary" : "secondary"}
+                  >
+                    <Mic size={16} />
+                  </IconTooltipButton>
+                ) : null}
                 {renderSpeechButtons(
                   workspace.textInput,
                   sourceSpeechLang,
@@ -656,4 +798,55 @@ function autoTranslateKey(sourceText: string, sourceLang: string, targetLang: st
 function visibleEnglishAccents(accents?: string[]): SpeechAccent[] {
   if (!accents) return ["american", "british"];
   return accents.filter((accent): accent is SpeechAccent => accent === "american" || accent === "british");
+}
+
+function appendRecognizedText(currentText: string, transcript: string) {
+  const normalizedTranscript = transcript.trim();
+  if (!normalizedTranscript) return currentText;
+  const normalizedCurrent = currentText.trimEnd();
+  if (!normalizedCurrent) return normalizedTranscript;
+  // Keep voice dictation append-only so it does not overwrite typed or OCR source text.
+  return `${normalizedCurrent}${sourceTextJoiner(normalizedCurrent, normalizedTranscript)}${normalizedTranscript}`;
+}
+
+function sourceTextJoiner(currentText: string, transcript: string) {
+  const currentLast = Array.from(currentText).at(-1) ?? "";
+  const transcriptFirst = Array.from(transcript).at(0) ?? "";
+  if (isCjkCharacter(currentLast) && isCjkCharacter(transcriptFirst)) return "";
+  if (/[\s([{（《「『]$/u.test(currentLast) || /^[,，.。!?！？;；:：)\]}）〉」』]/u.test(transcriptFirst)) return "";
+  return " ";
+}
+
+function isCjkCharacter(value: string) {
+  return /[\u3400-\u9fff]/u.test(value);
+}
+
+function nativeVoiceInputLocaleForLanguage(sourceLang: string, sourceText: string, uiLanguage?: string) {
+  const resolvedLang = resolveSourceLang(sourceText, sourceLang) ?? sourceLang;
+  switch (resolvedLang) {
+    case "zh_cn":
+      return "zh-CN";
+    case "zh_tw":
+      return "zh-TW";
+    case "ja":
+      return "ja-JP";
+    case "ko":
+      return "ko-KR";
+    case "en":
+      return "en-US";
+    case "fr":
+      return "fr-FR";
+    case "de":
+      return "de-DE";
+    case "es":
+      return "es-ES";
+    case "it":
+      return "it-IT";
+    case "pt":
+      return "pt-PT";
+    case "ru":
+      return "ru-RU";
+    default:
+      return uiLanguage === "en" ? "en-US" : "zh-CN";
+  }
 }
