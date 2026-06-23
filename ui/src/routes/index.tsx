@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type * as React from "react";
-import { ArrowLeftRight, Copy, LoaderCircle, Pin, ScanText, Trash2, Volume2 } from "lucide-react";
+import { ArrowLeftRight, ChevronDown, Copy, LoaderCircle, Pin, ScanText, Trash2, Volume2 } from "lucide-react";
 import { startScreenshotOverlay, unpinResultWindow } from "@/lib/api";
 import { translatorProviderDetailLabel } from "@/lib/format";
 import { labelsForLanguage } from "@/lib/labels";
@@ -11,10 +11,16 @@ import {
   useConfigQuery,
   usePinResultMutation,
   useTranslateTextMutation,
+  useUpdateConfigMutation,
 } from "@/lib/queries";
 import { copyText } from "@/lib/tauri";
 import type { HistoryRecord } from "@/lib/types";
 import { useWorkspaceState } from "@/app/workspace-state";
+import {
+  mergeProviderConfig,
+  ProviderDialog,
+  sanitizeProviderConfig,
+} from "@/components/provider-settings";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -29,8 +35,11 @@ export function WorkspacePage() {
   const workspace = useWorkspaceState();
 
   const translateTextMutation = useTranslateTextMutation();
+  const updateConfigMutation = useUpdateConfigMutation();
   const pinMutation = usePinResultMutation();
   const [activeSpeechKey, setActiveSpeechKey] = useState<string | null>(null);
+  const [providerDialogOpen, setProviderDialogOpen] = useState(false);
+  const [providerSaveError, setProviderSaveError] = useState("");
   const autoTranslatingRef = useRef(false);
   const autoTranslatePendingRef = useRef<{ sourceText: string; targetLang: string } | null>(null);
   const lastAutoTranslatedKeyRef = useRef("");
@@ -197,6 +206,26 @@ export function WorkspacePage() {
     workspace.clearTranslation();
   }
 
+  function handleConfigureProvider() {
+    if (!configQuery.data) return;
+    setProviderSaveError("");
+    setProviderDialogOpen(true);
+  }
+
+  async function saveProviderConfig(nextConfig: NonNullable<typeof configQuery.data>) {
+    if (!configQuery.data) return;
+    try {
+      setProviderSaveError("");
+      const mergedConfig = mergeProviderConfig(configQuery.data, nextConfig);
+      await updateConfigMutation.mutateAsync(sanitizeProviderConfig(mergedConfig));
+      setProviderDialogOpen(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setProviderSaveError(message);
+      workspace.showError(message);
+    }
+  }
+
   async function handleSpeak(text: string, lang: string, key: string, accent?: SpeechAccent) {
     if (!text.trim()) {
       workspace.showError(labels.noSpeechText);
@@ -301,6 +330,7 @@ export function WorkspacePage() {
   }
 
   return (
+    <>
     <section className="workspace-grid">
       <section className="workspace-panel workspace-panel-source">
         <div className="workspace-panel-toolbar">
@@ -372,12 +402,24 @@ export function WorkspacePage() {
       <section className="workspace-panel">
         <div className="workspace-panel-toolbar">
           <div className="workspace-badge-row">
-            <span className="workspace-provider-label">
-              {translatorProviderDetailLabel(
+            <button
+              type="button"
+              className="workspace-provider-label"
+              disabled={!configQuery.data}
+              onClick={handleConfigureProvider}
+              aria-label={`${labels.configureProvider}: ${translatorProviderDetailLabel(
                 configQuery.data?.translator.provider,
                 configQuery.data?.translator.snaptext_cloud.endpoint,
-              )}
-            </span>
+              )}`}
+            >
+              <span>
+                {translatorProviderDetailLabel(
+                  configQuery.data?.translator.provider,
+                  configQuery.data?.translator.snaptext_cloud.endpoint,
+                )}
+              </span>
+              <ChevronDown size={14} aria-hidden="true" />
+            </button>
             <Select
               className="workspace-target-select"
               value={workspace.targetLang}
@@ -439,6 +481,21 @@ export function WorkspacePage() {
         </div>
       </section>
     </section>
+    {configQuery.data ? (
+      <ProviderDialog
+        config={configQuery.data}
+        error={providerSaveError}
+        labels={labels}
+        open={providerDialogOpen}
+        saving={updateConfigMutation.isPending}
+        onOpenChange={(open) => {
+          setProviderDialogOpen(open);
+          if (!open) setProviderSaveError("");
+        }}
+        onSave={saveProviderConfig}
+      />
+    ) : null}
+    </>
   );
 
   function setTextResult(record: HistoryRecord) {
