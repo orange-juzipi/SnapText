@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 import type { HistoryRecord, TranslationRequest, WorkspaceSnapshot } from "@/lib/types";
+import { AUTO_SOURCE_LANG, DEFAULT_TARGET_LANG, normalizeTargetLang } from "@/lib/language";
 
 export type AppToast = {
   id: string;
@@ -12,6 +13,7 @@ type WorkspaceState = {
   snapshot: WorkspaceSnapshot;
   textInput: string;
   ocrLoading: boolean;
+  sourceLang: string;
   targetLang: string;
   translating: boolean;
   pinned: boolean;
@@ -24,6 +26,7 @@ type WorkspaceState = {
   dismissToast: (id: string) => void;
   setTextInput: (value: string) => void;
   setOcrLoading: (value: boolean) => void;
+  setSourceLang: (value: string) => void;
   setTargetLang: (value: string) => void;
   setTranslating: (value: boolean) => void;
   setPinned: (value: boolean) => void;
@@ -59,7 +62,8 @@ export function WorkspaceStateProvider({ children }: { children: ReactNode }) {
   const [snapshot, setSnapshot] = useState<WorkspaceSnapshot>(emptySnapshot);
   const [textInput, setTextInput] = useState("");
   const [ocrLoading, setOcrLoading] = useState(false);
-  const [targetLang, setTargetLang] = useState("auto");
+  const [sourceLang, setSourceLang] = useState(AUTO_SOURCE_LANG);
+  const [targetLang, setTargetLangState] = useState(DEFAULT_TARGET_LANG);
   const [translating, setTranslating] = useState(false);
   const [pinned, setPinned] = useState(false);
   const [lastRequest, setLastRequest] = useState<TranslationRequest | null>(null);
@@ -84,6 +88,10 @@ export function WorkspaceStateProvider({ children }: { children: ReactNode }) {
     // Error details belong in toast, not the compact header status badge.
     showToast(title, message, "destructive");
   }, [showToast]);
+
+  const setTargetLang = useCallback((value: string) => {
+    setTargetLangState(normalizeTargetLang(value));
+  }, []);
 
   const setResultSnapshot = useCallback(
     (result: { source: string; source_text: string; translated_text: string; target_lang: string }) => {
@@ -145,6 +153,7 @@ export function WorkspaceStateProvider({ children }: { children: ReactNode }) {
       snapshot,
       textInput,
       ocrLoading,
+      sourceLang,
       targetLang,
       translating,
       pinned,
@@ -157,6 +166,7 @@ export function WorkspaceStateProvider({ children }: { children: ReactNode }) {
       dismissToast,
       setTextInput,
       setOcrLoading,
+      setSourceLang,
       setTargetLang,
       setTranslating,
       setPinned,
@@ -183,6 +193,7 @@ export function WorkspaceStateProvider({ children }: { children: ReactNode }) {
       showToast,
       showError,
       snapshot,
+      sourceLang,
       status,
       targetLang,
       textInput,

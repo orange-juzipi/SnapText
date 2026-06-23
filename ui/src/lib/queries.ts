@@ -43,8 +43,8 @@ export function useUpdateConfigMutation() {
 export function useTranslateTextMutation() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ sourceText, targetLang }: { sourceText: string; targetLang?: string }) =>
-      translateText(sourceText, targetLang),
+    mutationFn: ({ sourceText, targetLang, sourceLang }: { sourceText: string; targetLang?: string; sourceLang?: string }) =>
+      translateText(sourceText, targetLang, sourceLang),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["history"], exact: false });
     },

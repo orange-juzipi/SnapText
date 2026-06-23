@@ -4,7 +4,15 @@ import { ArrowLeftRight, ChevronDown, Copy, LoaderCircle, Pin, ScanText, Trash2,
 import { startScreenshotOverlay, unpinResultWindow } from "@/lib/api";
 import { translatorProviderDetailLabel } from "@/lib/format";
 import { labelsForLanguage } from "@/lib/labels";
-import { AUTO_TARGET_LANG, resolveSourceSpeechLang, resolveTargetLang } from "@/lib/language";
+import {
+  AUTO_SOURCE_LANG,
+  DEFAULT_TARGET_LANG,
+  detectSourceLang,
+  languageDisplayName,
+  normalizeTargetLang,
+  resolveSourceLang,
+  resolveSourceSpeechLang,
+} from "@/lib/language";
 import { errorMessage } from "@/lib/errors";
 import { isSpeechSupported, speakText, stopSpeech } from "@/lib/speech";
 import {
@@ -21,8 +29,8 @@ import {
   ProviderDialog,
   sanitizeProviderConfig,
 } from "@/components/provider-settings";
+import { LanguageCombobox } from "@/components/language-combobox";
 import { Button } from "@/components/ui/button";
-import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
@@ -41,8 +49,14 @@ export function WorkspacePage() {
   const [providerDialogOpen, setProviderDialogOpen] = useState(false);
   const [providerSaveError, setProviderSaveError] = useState("");
   const autoTranslatingRef = useRef(false);
-  const autoTranslatePendingRef = useRef<{ sourceText: string; targetLang: string } | null>(null);
+  const autoTranslatePendingRef = useRef<{ sourceText: string; sourceLang: string; targetLang: string } | null>(null);
   const lastAutoTranslatedKeyRef = useRef("");
+  const detectedSourceLang = detectSourceLang(workspace.textInput);
+  const sourceSpeechLang = resolveSourceSpeechLang(workspace.textInput, workspace.sourceLang);
+  const detectedSourceLabel =
+    detectedSourceLang === AUTO_SOURCE_LANG
+      ? labels.detectedLanguageAuto
+      : languageDisplayName(detectedSourceLang, configQuery.data?.ui.language);
   const speechReady =
     Boolean(configQuery.data) && isSpeechSupported(configQuery.data?.speech);
   const hasWorkspaceText = Boolean(
@@ -80,43 +94,47 @@ export function WorkspacePage() {
     ) {
       return;
     }
-    const targetLang = resolveTargetLang(sourceText, workspace.targetLang);
-    const requestKey = autoTranslateKey(sourceText, targetLang);
+    const sourceLang = workspace.sourceLang;
+    const targetLang = normalizeTargetLang(workspace.targetLang);
+    const requestKey = autoTranslateKey(sourceText, sourceLang, targetLang);
     if (requestKey === lastAutoTranslatedKeyRef.current) return;
 
     const timeout = window.setTimeout(() => {
-      void runAutoTranslate(sourceText, targetLang);
+      void runAutoTranslate(sourceText, sourceLang, targetLang);
     }, AUTO_TRANSLATE_DEBOUNCE_MS);
 
     return () => window.clearTimeout(timeout);
-  }, [workspace.ocrLoading, workspace.targetLang, workspace.textInput]);
+  }, [workspace.ocrLoading, workspace.sourceLang, workspace.targetLang, workspace.textInput]);
 
   useEffect(() => {
     if (workspace.translating) return;
     const pending = autoTranslatePendingRef.current;
     if (!pending) return;
     autoTranslatePendingRef.current = null;
-    void runAutoTranslate(pending.sourceText, pending.targetLang);
+    void runAutoTranslate(pending.sourceText, pending.sourceLang, pending.targetLang);
   }, [workspace.translating]);
 
   useEffect(() => {
     const sourceText = workspace.snapshot.sourceText.trim();
     if (!workspace.snapshot.result.trim() || sourceText !== workspace.textInput.trim()) return;
-    const targetLang = workspace.snapshot.targetLang || resolveTargetLang(sourceText, workspace.targetLang);
-    lastAutoTranslatedKeyRef.current = autoTranslateKey(sourceText, targetLang);
+    const sourceLang = workspace.sourceLang;
+    const targetLang = normalizeTargetLang(workspace.snapshot.targetLang || workspace.targetLang);
+    lastAutoTranslatedKeyRef.current = autoTranslateKey(sourceText, sourceLang, targetLang);
   }, [
     workspace.snapshot.result,
     workspace.snapshot.sourceText,
     workspace.snapshot.targetLang,
+    workspace.sourceLang,
     workspace.targetLang,
     workspace.textInput,
   ]);
 
-  async function runTranslateText(sourceText: string, targetLang: string, mode: "manual" | "auto") {
+  async function runTranslateText(sourceText: string, sourceLang: string, targetLang: string, mode: "manual" | "auto") {
     try {
       workspace.setTranslating(true);
       const record = await translateTextMutation.mutateAsync({
         sourceText,
+        sourceLang,
         targetLang,
       });
       setTextResult(record);
@@ -132,17 +150,17 @@ export function WorkspacePage() {
     }
   }
 
-  async function runAutoTranslate(sourceText: string, targetLang: string) {
-    const requestKey = autoTranslateKey(sourceText, targetLang);
+  async function runAutoTranslate(sourceText: string, sourceLang: string, targetLang: string) {
+    const requestKey = autoTranslateKey(sourceText, sourceLang, targetLang);
     if (requestKey === lastAutoTranslatedKeyRef.current) return;
     if (autoTranslatingRef.current || workspace.translating || translateTextMutation.isPending) {
-      autoTranslatePendingRef.current = { sourceText, targetLang };
+      autoTranslatePendingRef.current = { sourceText, sourceLang, targetLang };
       return;
     }
 
     autoTranslatingRef.current = true;
     autoTranslatePendingRef.current = null;
-    await runTranslateText(sourceText, targetLang, "auto");
+    await runTranslateText(sourceText, sourceLang, targetLang, "auto");
     autoTranslatingRef.current = false;
   }
 
@@ -152,9 +170,10 @@ export function WorkspacePage() {
       workspace.showError(labels.textInputRequired);
       return;
     }
-    const targetLang = resolveTargetLang(sourceText, workspace.targetLang);
+    const sourceLang = workspace.sourceLang;
+    const targetLang = normalizeTargetLang(workspace.targetLang);
     autoTranslatePendingRef.current = null;
-    await runTranslateText(sourceText, targetLang, "manual");
+    await runTranslateText(sourceText, sourceLang, targetLang, "manual");
   }
 
   async function handleStartOverlay() {
@@ -194,14 +213,15 @@ export function WorkspacePage() {
   function handleSwapTranslation() {
     const nextTextInput = workspace.snapshot.result.trim();
     if (!nextTextInput || !canSwapTranslation) return;
-    const nextTargetLang = inferSourceLang(
-      workspace.snapshot.sourceText.trim() || workspace.textInput,
-    );
+    const previousSourceText = workspace.snapshot.sourceText.trim() || workspace.textInput;
+    const nextSourceLang = normalizeTargetLang(workspace.snapshot.targetLang || workspace.targetLang);
+    const nextTargetLang = resolveSourceLang(previousSourceText, workspace.sourceLang) ?? DEFAULT_TARGET_LANG;
     stopSpeech();
     setActiveSpeechKey(null);
     autoTranslatePendingRef.current = null;
     lastAutoTranslatedKeyRef.current = "";
     workspace.setTextInput(nextTextInput);
+    workspace.setSourceLang(nextSourceLang);
     workspace.setTargetLang(nextTargetLang);
     workspace.clearTranslation();
   }
@@ -334,11 +354,24 @@ export function WorkspacePage() {
     <section className="workspace-grid">
       <section className="workspace-panel workspace-panel-source">
         <div className="workspace-panel-toolbar">
-          <div className="workspace-badge-row" />
+          <div className="workspace-badge-row workspace-language-row">
+            <span className="workspace-detected-language">
+              {labels.detectedLanguage}: {detectedSourceLabel}
+            </span>
+            <LanguageCombobox
+              ariaLabel={labels.sourceLanguage}
+              className="workspace-language-select"
+              includeAuto
+              labels={labels}
+              uiLanguage={configQuery.data?.ui.language}
+              value={workspace.sourceLang}
+              onChange={workspace.setSourceLang}
+            />
+          </div>
           <div className="workspace-actions">
             {renderSpeechButtons(
               workspace.textInput,
-              resolveSourceSpeechLang(workspace.textInput),
+              sourceSpeechLang,
               "source",
               labels.playSource,
             )}
@@ -420,22 +453,14 @@ export function WorkspacePage() {
               </span>
               <ChevronDown size={14} aria-hidden="true" />
             </button>
-            <Select
-              className="workspace-target-select"
+            <LanguageCombobox
+              ariaLabel={labels.targetLanguage}
+              className="workspace-language-select"
+              labels={labels}
+              uiLanguage={configQuery.data?.ui.language}
               value={workspace.targetLang}
-              onChange={(event) => workspace.setTargetLang(event.target.value)}
-              aria-label={labels.targetLanguage}
-            >
-              <option value={AUTO_TARGET_LANG}>{labels.autoDetectLanguage}</option>
-              <option value="en">English</option>
-              <option value="zh_cn">中文</option>
-              <option value="ja">日本語</option>
-              <option value="ko">한국어</option>
-              <option value="fr">Français</option>
-              <option value="de">Deutsch</option>
-              <option value="es">Español</option>
-              <option value="ru">Русский</option>
-            </Select>
+              onChange={workspace.setTargetLang}
+            />
           </div>
           <div className="workspace-actions">
             {renderSpeechButtons(
@@ -576,14 +601,8 @@ function isScreenshotSelectionCancelled(error: unknown) {
   return errorMessage(error).includes("screenshot selection produced no image; status=0");
 }
 
-function autoTranslateKey(sourceText: string, targetLang: string) {
-  return `${targetLang}\n${sourceText.trim()}`;
-}
-
-function inferSourceLang(text: string) {
-  if (/[\u4e00-\u9fff]/.test(text)) return "zh_cn";
-  if (/[a-zA-Z]/.test(text)) return "en";
-  return "zh_cn";
+function autoTranslateKey(sourceText: string, sourceLang: string, targetLang: string) {
+  return `${sourceLang}\n${targetLang}\n${sourceText.trim()}`;
 }
 
 function visibleEnglishAccents(accents?: string[]): SpeechAccent[] {

@@ -104,8 +104,8 @@ export function translateSelection(text: string) {
   return tauriInvoke<HistoryRecord>("translate_selection", { text });
 }
 
-export function translateText(sourceText: string, targetLang?: string) {
-  return tauriInvoke<HistoryRecord>("translate_text", { sourceText, targetLang });
+export function translateText(sourceText: string, targetLang?: string, sourceLang?: string) {
+  return tauriInvoke<HistoryRecord>("translate_text", { sourceText, targetLang, sourceLang });
 }
 
 export function retranslateResultText(request: TranslationRequest) {

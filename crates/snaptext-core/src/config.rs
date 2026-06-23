@@ -211,7 +211,7 @@ fn default_english_accents() -> Vec<EnglishAccent> {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            target_lang: Lang("zh_cn".to_owned()),
+            target_lang: Lang("en".to_owned()),
             ui: UiConfig {
                 theme: Theme::System,
                 language: UiLanguage::ZhCn,
@@ -619,7 +619,7 @@ mod tests {
 
         assert_eq!(config.hotkeys.screenshot, "Alt+W");
         assert_eq!(config.hotkeys.selection, "Alt+E");
-        assert_eq!(config.target_lang, Lang("zh_cn".to_owned()));
+        assert_eq!(config.target_lang, Lang("en".to_owned()));
         assert_eq!(config.ui.language, UiLanguage::ZhCn);
         assert_eq!(config.speech.english_accent, EnglishAccent::American);
         assert_eq!(

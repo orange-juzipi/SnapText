@@ -388,8 +388,9 @@ async fn translate_text(
     state: State<'_, AppState>,
     source_text: String,
     target_lang: Option<String>,
+    source_lang: Option<String>,
 ) -> Result<HistoryRecord> {
-    translate_text_inner(state.inner(), source_text, target_lang).await
+    translate_text_inner(state.inner(), source_text, target_lang, source_lang).await
 }
 
 #[tauri::command]
@@ -557,14 +558,16 @@ async fn translate_text_inner(
     state: &AppState,
     text: String,
     target_lang: Option<String>,
+    source_lang: Option<String>,
 ) -> Result<HistoryRecord> {
-    translate_text_with_source_inner(state, text, HistorySource::Text, target_lang).await
+    translate_text_with_source_inner(state, text, HistorySource::Text, target_lang, source_lang)
+        .await
 }
 
 async fn translate_selection_inner(state: &AppState, text: String) -> Result<HistoryRecord> {
     let text = normalize_selection_text_for_translation(text)?;
 
-    translate_text_with_source_inner(state, text, HistorySource::Selection, None).await
+    translate_text_with_source_inner(state, text, HistorySource::Selection, None, None).await
 }
 
 async fn translate_text_with_source_inner(
@@ -572,6 +575,7 @@ async fn translate_text_with_source_inner(
     text: String,
     source: HistorySource,
     target_lang: Option<String>,
+    source_lang: Option<String>,
 ) -> Result<HistoryRecord> {
     let text = normalize_selection_text_for_translation(text)?;
 
@@ -593,9 +597,12 @@ async fn translate_text_with_source_inner(
                 .unwrap_or_else(|_| Lang("en".to_owned()))
         });
     ensure_supported_target_lang_for_translation(&target_lang)?;
+    let source_lang = source_lang
+        .map(|value| Lang(value.trim().to_owned()))
+        .filter(|value| !value.0.is_empty() && value.0 != "auto");
     let request = TranslateRequest {
         texts: vec![text.clone()],
-        source: None,
+        source: source_lang,
         target: target_lang.clone(),
     };
     let translated_text = translate_first_text_for_history(state, translator, request).await?;

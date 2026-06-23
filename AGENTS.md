@@ -2,7 +2,7 @@
 
 ## 项目结构与模块组织
 
-SnapText 是一个用于桌面 OCR 与翻译应用的 Rust workspace，桌面壳基于 Tauri。核心逻辑位于 `crates/snaptext-core/src`，包含 OCR、翻译、截图、历史记录、配置和 pipeline 模块。React/Vite 前端位于 `ui/`，源码在 `ui/src`，静态构建产物输出到 `ui/dist`。Tauri 桌面入口位于 `crates/snaptext-tauri/src`；权限、图标和配置位于 `crates/snaptext-tauri/`。Python 辅助脚本和发布检查在 `scripts/`。OCR 模型 manifest 在 `models/`；真实模型二进制不要提交。QA 模板在 `docs/`。
+SnapText 是一个用于桌面 OCR 与翻译应用的 Rust workspace，桌面壳基于 Tauri。核心逻辑位于 `crates/snaptext-core/src`，包含 OCR、翻译、截图、历史记录、配置和 pipeline 模块。React/Vite 前端位于 `ui/`，源码在 `ui/src`，静态构建产物输出到 `ui/dist`。Tauri 桌面入口位于 `crates/snaptext-tauri/src`；权限、图标和配置位于 `crates/snaptext-tauri/`。云端翻译后端代码位于相邻仓库 `../snaptext-cloud-translate`，涉及服务端翻译接口或云端配置时应到该仓库修改。Python 辅助脚本和发布检查在 `scripts/`。OCR 模型 manifest 在 `models/`；真实模型二进制不要提交。QA 模板在 `docs/`。
 
 ## 构建、测试与开发命令
 

@@ -31,7 +31,7 @@ async fn translate_text_rejects_empty_text() {
     )
     .expect("app state");
 
-    let err = translate_text_inner(&state, "   ".to_owned(), None)
+    let err = translate_text_inner(&state, "   ".to_owned(), None, None)
         .await
         .expect_err("empty text");
 
@@ -50,6 +50,7 @@ async fn translate_text_rejects_oversized_text_before_provider_call() {
         &state,
         "a".repeat(snaptext_core::translate::MAX_TRANSLATE_TEXT_CHARS + 1),
         None,
+        None,
     )
     .await
     .expect_err("oversized text");
@@ -66,7 +67,7 @@ async fn translate_text_writes_text_history_source() {
     .expect("app state");
     set_fake_translated_text(&state, "bonjour");
 
-    let record = translate_text_inner(&state, " hello ".to_owned(), None)
+    let record = translate_text_inner(&state, " hello ".to_owned(), None, None)
         .await
         .expect("translated text record");
 
