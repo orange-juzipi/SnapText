@@ -908,7 +908,7 @@ textarea {
 }
 
 .workspace-panel-source:focus-within {
-  border-color: color-mix(in srgb, var(--color-primary) 42%, var(--color-border));
+  border-color: var(--color-border);
   box-shadow: none;
 }
 
@@ -1174,6 +1174,13 @@ textarea {
 .workspace-source-textarea {
   /* Reserve bottom space for pinyin, speech controls, and the character counter. */
   padding-bottom: 6.15rem;
+}
+
+.workspace-source-textarea:hover,
+.workspace-source-textarea:focus,
+.workspace-source-textarea:focus-visible {
+  border-color: var(--color-input);
+  box-shadow: none;
 }
 
 .workspace-textarea-controls {
