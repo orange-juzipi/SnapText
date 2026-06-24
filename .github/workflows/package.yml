@@ -16,13 +16,75 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: write
+
 env:
   CARGO_TERM_COLOR: always
   MODEL_TIER: ${{ inputs.model_tier || 'tiny' }}
 
 jobs:
+  prepare-ocr-models:
+    name: Prepare OCR models
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache OCR models
+        id: ocr-model-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            models/det.onnx
+            models/cls.onnx
+            models/rec.onnx
+            models/rec_dict.txt
+            models/SHA256SUMS
+            models/manifest.json
+          key: snaptext-ocr-linux-${{ env.MODEL_TIER }}-${{ hashFiles('scripts/install_paddleocr_onnx_models.py') }}
+
+      - name: Install OCR conversion dependencies
+        if: steps.ocr-model-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          # Generate ONNX assets once on Linux; Windows runners can fail loading
+          # Paddle2ONNX native DLLs, but they can package the generated files.
+          python -m pip install --upgrade pip
+          python -m pip install paddlepaddle paddleocr paddlex
+          paddlex --install paddle2onnx
+
+      - name: Install OCR models
+        if: steps.ocr-model-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: python scripts/install_paddleocr_onnx_models.py --tier "$MODEL_TIER" --force --skip-smoke-test
+
+      - name: Verify OCR models
+        shell: bash
+        run: python scripts/verify_ocr_models.py models --require-sha256 --skip-smoke-test
+
+      - name: Upload OCR models
+        uses: actions/upload-artifact@v4
+        with:
+          name: snaptext-ocr-models
+          path: |
+            models/det.onnx
+            models/cls.onnx
+            models/rec.onnx
+            models/rec_dict.txt
+            models/SHA256SUMS
+            models/manifest.json
+          if-no-files-found: error
+          retention-days: 1
+
   package:
     name: Package ${{ matrix.platform }}
+    needs: prepare-ocr-models
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -99,33 +161,12 @@ jobs:
         shell: bash
         run: cargo install tauri-cli --locked
 
-      - name: Cache OCR models
+      - name: Download OCR models
         if: runner.os != 'macOS'
-        id: ocr-model-cache
-        uses: actions/cache@v4
+        uses: actions/download-artifact@v4
         with:
-          path: |
-            models/det.onnx
-            models/cls.onnx
-            models/rec.onnx
-            models/rec_dict.txt
-            models/SHA256SUMS
-            models/manifest.json
-          key: snaptext-ocr-${{ runner.os }}-${{ env.MODEL_TIER }}-${{ hashFiles('scripts/install_paddleocr_onnx_models.py') }}
-
-      - name: Install OCR conversion dependencies
-        if: runner.os != 'macOS' && steps.ocr-model-cache.outputs.cache-hit != 'true'
-        shell: bash
-        run: |
-          # Windows/Linux packages require bundled Paddle ONNX assets.
-          python -m pip install --upgrade pip
-          python -m pip install paddlepaddle paddleocr paddlex
-          paddlex --install paddle2onnx
-
-      - name: Install OCR models
-        if: runner.os != 'macOS' && steps.ocr-model-cache.outputs.cache-hit != 'true'
-        shell: bash
-        run: python scripts/install_paddleocr_onnx_models.py --tier "$MODEL_TIER" --force --skip-smoke-test
+          name: snaptext-ocr-models
+          path: models
 
       - name: Verify OCR model cache
         if: runner.os != 'macOS'
@@ -133,6 +174,8 @@ jobs:
         run: python scripts/verify_ocr_models.py models --require-sha256 --skip-smoke-test
 
       - name: Package desktop app
+        env:
+          SNAPTEXT_SKIP_OCR_SMOKE_TEST: "1"
         shell: bash
         run: ${{ matrix.package_command }}
 
@@ -162,3 +205,64 @@ jobs:
           path: ${{ matrix.artifact_paths }}
           if-no-files-found: error
           retention-days: 14
+
+  release:
+    name: Create GitHub Release
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Prepare release notes and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          previous_tag="$(git describe --tags --abbrev=0 "${tag}^" 2>/dev/null || true)"
+
+          {
+            echo "## 更新内容"
+            echo
+            if [[ -n "$previous_tag" ]]; then
+              git log --pretty=format:'- %s (%h)' "$previous_tag..$tag"
+            else
+              git log --pretty=format:'- %s (%h)' "$tag"
+            fi
+            echo
+            echo
+            echo "---"
+            echo
+            if [[ -n "$previous_tag" ]]; then
+              echo "完整更新日志: [$previous_tag...$tag](https://github.com/${GITHUB_REPOSITORY}/compare/$previous_tag...$tag)"
+            else
+              echo "完整更新日志: [$tag](https://github.com/${GITHUB_REPOSITORY}/releases/tag/$tag)"
+            fi
+          } > CHANGES.md
+
+          find release-assets -type f -print0 \
+            | sort -z \
+            | xargs -0 shasum -a 256 \
+            | sed 's#release-assets/##' > checksums.txt
+
+          cp CHANGES.md release-assets/CHANGES.md
+          cp checksums.txt release-assets/checksums.txt
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release create "${GITHUB_REF_NAME}" release-assets/* \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file CHANGES.md \
+            --latest

@@ -7,6 +7,31 @@ usage() {
   echo "用法: ./release.sh v0.1.0"
 }
 
+github_actions_url() {
+  local remote_url repo
+  remote_url="$(git remote get-url origin 2>/dev/null || true)"
+  case "$remote_url" in
+    git@github.com:*.git)
+      repo="${remote_url#git@github.com:}"
+      repo="${repo%.git}"
+      echo "https://github.com/$repo/actions/workflows/package.yml"
+      ;;
+    https://github.com/*.git)
+      repo="${remote_url#https://github.com/}"
+      repo="${repo%.git}"
+      echo "https://github.com/$repo/actions/workflows/package.yml"
+      ;;
+    https://github.com/*)
+      repo="${remote_url#https://github.com/}"
+      echo "https://github.com/$repo/actions/workflows/package.yml"
+      ;;
+  esac
+}
+
+previous_release_tag() {
+  git describe --tags --abbrev=0 "${version}^" 2>/dev/null || true
+}
+
 version="${1:-}"
 if [[ -z "$version" ]]; then
   usage
@@ -52,8 +77,35 @@ echo "准备发布 $version"
 echo "分支: $current_branch"
 echo "提交: $(git rev-parse --short HEAD)"
 
+previous_tag="$(previous_release_tag)"
 git tag -a "$version" -m "发布 $version"
 git push origin "$version"
 
+actions_url="$(github_actions_url)"
+
 echo "已推送 tag: $version"
-echo "GitHub Actions 将自动触发 Package Desktop workflow。"
+echo
+echo "本次发布内容:"
+echo "- Git tag: $version"
+echo "- Source branch: $current_branch"
+echo "- Source commit: $(git rev-parse --short HEAD)"
+echo "- GitHub Actions workflow: Package Desktop"
+echo "- GitHub Release: 自动创建 $version release 页面"
+echo "- Release assets: macOS SnapText.app tar.gz、Windows NSIS .exe、Linux .deb"
+echo "- Release notes: 自动生成提交记录和完整更新日志链接"
+echo "- Checksums: 自动生成 checksums.txt"
+echo
+if [[ -n "$previous_tag" ]]; then
+  echo "提交记录: $previous_tag..$version"
+  git log --oneline "$previous_tag..$version"
+else
+  echo "提交记录: first release..$version"
+  git log --oneline "$version"
+fi
+if [[ -n "$actions_url" ]]; then
+  echo
+  echo "查看打包进度: $actions_url"
+else
+  echo
+  echo "GitHub Actions 将自动触发 Package Desktop workflow。"
+fi

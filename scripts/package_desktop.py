@@ -9,6 +9,7 @@ produced on the current operating system.
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -21,6 +22,11 @@ ROOT = Path(__file__).resolve().parents[1]
 TAURI_DIR = ROOT / "crates" / "snaptext-tauri"
 LOCAL_CARGO_TAURI = ROOT / ".tools" / "bin" / "cargo-tauri"
 UNSIGNED_LOCAL_CONFIG = '{"bundle":{"createUpdaterArtifacts":false}}'
+
+
+def env_flag(name: str) -> bool:
+    """Treat common CI-style truthy values as enabled feature flags."""
+    return os.environ.get(name, "").lower() in {"1", "true", "yes"}
 
 
 def run(cmd: list[str], cwd: Path = ROOT) -> None:
@@ -80,6 +86,10 @@ def packaging_commands(args: argparse.Namespace, tauri: str, current_platform: s
             "models",
             "--allow-macos-vision-fallback",
         ]
+    elif env_flag("SNAPTEXT_SKIP_OCR_SMOKE_TEST"):
+        # CI packaging uses generated tiny OCR assets for bundling checks. The
+        # smoke test is a model-quality gate and can be run separately.
+        model_check.append("--skip-smoke-test")
 
     commands = [
         model_check,

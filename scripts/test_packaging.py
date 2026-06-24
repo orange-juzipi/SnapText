@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import subprocess
 from pathlib import Path
@@ -11,10 +12,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def run_script(script: str, *args: str) -> subprocess.CompletedProcess[str]:
+def run_script(script: str, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    child_env = os.environ.copy()
+    if env:
+        child_env.update(env)
     return subprocess.run(
         ["python3", f"scripts/{script}", "--dry-run", *args],
         cwd=ROOT,
+        env=child_env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -55,6 +60,12 @@ def main() -> int:
     assert_contains(desktop_bundle.stdout, "cargo-tauri build --bundles msi")
     assert_contains(desktop_bundle.stdout, "--config {\"bundle\":{\"createUpdaterArtifacts\":false}} --no-sign")
     assert_contains(desktop_bundle.stdout, "verify_desktop_bundles.py --platform current")
+
+    skip_smoke_env = {"SNAPTEXT_SKIP_OCR_SMOKE_TEST": "1"}
+    desktop_skip_smoke = run_script("package_desktop.py", "--bundles", "deb", env=skip_smoke_env)
+    assert_success(desktop_skip_smoke)
+    if sys.platform != "darwin":
+        assert_contains(desktop_skip_smoke.stdout, "--skip-smoke-test")
 
     macos_skip = run_script("package_macos.py", "--skip-dmg")
     assert_success(macos_skip)
