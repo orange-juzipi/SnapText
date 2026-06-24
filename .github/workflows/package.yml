@@ -192,7 +192,7 @@ jobs:
           case "${{ matrix.platform }}" in
             macos)
               mkdir -p dist/macos
-              tar -czf dist/macos/SnapText-macos-app.tar.gz -C target/release/bundle/macos SnapText.app
+              tar -czf dist/macos/SnapText-macos-unsigned-app.tar.gz -C target/release/bundle/macos SnapText.app
               ;;
             windows)
               mkdir -p dist/nsis
@@ -244,6 +244,8 @@ jobs:
 
           {
             echo "## 更新内容"
+            echo
+            echo "> macOS 包当前为未签名、未公证的验证包，可能会被 Gatekeeper 拦截。正式可直接打开的 macOS 包需要接入 Apple Developer ID 签名和 notarization。"
             echo
             if [[ -n "$previous_tag" ]]; then
               git log --pretty=format:'- %s (%h)' "$previous_tag..$tag"
