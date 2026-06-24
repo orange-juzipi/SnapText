@@ -43,6 +43,8 @@ pub struct SelectionTextPayload {
     pub app_bundle_id: Option<String>,
 }
 
+// 语音输入依赖 macOS Speech 框架，非 macOS 平台不保留该事件 payload，避免 clippy dead_code。
+#[cfg(target_os = "macos")]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct VoiceInputPartialPayload {
     pub text: String,
