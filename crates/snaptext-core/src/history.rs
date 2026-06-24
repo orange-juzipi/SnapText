@@ -6,7 +6,7 @@ use std::{
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
-use crate::{Error, Result};
+use crate::{Error, Result, translate::DictionaryEntry};
 
 const MAX_HISTORY_RECORDS: usize = 500;
 
@@ -24,6 +24,9 @@ pub struct HistoryRecord {
     pub source_text: String,
     pub target_lang: String,
     pub translated_text: String,
+    // 词典增强只随当次翻译结果展示，历史表暂不持久化，避免引入迁移。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dictionary_entries: Vec<DictionaryEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -155,6 +158,7 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryRecord> {
         source_text: row.get(3)?,
         target_lang: row.get(4)?,
         translated_text: row.get(5)?,
+        dictionary_entries: Vec::new(),
     })
 }
 

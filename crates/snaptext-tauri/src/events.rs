@@ -142,6 +142,7 @@ pub(crate) fn history_record_to_translation_result(record: &HistoryRecord) -> Tr
         translated_text: record.translated_text.clone(),
         target_lang: record.target_lang.clone(),
         text_lines: Vec::new(),
+        dictionary_entries: record.dictionary_entries.clone(),
     }
 }
 

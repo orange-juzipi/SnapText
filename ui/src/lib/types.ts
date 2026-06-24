@@ -80,6 +80,17 @@ export type HistoryRecord = {
   source_text: string;
   target_lang: string;
   translated_text: string;
+  dictionary_entries?: DictionaryEntry[];
+};
+
+export type DictionaryEntry = {
+  headword: string;
+  phonetic?: string | null;
+  audio_url?: string | null;
+  part_of_speech: string;
+  translations?: string[];
+  definitions?: string[];
+  source: string;
 };
 
 export type SelectionFailurePayload = {
@@ -108,6 +119,7 @@ export type TranslationResult = {
   translated_text: string;
   target_lang: string;
   text_lines: TextLine[];
+  dictionary_entries?: DictionaryEntry[];
 };
 
 export type OcrTextResult = {
@@ -152,6 +164,7 @@ export type PinnedResultPayload = {
   source_text: string;
   translated_text: string;
   target_lang: string;
+  dictionary_entries?: DictionaryEntry[];
 };
 
 export type TranslationRequest = {
@@ -176,4 +189,5 @@ export type WorkspaceSnapshot = {
   sourceText: string;
   sourceKind: string;
   targetLang: string;
+  dictionaryEntries: DictionaryEntry[];
 };

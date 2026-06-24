@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
-import type { HistoryRecord, TranslationRequest, WorkspaceSnapshot } from "@/lib/types";
+import type { DictionaryEntry, HistoryRecord, TranslationRequest, WorkspaceSnapshot } from "@/lib/types";
 import { AUTO_SOURCE_LANG, DEFAULT_TARGET_LANG, normalizeTargetLang } from "@/lib/language";
 
 export type AppToast = {
@@ -37,12 +37,21 @@ type WorkspaceState = {
     source_text: string;
     translated_text: string;
     target_lang: string;
+    dictionary_entries?: DictionaryEntry[];
+  }) => void;
+  setTranslationResultOnly: (result: {
+    source: string;
+    source_text: string;
+    translated_text: string;
+    target_lang: string;
+    dictionary_entries?: DictionaryEntry[];
   }) => void;
   setResultSnapshot: (result: {
     source: string;
     source_text: string;
     translated_text: string;
     target_lang: string;
+    dictionary_entries?: DictionaryEntry[];
   }) => void;
   swapTextPanels: (next: {
     sourceText: string;
@@ -61,6 +70,7 @@ const emptySnapshot: WorkspaceSnapshot = {
   sourceText: "",
   sourceKind: "",
   targetLang: "",
+  dictionaryEntries: [],
 };
 
 export function WorkspaceStateProvider({ children }: { children: ReactNode }) {
@@ -99,12 +109,19 @@ export function WorkspaceStateProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const setResultSnapshot = useCallback(
-    (result: { source: string; source_text: string; translated_text: string; target_lang: string }) => {
+    (result: {
+      source: string;
+      source_text: string;
+      translated_text: string;
+      target_lang: string;
+      dictionary_entries?: DictionaryEntry[];
+    }) => {
       setSnapshot({
         result: result.translated_text,
         sourceText: result.source_text,
         sourceKind: result.source,
         targetLang: result.target_lang,
+        dictionaryEntries: result.dictionary_entries ?? [],
       });
       setTextInput(result.source_text);
       setLastRequest({ source: result.source, source_text: result.source_text });
@@ -119,6 +136,7 @@ export function WorkspaceStateProvider({ children }: { children: ReactNode }) {
       sourceText,
       sourceKind: source,
       targetLang: "",
+      dictionaryEntries: [],
     });
     setLastRequest({ source, source_text: sourceText });
   }, []);
@@ -129,9 +147,36 @@ export function WorkspaceStateProvider({ children }: { children: ReactNode }) {
   );
 
   const setResultFromTranslation = useCallback(
-    (result: { source: string; source_text: string; translated_text: string; target_lang: string }) =>
+    (result: {
+      source: string;
+      source_text: string;
+      translated_text: string;
+      target_lang: string;
+      dictionary_entries?: DictionaryEntry[];
+    }) =>
       setResultSnapshot(result),
     [setResultSnapshot],
+  );
+
+  const setTranslationResultOnly = useCallback(
+    (result: {
+      source: string;
+      source_text: string;
+      translated_text: string;
+      target_lang: string;
+      dictionary_entries?: DictionaryEntry[];
+    }) => {
+      // 自动翻译结果可能晚于用户输入返回，只更新右侧译文，不能回写当前输入框。
+      setSnapshot({
+        result: result.translated_text,
+        sourceText: result.source_text,
+        sourceKind: result.source,
+        targetLang: result.target_lang,
+        dictionaryEntries: result.dictionary_entries ?? [],
+      });
+      setLastRequest({ source: result.source, source_text: result.source_text });
+    },
+    [],
   );
 
   const swapTextPanels = useCallback(
@@ -143,6 +188,7 @@ export function WorkspaceStateProvider({ children }: { children: ReactNode }) {
         sourceText: next.sourceText,
         sourceKind: "text",
         targetLang: next.targetLang,
+        dictionaryEntries: [],
       });
       setLastRequest(null);
     },
@@ -192,6 +238,7 @@ export function WorkspaceStateProvider({ children }: { children: ReactNode }) {
       setPinned,
       setOcrTextInput,
       setResultSnapshot,
+      setTranslationResultOnly,
       swapTextPanels,
       setResultFromHistory,
       setResultFromTranslation,
@@ -210,6 +257,7 @@ export function WorkspaceStateProvider({ children }: { children: ReactNode }) {
       setOcrTextInput,
       setResultFromHistory,
       setResultFromTranslation,
+      setTranslationResultOnly,
       setResultSnapshot,
       swapTextPanels,
       showToast,

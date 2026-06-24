@@ -154,6 +154,10 @@ textarea {
   overflow: auto;
 }
 
+.app-content:has(.workspace-page) {
+  overflow: hidden;
+}
+
 .app-header h1 {
   overflow: hidden;
   color: var(--color-foreground);
@@ -881,15 +885,18 @@ textarea {
 
 .workspace-grid {
   display: grid;
-  min-height: 100%;
+  height: 100%;
+  min-height: 0;
   gap: 0.85rem;
   grid-template-columns: minmax(0, 1fr);
+  overflow: hidden;
 }
 
 .workspace-panel {
   display: grid;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
   gap: 0.8rem;
   grid-template-rows: auto minmax(14rem, 1fr);
   border: 1px solid var(--color-border);
@@ -904,7 +911,8 @@ textarea {
 }
 
 .workspace-panel:last-child {
-  grid-template-rows: auto minmax(14rem, 1fr);
+  overflow: hidden;
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .workspace-panel-source:focus-within {
@@ -1151,13 +1159,52 @@ textarea {
 
 .workspace-textarea-shell {
   position: relative;
-  min-height: 14rem;
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.workspace-result-scroll {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  align-content: stretch;
+  gap: 0.85rem;
+  grid-template-rows: minmax(0, 1fr);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 0.18rem;
+}
+
+.workspace-result-scroll .workspace-textarea-shell {
+  min-height: 0;
+}
+
+.workspace-result-scroll .dictionary-panel {
+  min-height: 0;
+  max-height: min(13.5rem, 30vh);
+  overflow: hidden;
+}
+
+.workspace-result-scroll .dictionary-panel-expanded {
+  max-height: min(24rem, 48vh);
+}
+
+.workspace-result-scroll .workspace-textarea-shell:has(.workspace-result-footer) {
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.workspace-textarea-shell:has(.workspace-source-footer) {
+  grid-template-rows: minmax(0, 1fr) auto;
 }
 
 .workspace-textarea {
   min-height: 14rem;
   height: 100%;
   padding-bottom: 3.65rem;
+  overflow-y: auto;
   resize: none;
   transition:
     background-color var(--motion-base) var(--ease-out-quart),
@@ -1172,8 +1219,13 @@ textarea {
 }
 
 .workspace-source-textarea {
-  /* Reserve bottom space for pinyin, speech controls, and the character counter. */
-  padding-bottom: 6.15rem;
+  min-height: 0;
+  padding-bottom: 0.85rem;
+}
+
+.workspace-result-textarea {
+  min-height: 0;
+  padding-bottom: 0.85rem;
 }
 
 .workspace-source-textarea:hover,
@@ -1197,6 +1249,33 @@ textarea {
   pointer-events: none;
 }
 
+.workspace-source-footer {
+  display: grid;
+  min-width: 0;
+  max-height: 9.5rem;
+  align-items: end;
+  gap: 0.45rem;
+  border: 1px solid var(--color-input);
+  border-top: 0;
+  border-radius: 0 0 0.5rem 0.5rem;
+  background: color-mix(in srgb, var(--color-card) 92%, transparent);
+  padding: 0.52rem 0.65rem 0.65rem;
+  pointer-events: auto;
+}
+
+.workspace-source-textarea:has(+ .workspace-source-footer) {
+  border-bottom-right-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.workspace-source-footer-row {
+  display: flex;
+  min-width: 0;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.65rem;
+}
+
 .workspace-textarea-controls-left {
   display: flex;
   min-width: 0;
@@ -1206,30 +1285,33 @@ textarea {
   pointer-events: auto;
 }
 
+.workspace-result-footer {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-start;
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 76%, transparent);
+  background: color-mix(in srgb, var(--color-control) 92%, transparent);
+  padding: 0.65rem 0.75rem 0.75rem;
+}
+
 .workspace-source-pinyin {
-  position: absolute;
-  right: 3.4rem;
-  bottom: 3.2rem;
-  left: 0.95rem;
-  z-index: 2;
-  overflow: hidden;
+  overflow-y: auto;
+  max-height: 5.1rem;
   color: color-mix(in srgb, var(--color-muted-foreground) 88%, var(--color-foreground));
   font-size: 0.74rem;
   font-weight: 520;
-  line-height: 1.25;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  pointer-events: none;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  pointer-events: auto;
 }
 
 .workspace-source-count {
-  position: absolute;
-  right: 0.95rem;
-  bottom: 0.75rem;
-  z-index: 2;
   display: inline-flex;
   height: 2.5rem;
   min-width: 1.55rem;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: flex-end;
   color: color-mix(in srgb, var(--color-muted-foreground) 82%, var(--color-foreground));
@@ -1241,7 +1323,9 @@ textarea {
   pointer-events: none;
 }
 
-.workspace-textarea-controls .group\/snaptext-button {
+.workspace-textarea-controls .group\/snaptext-button,
+.workspace-source-footer .group\/snaptext-button,
+.workspace-result-footer .group\/snaptext-button {
   background: color-mix(in srgb, var(--color-card) 92%, transparent);
   box-shadow: var(--shadow-xs);
   backdrop-filter: blur(10px);
@@ -1305,6 +1389,221 @@ textarea {
 .workspace-result-textarea.workspace-textarea-busy {
   border-color: transparent;
   box-shadow: none;
+}
+
+.dictionary-panel {
+  display: grid;
+  min-width: 0;
+  gap: 0.7rem;
+  grid-template-rows: auto minmax(0, 1fr);
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
+  border-radius: 0.65rem;
+  background: color-mix(in srgb, var(--color-card) 88%, var(--color-secondary));
+  padding: 0.75rem;
+  transition:
+    max-height var(--motion-base) var(--ease-out-quart),
+    border-color var(--motion-base) var(--ease-out-quart);
+}
+
+.dictionary-panel-compact {
+  margin-top: 0;
+  background: color-mix(in srgb, var(--color-control) 84%, var(--color-card));
+}
+
+.dictionary-panel-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.dictionary-panel-title-wrap {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.45rem;
+}
+
+.dictionary-panel-title {
+  color: var(--color-foreground);
+  font-size: 0.86rem;
+  font-weight: 780;
+}
+
+.dictionary-panel-query {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-muted-foreground);
+  font-size: 0.78rem;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dictionary-panel-toggle {
+  height: 1.75rem;
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 30%, var(--color-border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-primary) 8%, var(--color-card));
+  padding-inline: 0.58rem;
+  color: var(--color-primary);
+  font-size: 0.74rem;
+  font-weight: 720;
+  text-decoration: none;
+}
+
+.dictionary-panel-toggle:hover {
+  background: color-mix(in srgb, var(--color-primary) 12%, var(--color-card));
+}
+
+.dictionary-entry-list {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  align-content: start;
+  gap: 0.85rem;
+  overflow-y: auto;
+  padding-right: 0.2rem;
+}
+
+.dictionary-entry {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  gap: 0.28rem;
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+  background: transparent;
+  padding: 0.18rem 0.12rem;
+  color: inherit;
+  transition:
+    background-color var(--motion-fast) var(--ease-out-quart),
+    border-color var(--motion-fast) var(--ease-out-quart);
+}
+
+.dictionary-entry:hover,
+.dictionary-entry-open {
+  border-color: transparent;
+  background: transparent;
+}
+
+.dictionary-entry-topline {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.48rem;
+}
+
+.dictionary-entry-word-button {
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+}
+
+.dictionary-entry-word {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-primary);
+  font-size: 1rem;
+  font-weight: 760;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  text-decoration: underline;
+  text-underline-offset: 0.12rem;
+  white-space: nowrap;
+}
+
+.dictionary-entry-definition {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 0.5rem;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--color-foreground);
+  text-align: left;
+}
+
+.dictionary-entry-phonetic {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-muted-foreground);
+  font-size: 0.7rem;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dictionary-entry-pos {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--color-muted-foreground) 88%, var(--color-foreground));
+  font-size: 0.84rem;
+  font-style: italic;
+  font-weight: 760;
+  line-height: 1.45;
+}
+
+.dictionary-entry-meanings {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0;
+  overflow: hidden;
+  color: var(--color-foreground);
+  font-size: 0.9rem;
+  font-weight: 620;
+  line-height: 1.5;
+}
+
+.dictionary-entry-meaning {
+  display: inline;
+  min-width: 0;
+}
+
+.dictionary-entry-meaning:not(:last-child)::after {
+  content: "；";
+}
+
+.dictionary-entry-more {
+  color: var(--color-muted-foreground);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.dictionary-entry-speak {
+  display: inline-flex;
+  width: 1.55rem;
+  min-width: 1.55rem;
+  height: 1.55rem;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 0.35rem;
+  background: transparent;
+  color: var(--color-muted-foreground);
+  transition:
+    background-color var(--motion-fast) var(--ease-out-quart),
+    border-color var(--motion-fast) var(--ease-out-quart),
+    color var(--motion-fast) var(--ease-out-quart);
+}
+
+.dictionary-entry-speak:hover,
+.dictionary-entry-speak-active {
+  background: color-mix(in srgb, var(--color-primary) 10%, var(--color-card));
+  color: var(--color-primary);
+}
+
+@media (max-width: 760px) {
+  .workspace-result-scroll {
+    max-height: none;
+  }
 }
 
 .workspace-textarea-busy:disabled {

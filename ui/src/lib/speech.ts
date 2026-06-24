@@ -9,9 +9,11 @@ type SpeakTextInput = {
   onError?: () => void;
 };
 
+let activeAudio: HTMLAudioElement | null = null;
+
 export function isSpeechSupported(config?: SpeechConfig) {
   if (config?.enabled === false) return false;
-  return typeof window !== "undefined" && "speechSynthesis" in window && "SpeechSynthesisUtterance" in window;
+  return typeof window !== "undefined" && (canUseSystemSpeech() || canUseAudioPlayback());
 }
 
 export async function speakText({ text, lang, config, englishAccent, onEnd, onError }: SpeakTextInput) {
@@ -27,7 +29,32 @@ export async function speakText({ text, lang, config, englishAccent, onEnd, onEr
   speakWithSystem(source, lang, config, englishAccent, onEnd, onError);
 }
 
+export async function speakAudioUrl(audioUrl: string, onEnd?: () => void, onError?: () => void) {
+  const source = audioUrl.trim();
+  if (!source || !canUseAudioPlayback()) {
+    throw new Error("当前环境不支持词典音频播放");
+  }
+
+  stopSpeech();
+  const audio = new Audio(source);
+  activeAudio = audio;
+  audio.onended = () => {
+    if (activeAudio === audio) activeAudio = null;
+    onEnd?.();
+  };
+  audio.onerror = () => {
+    if (activeAudio === audio) activeAudio = null;
+    onError?.();
+  };
+  await audio.play();
+}
+
 export function stopSpeech() {
+  if (activeAudio) {
+    activeAudio.pause();
+    activeAudio.currentTime = 0;
+    activeAudio = null;
+  }
   if (canUseSystemSpeech()) {
     window.speechSynthesis.cancel();
   }
@@ -67,6 +94,10 @@ function bestVoiceForLang(lang: string) {
 
 function canUseSystemSpeech() {
   return typeof window !== "undefined" && "speechSynthesis" in window && "SpeechSynthesisUtterance" in window;
+}
+
+function canUseAudioPlayback() {
+  return typeof window !== "undefined" && "Audio" in window;
 }
 
 export function snapTextLangToSpeechLang(lang: string, englishAccent = "american") {

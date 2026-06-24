@@ -23,7 +23,7 @@ import {
   resolveSourceSpeechLang,
 } from "@/lib/language";
 import { errorMessage } from "@/lib/errors";
-import { isSpeechSupported, speakText, stopSpeech } from "@/lib/speech";
+import { isSpeechSupported, speakAudioUrl, speakText, stopSpeech } from "@/lib/speech";
 import {
   useConfigQuery,
   usePinResultMutation,
@@ -38,6 +38,7 @@ import {
   ProviderDialog,
   sanitizeProviderConfig,
 } from "@/components/provider-settings";
+import { DictionaryPanel } from "@/components/dictionary-panel";
 import { LanguageCombobox } from "@/components/language-combobox";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -84,12 +85,10 @@ export function WorkspacePage() {
   const sourcePinyin = useMemo(() => {
     const sourceText = workspace.textInput.trim();
     if (!sourceText || !looksLikeChinese(sourceText)) return "";
-    // Limit the helper line so a long OCR block cannot cover the textarea controls.
-    const pinyinText = pinyin(sourceText, {
+    return pinyin(sourceText, {
       nonZh: "removed",
       toneType: "symbol",
     }).replace(/\s+/g, " ").trim();
-    return pinyinText.length > 180 ? `${pinyinText.slice(0, 180)}...` : pinyinText;
   }, [workspace.textInput]);
   const canSwapTranslation = Boolean(
     workspace.textInput.trim() &&
@@ -205,8 +204,15 @@ export function WorkspacePage() {
         sourceLang,
         targetLang,
       });
+      if (mode === "auto" && textInputRef.current.trim() !== sourceText) {
+        return;
+      }
       lastAutoTranslatedKeyRef.current = autoTranslateKey(sourceText, sourceLang, targetLang);
-      setTextResult(record);
+      if (mode === "auto") {
+        workspace.setTranslationResultOnly(record);
+      } else {
+        setTextResult(record);
+      }
       workspace.setStatus(labels.textTranslated);
     } catch (error) {
       if (mode === "manual") {
@@ -321,7 +327,13 @@ export function WorkspacePage() {
     }
   }
 
-  async function handleSpeak(text: string, lang: string, key: string, accent?: SpeechAccent) {
+  async function handleSpeak(
+    text: string,
+    lang: string,
+    key: string,
+    accent?: SpeechAccent,
+    audioUrl?: string | null,
+  ) {
     if (!text.trim()) {
       workspace.showError(labels.noSpeechText);
       return;
@@ -341,14 +353,25 @@ export function WorkspacePage() {
     }
     try {
       setActiveSpeechKey(key);
-      await speakText({
+      const speechInput = {
         text,
         lang,
         config: configQuery.data?.speech,
         englishAccent: accent,
         onEnd: () => setActiveSpeechKey((current) => (current === key ? null : current)),
         onError: () => setActiveSpeechKey((current) => (current === key ? null : current)),
-      });
+      };
+      try {
+        // 词典 API 有真实发音时优先播放音频，失败后回退到系统 TTS。
+        if (audioUrl) {
+          await speakAudioUrl(audioUrl, speechInput.onEnd, speechInput.onError);
+        } else {
+          await speakText(speechInput);
+        }
+      } catch (audioError) {
+        if (!audioUrl) throw audioError;
+        await speakText(speechInput);
+      }
       workspace.setStatus(labels.speechStarted);
     } catch (error) {
       setActiveSpeechKey((current) => (current === key ? null : current));
@@ -492,7 +515,7 @@ export function WorkspacePage() {
 
   return (
     <>
-    <section className="workspace-grid">
+    <section className="workspace-page workspace-grid">
       <section className="workspace-panel workspace-panel-source">
         <div className="workspace-panel-toolbar">
           <div className="workspace-badge-row workspace-language-row">
@@ -537,36 +560,38 @@ export function WorkspacePage() {
             disabled={workspace.ocrLoading}
           />
           {!workspace.ocrLoading ? (
-            <div className="workspace-textarea-controls">
-              <div className="workspace-textarea-controls-left">
-                {voiceInputAvailable ? (
-                  <IconTooltipButton
-                    className={voiceInputActive ? "workspace-voice-input-active" : undefined}
-                    disabled={workspace.translating || voiceInputStopping}
-                    label={voiceInputActive ? labels.stopVoiceInput : labels.startVoiceInput}
-                    onClick={handleToggleVoiceInput}
-                    variant={voiceInputActive ? "primary" : "secondary"}
-                  >
-                    <Mic size={16} />
-                  </IconTooltipButton>
+            <div className="workspace-source-footer">
+              {sourcePinyin ? (
+                <div className="workspace-source-pinyin" aria-label={labels.sourcePinyin}>
+                  {sourcePinyin}
+                </div>
+              ) : null}
+              <div className="workspace-source-footer-row">
+                <div className="workspace-textarea-controls-left">
+                  {voiceInputAvailable ? (
+                    <IconTooltipButton
+                      className={voiceInputActive ? "workspace-voice-input-active" : undefined}
+                      disabled={workspace.translating || voiceInputStopping}
+                      label={voiceInputActive ? labels.stopVoiceInput : labels.startVoiceInput}
+                      onClick={handleToggleVoiceInput}
+                      variant={voiceInputActive ? "primary" : "secondary"}
+                    >
+                      <Mic size={16} />
+                    </IconTooltipButton>
+                  ) : null}
+                  {renderSpeechButtons(
+                    workspace.textInput,
+                    sourceSpeechLang,
+                    "source",
+                    labels.playSource,
+                  )}
+                </div>
+                {hasSourceText ? (
+                  <div className="workspace-source-count" aria-label={labels.sourceCharacterCount}>
+                    {sourceCharacterCount}
+                  </div>
                 ) : null}
-                {renderSpeechButtons(
-                  workspace.textInput,
-                  sourceSpeechLang,
-                  "source",
-                  labels.playSource,
-                )}
               </div>
-            </div>
-          ) : null}
-          {!workspace.ocrLoading && sourcePinyin ? (
-            <div className="workspace-source-pinyin" aria-label={labels.sourcePinyin}>
-              {sourcePinyin}
-            </div>
-          ) : null}
-          {!workspace.ocrLoading && hasSourceText ? (
-            <div className="workspace-source-count" aria-label={labels.sourceCharacterCount}>
-              {sourceCharacterCount}
             </div>
           ) : null}
           {!workspace.ocrLoading && hasSourceText ? (
@@ -648,50 +673,58 @@ export function WorkspacePage() {
             </IconTooltipButton>
           </div>
         </div>
-        <div className="workspace-textarea-shell" aria-busy={workspace.translating}>
-          <Textarea
-            className={
-              workspace.translating
-                ? "workspace-textarea workspace-result-textarea workspace-textarea-busy bg-background text-[15px]"
-                : "workspace-textarea workspace-result-textarea bg-background text-[15px]"
-            }
-            value={workspace.translating ? "" : workspace.snapshot.result}
-            readOnly
-            placeholder={workspace.translating ? labels.translating : labels.translationPlaceholder}
+        <div className="workspace-result-scroll">
+          <div className="workspace-textarea-shell" aria-busy={workspace.translating}>
+            <Textarea
+              className={
+                workspace.translating
+                  ? "workspace-textarea workspace-result-textarea workspace-textarea-busy bg-background text-[15px]"
+                  : "workspace-textarea workspace-result-textarea bg-background text-[15px]"
+              }
+              value={workspace.translating ? "" : workspace.snapshot.result}
+              readOnly
+              placeholder={workspace.translating ? labels.translating : labels.translationPlaceholder}
+            />
+            {!workspace.translating ? (
+              <div className="workspace-result-footer">
+                <div className="workspace-textarea-controls-left">
+                  {renderSpeechButtons(
+                    workspace.snapshot.result,
+                    workspace.snapshot.targetLang || workspace.targetLang,
+                    "translation",
+                    labels.playTranslation,
+                  )}
+                </div>
+              </div>
+            ) : null}
+            {!workspace.translating && hasTranslationText ? (
+              <div className="workspace-result-copy-control">
+                <IconTooltipButton
+                  className="workspace-textarea-control-button"
+                  label={labels.copy}
+                  onClick={handleCopyResult}
+                >
+                  <Copy size={16} />
+                </IconTooltipButton>
+              </div>
+            ) : null}
+            {workspace.translating ? (
+              // Translation can follow OCR immediately, so the result box mirrors the same busy treatment.
+              <div className="workspace-textarea-loading" aria-live="polite">
+                <div className="workspace-loading-message">
+                  <LoaderCircle size={18} aria-hidden="true" />
+                  <span>{labels.translating}</span>
+                </div>
+                <div className="workspace-loading-bar" aria-hidden="true" />
+              </div>
+            ) : null}
+          </div>
+          <DictionaryPanel
+            activeSpeechKey={activeSpeechKey}
+            entries={workspace.snapshot.dictionaryEntries}
+            labels={labels}
+            onSpeakEntry={(entry, key) => handleSpeak(entry.headword, "en", key, undefined, entry.audio_url)}
           />
-          {!workspace.translating ? (
-            <div className="workspace-textarea-controls">
-              <div className="workspace-textarea-controls-left">
-                {renderSpeechButtons(
-                  workspace.snapshot.result,
-                  workspace.snapshot.targetLang || workspace.targetLang,
-                  "translation",
-                  labels.playTranslation,
-                )}
-              </div>
-            </div>
-          ) : null}
-          {!workspace.translating && hasTranslationText ? (
-            <div className="workspace-result-copy-control">
-              <IconTooltipButton
-                className="workspace-textarea-control-button"
-                label={labels.copy}
-                onClick={handleCopyResult}
-              >
-                <Copy size={16} />
-              </IconTooltipButton>
-            </div>
-          ) : null}
-          {workspace.translating ? (
-            // Translation can follow OCR immediately, so the result box mirrors the same busy treatment.
-            <div className="workspace-textarea-loading" aria-live="polite">
-              <div className="workspace-loading-message">
-                <LoaderCircle size={18} aria-hidden="true" />
-                <span>{labels.translating}</span>
-              </div>
-              <div className="workspace-loading-bar" aria-hidden="true" />
-            </div>
-          ) : null}
         </div>
       </section>
     </section>

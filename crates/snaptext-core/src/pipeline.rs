@@ -6,7 +6,7 @@ use crate::{
     config::Lang,
     history::{HistorySource, NewHistoryRecord},
     ocr::{OcrEngine, TextLine, aggregate_text},
-    translate::{TranslateRequest, TranslateResponse, Translator},
+    translate::{DictionaryEntry, TranslateRequest, TranslateResponse, Translator},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -16,6 +16,8 @@ pub struct TranslationResult {
     pub translated_text: String,
     pub target_lang: String,
     pub text_lines: Vec<TextLine>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dictionary_entries: Vec<DictionaryEntry>,
 }
 
 impl TranslationResult {
@@ -63,7 +65,9 @@ pub async fn translate_text_lines(
     }
 
     let TranslateResponse {
-        translated_texts, ..
+        translated_texts,
+        dictionary_entries,
+        ..
     } = translator
         .translate(TranslateRequest {
             texts: vec![source_text.clone()],
@@ -79,6 +83,7 @@ pub async fn translate_text_lines(
         translated_text,
         target_lang: target.0,
         text_lines,
+        dictionary_entries,
     })
 }
 
@@ -128,6 +133,7 @@ mod tests {
                 } else {
                     self.response_texts.clone()
                 },
+                dictionary_entries: Vec::new(),
                 provider: crate::config::TranslatorProvider::LocalHttp,
             })
         }
@@ -150,6 +156,7 @@ mod tests {
                 },
                 confidence: 0.99,
             }],
+            dictionary_entries: Vec::new(),
         };
 
         let record = result.into_history_record();
@@ -168,6 +175,7 @@ mod tests {
             translated_text: "bonjour".to_owned(),
             target_lang: "fr".to_owned(),
             text_lines: Vec::new(),
+            dictionary_entries: Vec::new(),
         };
 
         let record = result.into_history_record();
@@ -197,6 +205,7 @@ mod tests {
         assert_eq!(result.translated_text, "bonjour\nmonde");
         assert_eq!(result.target_lang, "fr");
         assert_eq!(result.text_lines.len(), 2);
+        assert!(result.dictionary_entries.is_empty());
     }
 
     #[tokio::test]

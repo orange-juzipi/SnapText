@@ -483,6 +483,7 @@ fn history_record_to_translation_result_preserves_snapshot_fields() {
         source_text: String::from("hello\nworld"),
         target_lang: String::from("ja"),
         translated_text: String::from("konnichiwa\nsekai"),
+        dictionary_entries: Vec::new(),
     };
 
     let result = history_record_to_translation_result(&record);
@@ -502,6 +503,7 @@ fn overlay_translation_payload_preserves_result_and_region() {
         translated_text: String::from("bonjour"),
         target_lang: String::from("fr"),
         text_lines: Vec::new(),
+        dictionary_entries: Vec::new(),
     };
     let region = snaptext_core::ocr::BBox {
         x: 10,

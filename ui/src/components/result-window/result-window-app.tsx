@@ -5,9 +5,10 @@ import { events, getConfig, unpinResultWindow } from "@/lib/api";
 import { sourceLabel, targetLangLabel } from "@/lib/format";
 import { labelsForLanguage } from "@/lib/labels";
 import { resolveSourceSpeechLang } from "@/lib/language";
-import { isSpeechSupported, speakText, stopSpeech } from "@/lib/speech";
+import { isSpeechSupported, speakAudioUrl, speakText, stopSpeech } from "@/lib/speech";
 import { copyText, tauriListen } from "@/lib/tauri";
-import type { AppConfig, HistoryRecord, PinnedResultPayload, TranslationResult } from "@/lib/types";
+import type { AppConfig, DictionaryEntry, HistoryRecord, PinnedResultPayload, TranslationResult } from "@/lib/types";
+import { DictionaryPanel } from "@/components/dictionary-panel";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldLabel } from "@/components/ui/field";
@@ -23,6 +24,7 @@ export function ResultWindowApp() {
   const [sourceText, setSourceText] = useState("");
   const [result, setResult] = useState("");
   const [targetLang, setTargetLang] = useState("");
+  const [dictionaryEntries, setDictionaryEntries] = useState<DictionaryEntry[]>([]);
   const [status, setStatus] = useState(labels.pinnedResultWindow);
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [activeSpeechKey, setActiveSpeechKey] = useState<string | null>(null);
@@ -63,6 +65,7 @@ export function ResultWindowApp() {
     setSourceText(snapshot.source_text);
     setResult(snapshot.translated_text);
     setTargetLang(snapshot.target_lang);
+    setDictionaryEntries(snapshot.dictionary_entries ?? []);
   }
 
   function applyTranslation(output: TranslationResult) {
@@ -70,6 +73,7 @@ export function ResultWindowApp() {
     setSourceText(output.source_text);
     setResult(output.translated_text);
     setTargetLang(output.target_lang);
+    setDictionaryEntries(output.dictionary_entries ?? []);
   }
 
   function applyHistory(record: HistoryRecord) {
@@ -77,6 +81,7 @@ export function ResultWindowApp() {
     setSourceText(record.source_text);
     setResult(record.translated_text);
     setTargetLang(record.target_lang);
+    setDictionaryEntries(record.dictionary_entries ?? []);
   }
 
   async function handleCopy() {
@@ -92,7 +97,13 @@ export function ResultWindowApp() {
     }
   }
 
-  async function handleSpeak(text: string, lang: string, key: string, accent?: SpeechAccent) {
+  async function handleSpeak(
+    text: string,
+    lang: string,
+    key: string,
+    accent?: SpeechAccent,
+    audioUrl?: string | null,
+  ) {
     if (!text.trim()) {
       setStatus(labels.noSpeechText);
       return;
@@ -108,14 +119,25 @@ export function ResultWindowApp() {
     }
     try {
       setActiveSpeechKey(key);
-      await speakText({
+      const speechInput = {
         text,
         lang,
         config: config?.speech,
         englishAccent: accent,
         onEnd: () => setActiveSpeechKey((current) => (current === key ? null : current)),
         onError: () => setActiveSpeechKey((current) => (current === key ? null : current)),
-      });
+      };
+      try {
+        // 词典音频更接近真人发音；不可用时继续使用系统朗读。
+        if (audioUrl) {
+          await speakAudioUrl(audioUrl, speechInput.onEnd, speechInput.onError);
+        } else {
+          await speakText(speechInput);
+        }
+      } catch (audioError) {
+        if (!audioUrl) throw audioError;
+        await speakText(speechInput);
+      }
       setStatus(labels.speechStarted);
     } catch (error) {
       setActiveSpeechKey((current) => (current === key ? null : current));
@@ -218,6 +240,13 @@ export function ResultWindowApp() {
             <FieldLabel>{labels.translationText}</FieldLabel>
             <Textarea className="min-h-32" value={result} readOnly />
           </Field>
+          <DictionaryPanel
+            compact
+            activeSpeechKey={activeSpeechKey}
+            entries={dictionaryEntries}
+            labels={labels}
+            onSpeakEntry={(entry, key) => handleSpeak(entry.headword, "en", key, undefined, entry.audio_url)}
+          />
         </CardContent>
       </Card>
     </main>

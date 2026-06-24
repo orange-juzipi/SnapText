@@ -8,7 +8,7 @@ use snaptext_core::{
     ocr::OcrEngine,
     pipeline::{TranslationResult, first_translated_text},
     selection::{SelectionEvent, looks_like_garbled_selection, normalize_selection_text},
-    translate::{TranslateRequest, TranslatorRegistry},
+    translate::{DictionaryEntry, TranslateRequest, TranslatorRegistry},
 };
 use std::time::Duration;
 #[cfg(not(test))]
@@ -633,7 +633,7 @@ async fn translate_text_with_source_inner(
         source: source_lang,
         target: target_lang.clone(),
     };
-    let translated_text = translate_first_text_for_history(state, translator, request).await?;
+    let translation = translate_first_for_history(state, translator, request).await?;
 
     let history = state
         .history
@@ -642,12 +642,15 @@ async fn translate_text_with_source_inner(
 
     // Keep history writes behind the command boundary so every translated
     // text request has the same persistence behavior as screenshot and image flows.
-    history.insert(NewHistoryRecord {
+    // 词典增强只附在本次返回 payload 上，历史表仍只保存稳定的译文文本。
+    let mut record = history.insert(NewHistoryRecord {
         source,
         source_text: text.clone(),
         target_lang: target_lang.0,
-        translated_text,
-    })
+        translated_text: translation.translated_text,
+    })?;
+    record.dictionary_entries = translation.dictionary_entries;
+    Ok(record)
 }
 
 fn ensure_supported_target_lang_for_translation(target_lang: &Lang) -> Result<()> {
@@ -657,19 +660,31 @@ fn ensure_supported_target_lang_for_translation(target_lang: &Lang) -> Result<()
     Ok(())
 }
 
-async fn translate_first_text_for_history(
+struct HistoryTranslation {
+    translated_text: String,
+    dictionary_entries: Vec<DictionaryEntry>,
+}
+
+async fn translate_first_for_history(
     _state: &AppState,
     translator: TranslatorRegistry,
     request: TranslateRequest,
-) -> Result<String> {
+) -> Result<HistoryTranslation> {
     #[cfg(test)]
     if let Some(translated_text) = take_fake_translated_text(_state) {
         snaptext_core::translate::validate_translate_request(&request)?;
-        return Ok(translated_text);
+        return Ok(HistoryTranslation {
+            translated_text,
+            dictionary_entries: Vec::new(),
+        });
     }
 
     let translation = translator.translate(request).await?;
-    first_translated_text(&translation.translated_texts)
+    let translated_text = first_translated_text(&translation.translated_texts)?;
+    Ok(HistoryTranslation {
+        translated_text,
+        dictionary_entries: translation.dictionary_entries,
+    })
 }
 
 fn normalize_selection_text_for_translation(text: String) -> Result<String> {
@@ -725,7 +740,7 @@ async fn retranslate_result_text_inner(
         .await?;
     let translated_text = first_translated_text(&translation.translated_texts)?;
 
-    state
+    let mut record = state
         .history
         .lock()
         .map_err(|err| Error::History(err.to_string()))?
@@ -734,7 +749,9 @@ async fn retranslate_result_text_inner(
             source_text,
             target_lang: target_lang.0,
             translated_text,
-        })
+        })?;
+    record.dictionary_entries = translation.dictionary_entries;
+    Ok(record)
 }
 
 async fn translate_current_selection_inner(state: &AppState) -> Result<HistoryRecord> {
@@ -919,6 +936,7 @@ async fn translate_dynamic_image_inner(
         translated_text,
         target_lang: target.0,
         text_lines: ocr_result.text_lines,
+        dictionary_entries: translation.dictionary_entries,
     };
     let history_record = result.clone().into_history_record();
     state

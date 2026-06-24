@@ -30,13 +30,32 @@ pub struct TranslateRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TranslateResponse {
     pub translated_texts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dictionary_entries: Vec<DictionaryEntry>,
     pub provider: TranslatorProvider,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DictionaryEntry {
+    pub headword: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phonetic: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_url: Option<String>,
+    pub part_of_speech: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub translations: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub definitions: Vec<String>,
+    pub source: String,
 }
 
 // Keep the desktop client aligned with the cloud API surface it consumes.
 #[derive(Debug, Deserialize)]
 struct SnapTextCloudTranslateResponse {
     translated_text: String,
+    #[serde(default)]
+    dictionary_entries: Vec<DictionaryEntry>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -192,6 +211,7 @@ impl Translator for SnapTextCloudTranslator {
         let identity = CloudDeviceIdentity::load_or_create(&self.config)?;
         ensure_snaptext_cloud_registered(&self.config, &self.client, &identity, false).await?;
         let mut translated_texts = Vec::with_capacity(req.texts.len());
+        let mut dictionary_entries = Vec::new();
         // The cloud API is intentionally single-text; keep the desktop batch contract by
         // issuing ordered per-item requests and returning the same number of translations.
         for text in &req.texts {
@@ -217,11 +237,13 @@ impl Translator for SnapTextCloudTranslator {
                 Err(error) => return Err(snaptext_cloud_error(error)),
             };
             translated_texts.push(response.translated_text);
+            dictionary_entries.extend(response.dictionary_entries);
         }
         validate_translate_response_texts(&translated_texts, req.texts.len())?;
 
         Ok(TranslateResponse {
             translated_texts,
+            dictionary_entries,
             provider: TranslatorProvider::SnapTextCloud,
         })
     }
@@ -256,6 +278,7 @@ impl Translator for OpenAiCompatibleTranslator {
 
         Ok(TranslateResponse {
             translated_texts,
+            dictionary_entries: Vec::new(),
             provider: TranslatorProvider::OpenAiCompatible,
         })
     }
@@ -294,6 +317,7 @@ impl Translator for DeepLTranslator {
 
         Ok(TranslateResponse {
             translated_texts,
+            dictionary_entries: Vec::new(),
             provider: TranslatorProvider::DeepL,
         })
     }
@@ -334,6 +358,7 @@ impl Translator for GoogleTranslator {
 
         Ok(TranslateResponse {
             translated_texts,
+            dictionary_entries: Vec::new(),
             provider: TranslatorProvider::Google,
         })
     }
@@ -356,6 +381,7 @@ impl Translator for LocalHttpTranslator {
 
         Ok(TranslateResponse {
             translated_texts,
+            dictionary_entries: Vec::new(),
             provider: TranslatorProvider::LocalHttp,
         })
     }
@@ -999,6 +1025,36 @@ mod tests {
                 .get("x-snaptext-system-version")
                 .is_some_and(|value| !value.is_empty())
         );
+    }
+
+    #[tokio::test]
+    async fn snaptext_cloud_response_keeps_dictionary_entries() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        crate::cloud_auth::set_test_identity_path(tempdir.path().join("cloud-device.yaml"));
+        let server = MockServer::spawn_sequence(vec![
+            r#"{"device_id":"test-device","registered":true}"#,
+            r#"{"translated_text":"profound","dictionary_entries":[{"headword":"profound","phonetic":"prəˈfaʊnd","part_of_speech":"形容词","translations":["高深"],"definitions":["深刻","深奥"],"source":"snaptext_cloud"}]}"#,
+        ]);
+        let config = SnapTextCloudConfig {
+            endpoint: server.url.clone(),
+            device_id: "test-device".to_owned(),
+            enabled: true,
+        };
+
+        let translator = SnapTextCloudTranslator::new(config, Client::new());
+        let response = translator
+            .translate(sample_request())
+            .await
+            .expect("snaptext cloud translation");
+
+        assert_eq!(response.translated_texts, ["profound"]);
+        assert_eq!(response.dictionary_entries.len(), 1);
+        assert_eq!(response.dictionary_entries[0].headword, "profound");
+        assert_eq!(
+            response.dictionary_entries[0].phonetic.as_deref(),
+            Some("prəˈfaʊnd")
+        );
+        assert_eq!(response.dictionary_entries[0].definitions, ["深刻", "深奥"]);
     }
 
     #[test]
