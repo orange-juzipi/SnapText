@@ -1,25 +1,24 @@
-# SnapText 开发命令快捷入口。
+# SnapText 开发与构建快捷入口。
 #
-# 这些目标只封装现有脚本，不重复实现构建逻辑，确保发布和 CI 行为
-# 仍然集中维护在 scripts/ 目录中。
+# 这里仅保留日常开发、前端构建、Rust 构建和桌面打包命令。
+# 打包逻辑仍集中在 scripts/ 和 Tauri 配置中，Makefile 只做薄封装。
 
 PYTHON ?= python3
 BUN ?= bun
 CARGO ?= cargo
 
-MODEL_DIR ?= models
-MODEL_TIER ?= tiny
-MODEL_MANIFEST ?= models/manifest.json
-
-# 设置 FORCE=1、NO_SIGN=1、SKIP_VERIFY=1 或 SKIP_SMOKE_TEST=1 可追加对应参数。
-FORCE_ARG := $(if $(filter 1 true yes,$(FORCE)),--force,)
-NO_SIGN_ARG := $(if $(filter 1 true yes,$(NO_SIGN)),--no-sign,)
-SKIP_VERIFY_ARG := $(if $(filter 1 true yes,$(SKIP_VERIFY)),--skip-verify,)
-SKIP_SMOKE_ARG := $(if $(filter 1 true yes,$(SKIP_SMOKE_TEST)),--skip-smoke-test,)
-
 TAURI_DIR := crates/snaptext-tauri
 LOCAL_CARGO_TAURI := .tools/bin/cargo-tauri
 CARGO_TAURI := $(if $(wildcard $(LOCAL_CARGO_TAURI)),$(abspath $(LOCAL_CARGO_TAURI)),cargo-tauri)
+
+# 本地无签名构建可使用 NO_SIGN=1；额外参数可通过 PACKAGE_ARGS 透传给打包脚本。
+NO_SIGN_ARG := $(if $(filter 1 true yes,$(NO_SIGN)),--no-sign,)
+UNSIGNED_LOCAL_CONFIG := '{"bundle":{"createUpdaterArtifacts":false}}'
+UNSIGNED_TAURI_ARGS := $(if $(filter 1 true yes,$(NO_SIGN)),--config $(UNSIGNED_LOCAL_CONFIG) --no-sign,)
+
+MACOS_TARGET ?= universal-apple-darwin
+WINDOWS_TARGET ?= x86_64-pc-windows-msvc
+LINUX_TARGET ?= x86_64-unknown-linux-gnu
 
 .PHONY: help
 help: ## 显示可用的 make 目标。
@@ -38,7 +37,7 @@ dev-cargo: ## 使用 cargo run 启动桌面端；debug main 会按需启动 Bun/
 
 .PHONY: dev-local
 dev-local: ## 使用本地 SnapText Cloud 后端启动桌面端。
-	VITE_SNAPTEXT_CLOUD_ENV=local $(CARGO) run -p snaptext-tauri
+	SNAPTEXT_CLOUD_ENV=local $(CARGO) run -p snaptext-tauri
 
 .PHONY: ui-dev
 ui-dev: ## 只启动 React/Vite 前端开发服务，使用 Bun。
@@ -56,67 +55,41 @@ build-frontend: ## 通过仓库前端构建脚本生成 ui/dist。
 build: ## 构建整个 Rust workspace。
 	$(CARGO) build --workspace
 
-.PHONY: fmt
-fmt: ## 格式化 Rust 代码。
-	$(CARGO) fmt --all
+.PHONY: package
+package: package-current ## 构建并校验当前平台桌面安装包。
 
-.PHONY: fmt-check
-fmt-check: ## 检查 Rust 格式，不写入修改。
-	$(CARGO) fmt --all -- --check
+.PHONY: package-current
+package-current: ## 构建并校验当前平台桌面安装包。
+	$(PYTHON) scripts/package_desktop.py $(NO_SIGN_ARG) $(PACKAGE_ARGS)
 
-.PHONY: test
-test: ## 运行 Rust workspace 测试。
-	$(CARGO) test --workspace
+.PHONY: package-no-installer
+package-no-installer: ## 构建当前平台 release binary，不生成原生安装包。
+	$(PYTHON) scripts/package_desktop.py --skip-installers $(NO_SIGN_ARG) $(PACKAGE_ARGS)
 
-.PHONY: test-tauri
-test-tauri: ## 运行 Tauri crate 单元测试。
-	$(CARGO) test -p snaptext-tauri --lib
+.PHONY: package-bundles
+package-bundles: ## 构建当前平台指定 Tauri bundle，例如 make package-bundles BUNDLES=dmg NO_SIGN=1。
+	@test -n "$(BUNDLES)" || (echo "用法: make package-bundles BUNDLES=app|dmg|msi|deb|rpm|appimage [NO_SIGN=1]"; exit 2)
+	$(PYTHON) scripts/package_desktop.py --bundles $(BUNDLES) $(NO_SIGN_ARG) $(PACKAGE_ARGS)
 
-.PHONY: clippy
-clippy: ## 运行严格 Rust lint 检查。
-	$(CARGO) clippy --workspace --all-targets -- -D warnings
+.PHONY: package-macos
+package-macos: build-frontend ## 构建 macOS 目标；默认 universal-apple-darwin，可覆盖 MACOS_TARGET。
+	cd $(TAURI_DIR) && $(CARGO_TAURI) build --target $(MACOS_TARGET) $(UNSIGNED_TAURI_ARGS)
 
-.PHONY: preflight
-preflight: ## 运行本地发布前检查。
-	$(PYTHON) scripts/release_preflight.py
+.PHONY: package-windows
+package-windows: build-frontend ## 构建 Windows 目标；默认 x86_64-pc-windows-msvc，可覆盖 WINDOWS_TARGET。
+	cd $(TAURI_DIR) && $(CARGO_TAURI) build --target $(WINDOWS_TARGET) $(UNSIGNED_TAURI_ARGS)
+
+.PHONY: package-linux
+package-linux: build-frontend ## 构建 Linux 目标；默认 x86_64-unknown-linux-gnu，可覆盖 LINUX_TARGET。
+	cd $(TAURI_DIR) && $(CARGO_TAURI) build --target $(LINUX_TARGET) $(UNSIGNED_TAURI_ARGS)
+
+.PHONY: package-all-platforms
+package-all-platforms: package-macos package-windows package-linux ## 依次构建 macOS、Windows 和 Linux 目标。
+
+.PHONY: package-dry-run
+package-dry-run: ## 只打印当前平台打包命令，不实际执行。
+	$(PYTHON) scripts/package_desktop.py --dry-run $(NO_SIGN_ARG) $(PACKAGE_ARGS)
 
 .PHONY: install-tauri-cli
 install-tauri-cli: ## 缺少 cargo-tauri 时安装 Tauri CLI 到 .tools。
 	$(CARGO) install tauri-cli --root .tools --locked
-
-.PHONY: install-onnx
-install-onnx: ## 下载 PaddleOCR 资源、转换为 ONNX，并安装到 MODEL_DIR。
-	$(PYTHON) scripts/install_paddleocr_onnx_models.py --tier $(MODEL_TIER) --model-dir $(MODEL_DIR) $(FORCE_ARG) $(SKIP_VERIFY_ARG) $(SKIP_SMOKE_ARG) $(ONNX_ARGS)
-
-.PHONY: install-onnx-manifest
-install-onnx-manifest: ## 从 MODEL_MANIFEST 安装已有 ONNX 资源到 MODEL_DIR。
-	$(PYTHON) scripts/install_ocr_models.py --manifest $(MODEL_MANIFEST) --model-dir $(MODEL_DIR) $(FORCE_ARG) $(SKIP_VERIFY_ARG) $(ONNX_MANIFEST_ARGS)
-
-.PHONY: verify-onnx
-verify-onnx: ## 校验 MODEL_DIR 中的 OCR 模型文件和 SHA256SUMS。
-	$(PYTHON) scripts/verify_ocr_models.py $(MODEL_DIR) --require-sha256 $(VERIFY_ONNX_ARGS)
-
-.PHONY: write-onnx-sha
-write-onnx-sha: ## 为当前 OCR 模型文件写入 models/SHA256SUMS。
-	$(PYTHON) scripts/verify_ocr_models.py $(MODEL_DIR) --write-sha256-manifest $(VERIFY_ONNX_ARGS)
-
-.PHONY: ocr-smoke
-ocr-smoke: ## 使用 MODEL_DIR 运行 ignored 真实 OCR smoke test。
-	SNAPTEXT_OCR_MODEL_DIR=$(MODEL_DIR) $(CARGO) test -p snaptext-core --test ocr_smoke -- --ignored --nocapture
-
-.PHONY: package
-package: ## 构建并校验当前平台桌面安装包。
-	$(PYTHON) scripts/package_desktop.py $(NO_SIGN_ARG) $(PACKAGE_ARGS)
-
-.PHONY: package-skip-installers
-package-skip-installers: ## 构建并校验 release binary，不生成原生安装包。
-	$(PYTHON) scripts/package_desktop.py --skip-installers $(NO_SIGN_ARG) $(PACKAGE_ARGS)
-
-.PHONY: package-bundles
-package-bundles: ## 构建指定 Tauri bundle 类型，例如 make package-bundles BUNDLES=dmg NO_SIGN=1。
-	@test -n "$(BUNDLES)" || (echo "用法: make package-bundles BUNDLES=app|dmg|msi|deb [NO_SIGN=1]"; exit 2)
-	$(PYTHON) scripts/package_desktop.py --bundles $(BUNDLES) $(NO_SIGN_ARG) $(PACKAGE_ARGS)
-
-.PHONY: package-dry-run
-package-dry-run: ## 只打印打包命令，不实际执行。
-	$(PYTHON) scripts/package_desktop.py --dry-run $(NO_SIGN_ARG) $(PACKAGE_ARGS)

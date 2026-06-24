@@ -1,0 +1,164 @@
+name: Package Desktop
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_tier:
+        description: OCR model tier for Windows/Linux packages.
+        required: true
+        default: tiny
+        type: choice
+        options:
+          - tiny
+          - small
+          - medium
+  push:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
+  MODEL_TIER: ${{ inputs.model_tier || 'tiny' }}
+
+jobs:
+  package:
+    name: Package ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos
+            os: macos-15
+            package_command: python scripts/package_macos.py --skip-dmg --no-sign
+            artifact_name: snaptext-macos-app
+            artifact_paths: |
+              dist/macos
+          - platform: windows
+            os: windows-latest
+            package_command: python scripts/package_desktop.py --bundles nsis --no-sign
+            artifact_name: snaptext-windows-nsis
+            artifact_paths: |
+              dist/nsis
+          - platform: linux
+            os: ubuntu-latest
+            package_command: python scripts/package_desktop.py --bundles deb --no-sign
+            artifact_name: snaptext-linux-deb
+            artifact_paths: |
+              dist/deb
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            fakeroot \
+            libayatana-appindicator3-dev \
+            libgbm-dev \
+            libgtk-3-dev \
+            libpipewire-0.3-dev \
+            librsvg2-dev \
+            libwebkit2gtk-4.1-dev \
+            patchelf
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Add python3 shim on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          # Tauri beforeBuildCommand and packaging scripts call python3.
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/python3" <<'SH'
+          #!/usr/bin/env bash
+          python "$@"
+          SH
+          printf '@echo off\r\npython %%*\r\n' > "$RUNNER_TEMP/bin/python3.cmd"
+          chmod +x "$RUNNER_TEMP/bin/python3"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: package-${{ matrix.platform }}
+
+      - name: Install Tauri CLI
+        shell: bash
+        run: cargo install tauri-cli --locked
+
+      - name: Cache OCR models
+        if: runner.os != 'macOS'
+        id: ocr-model-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            models/det.onnx
+            models/cls.onnx
+            models/rec.onnx
+            models/rec_dict.txt
+            models/SHA256SUMS
+            models/manifest.json
+          key: snaptext-ocr-${{ runner.os }}-${{ env.MODEL_TIER }}-${{ hashFiles('scripts/install_paddleocr_onnx_models.py') }}
+
+      - name: Install OCR conversion dependencies
+        if: runner.os != 'macOS' && steps.ocr-model-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          # Windows/Linux packages require bundled Paddle ONNX assets.
+          python -m pip install --upgrade pip
+          python -m pip install paddlepaddle paddleocr paddlex
+          paddlex --install paddle2onnx
+
+      - name: Install OCR models
+        if: runner.os != 'macOS' && steps.ocr-model-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: python scripts/install_paddleocr_onnx_models.py --tier "$MODEL_TIER" --force --skip-smoke-test
+
+      - name: Verify OCR model cache
+        if: runner.os != 'macOS'
+        shell: bash
+        run: python scripts/verify_ocr_models.py models --require-sha256 --skip-smoke-test
+
+      - name: Package desktop app
+        shell: bash
+        run: ${{ matrix.package_command }}
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          rm -rf dist
+          case "${{ matrix.platform }}" in
+            macos)
+              mkdir -p dist/macos
+              tar -czf dist/macos/SnapText-macos-app.tar.gz -C target/release/bundle/macos SnapText.app
+              ;;
+            windows)
+              mkdir -p dist/nsis
+              cp target/release/bundle/nsis/*.exe dist/nsis/
+              ;;
+            linux)
+              mkdir -p dist/deb
+              cp target/release/bundle/deb/*.deb dist/deb/
+              ;;
+          esac
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_paths }}
+          if-no-files-found: error
+          retention-days: 14
