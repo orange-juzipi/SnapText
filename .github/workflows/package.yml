@@ -229,11 +229,23 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download packaged artifacts
+      - name: Download macOS package
         uses: actions/download-artifact@v4
         with:
+          name: snaptext-macos-app
           path: release-assets
-          merge-multiple: true
+
+      - name: Download Windows package
+        uses: actions/download-artifact@v4
+        with:
+          name: snaptext-windows-nsis
+          path: release-assets
+
+      - name: Download Linux package
+        uses: actions/download-artifact@v4
+        with:
+          name: snaptext-linux-deb
+          path: release-assets
 
       - name: Prepare release notes and checksums
         shell: bash
