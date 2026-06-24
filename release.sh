@@ -91,7 +91,7 @@ echo "- Source branch: $current_branch"
 echo "- Source commit: $(git rev-parse --short HEAD)"
 echo "- GitHub Actions workflow: Package Desktop"
 echo "- GitHub Release: 自动创建 $version release 页面"
-echo "- Release assets: macOS SnapText.app tar.gz、Windows NSIS .exe、Linux .deb"
+echo "- Release assets: macOS SnapText.app tar.gz、Windows NSIS .exe"
 echo "- Release notes: 自动生成提交记录和完整更新日志链接"
 echo "- Checksums: 自动生成 checksums.txt"
 echo

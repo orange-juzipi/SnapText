@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       model_tier:
-        description: OCR model tier for Windows/Linux packages.
+        description: OCR model tier for Windows packages.
         required: true
         default: tiny
         type: choice
@@ -102,12 +102,6 @@ jobs:
             artifact_name: snaptext-windows-nsis
             artifact_paths: |
               dist/nsis
-          - platform: linux
-            os: ubuntu-latest
-            package_command: python scripts/package_desktop.py --bundles deb --no-sign
-            artifact_name: snaptext-linux-deb
-            artifact_paths: |
-              dist/deb
 
     steps:
       - name: Checkout
@@ -239,12 +233,6 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: snaptext-windows-nsis
-          path: release-assets
-
-      - name: Download Linux package
-        uses: actions/download-artifact@v4
-        with:
-          name: snaptext-linux-deb
           path: release-assets
 
       - name: Prepare release notes and checksums
