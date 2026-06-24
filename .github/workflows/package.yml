@@ -159,7 +159,19 @@ jobs:
 
       - name: Install Tauri CLI
         shell: bash
-        run: cargo install tauri-cli --locked
+        run: |
+          if command -v cargo-tauri >/dev/null 2>&1; then
+            cargo-tauri --version
+            exit 0
+          fi
+
+          for attempt in 1 2 3; do
+            cargo install tauri-cli --locked && exit 0
+            if [[ "$attempt" == "3" ]]; then
+              exit 1
+            fi
+            sleep $((attempt * 15))
+          done
 
       - name: Download OCR models
         if: runner.os != 'macOS'
