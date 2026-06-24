@@ -129,9 +129,19 @@ pub(crate) fn restore_main_window_if_needed(app: &AppHandle, should_restore: boo
 #[cfg(not(test))]
 pub(crate) fn show_main_window(app: &AppHandle) -> Result<()> {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        #[cfg(target_os = "macos")]
+        app.show().map_err(|err| Error::Config(err.to_string()))?;
+
+        // A long-hidden window can also be minimized or belong to a hidden macOS
+        // app; normalize that state before asking the compositor for focus.
+        window
+            .unminimize()
+            .map_err(|err| Error::Config(err.to_string()))?;
         window
             .show()
-            .and_then(|_| window.set_focus())
+            .map_err(|err| Error::Config(err.to_string()))?;
+        window
+            .set_focus()
             .map_err(|err| Error::Config(err.to_string()))?;
     }
     Ok(())

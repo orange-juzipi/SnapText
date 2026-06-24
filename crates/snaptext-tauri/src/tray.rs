@@ -10,6 +10,8 @@ use tauri::{
 
 #[cfg(not(test))]
 use crate::MAIN_WINDOW_LABEL;
+#[cfg(not(test))]
+use crate::window::show_main_window;
 
 pub(crate) const TRAY_SHOW: &str = "show";
 pub(crate) const TRAY_HIDE: &str = "hide";
@@ -52,9 +54,7 @@ pub(crate) fn setup_tray(app: &AppHandle) -> Result<()> {
 fn handle_tray_action(app: &AppHandle, action: Option<TrayAction>) {
     match action {
         Some(TrayAction::Show) => {
-            if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL)
-                && let Err(err) = window.show().and_then(|_| window.set_focus())
-            {
+            if let Err(err) = show_main_window(app) {
                 tracing::warn!(error = %err, "failed to show main window from tray");
             }
         }

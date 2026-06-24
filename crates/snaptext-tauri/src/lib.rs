@@ -126,7 +126,7 @@ pub fn run_tauri(config: AppConfig, history: HistoryStore) -> Result<()> {
     let hotkeys = configured_hotkeys(&config);
     let hotkey_routes = configured_hotkey_routes(&config)?;
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_shortcuts(hotkeys.iter().map(|(_, shortcut)| shortcut.as_str()))
@@ -203,14 +203,35 @@ pub fn run_tauri(config: AppConfig, history: HistoryStore) -> Result<()> {
             );
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .map_err(|err| snaptext_core::Error::Config(err.to_string()))
+        .build(tauri::generate_context!())
+        .map_err(|err| snaptext_core::Error::Config(err.to_string()))?;
+
+    app.run(handle_run_event);
+    Ok(())
 }
 
 #[cfg(test)]
 fn refresh_global_hotkeys(_app: &AppHandle, _config: &AppConfig) -> Result<()> {
     Ok(())
 }
+
+#[cfg(all(not(test), target_os = "macos"))]
+fn handle_run_event(app: &AppHandle, event: tauri::RunEvent) {
+    if let tauri::RunEvent::Reopen {
+        has_visible_windows: false,
+        ..
+    } = event
+    {
+        // macOS sends this when the user clicks the Dock icon while the app is
+        // still running but has no visible windows.
+        if let Err(err) = show_main_window(app) {
+            tracing::warn!(error = %err, "failed to show main window on app reopen");
+        }
+    }
+}
+
+#[cfg(all(not(test), not(target_os = "macos")))]
+fn handle_run_event(_app: &AppHandle, _event: tauri::RunEvent) {}
 
 #[cfg(test)]
 pub fn run_tauri(config: AppConfig, history: HistoryStore) -> Result<()> {
