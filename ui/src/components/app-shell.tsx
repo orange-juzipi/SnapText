@@ -4,7 +4,12 @@ import { Home, History, Settings } from "lucide-react";
 import { useCallback, useEffect } from "react";
 import { queryKeys, useConfigQuery, useUpdateConfigMutation } from "@/lib/queries";
 import { labelsForLanguage } from "@/lib/labels";
-import { AUTO_SOURCE_LANG, normalizeTargetLang, resolveSourceLang } from "@/lib/language";
+import {
+  AUTO_SOURCE_LANG,
+  AUTO_TARGET_LANG,
+  resolveSourceLang,
+  resolveTargetLang,
+} from "@/lib/language";
 import { errorMessage } from "@/lib/errors";
 import { translateText } from "@/lib/api";
 import { TabsLink, TabsNav } from "@/components/ui/tabs";
@@ -55,7 +60,7 @@ export function AppShell() {
     const config = configQuery.data;
     if (!config || updateConfig.isPending) return;
 
-    const shouldUpdateTargetLang = !config.target_lang?.trim() || config.target_lang?.trim() === "auto";
+    const shouldUpdateTargetLang = !config.target_lang?.trim();
     const shouldUpdateProvider = !isVisibleProvider(config.translator.provider);
     if (!shouldUpdateTargetLang && !shouldUpdateProvider) return;
 
@@ -63,7 +68,7 @@ export function AppShell() {
     updateConfig
       .mutateAsync({
         ...config,
-        target_lang: shouldUpdateTargetLang ? "en" : config.target_lang,
+        target_lang: shouldUpdateTargetLang ? AUTO_TARGET_LANG : config.target_lang,
         translator: {
           ...config.translator,
           provider: shouldUpdateProvider ? "snaptext_cloud" : config.translator.provider,
@@ -111,7 +116,7 @@ export function AppShell() {
       setOcrTextInput(sourceText, "selection");
       setStatus(labels.selectionTextExtracted);
       setTranslating(true);
-      translateText(sourceText, normalizeTargetLang(targetLang), resolveSourceLang(sourceText, sourceLang) ?? AUTO_SOURCE_LANG)
+      translateText(sourceText, resolveTargetLang(sourceText, targetLang), resolveSourceLang(sourceText, sourceLang) ?? AUTO_SOURCE_LANG)
         .then((record) => {
           setResultSnapshot({ ...record, source: "selection" });
           setStatus(labels.textTranslated);
@@ -144,7 +149,7 @@ export function AppShell() {
       setOcrTextInput(sourceText, "screenshot");
       setStatus(labels.ocrTextExtracted);
       setTranslating(true);
-      translateText(sourceText, normalizeTargetLang(targetLang), resolveSourceLang(sourceText, sourceLang) ?? AUTO_SOURCE_LANG)
+      translateText(sourceText, resolveTargetLang(sourceText, targetLang), resolveSourceLang(sourceText, sourceLang) ?? AUTO_SOURCE_LANG)
         .then((record) => {
           setResultSnapshot({ ...record, source: "screenshot" });
           setStatus(labels.regionTranslated);

@@ -6,7 +6,9 @@ use crate::{
     config::Lang,
     history::{HistorySource, NewHistoryRecord},
     ocr::{OcrEngine, TextLine, aggregate_text},
-    translate::{DictionaryEntry, TranslateRequest, TranslateResponse, Translator},
+    translate::{
+        DictionaryEntry, TranslateRequest, TranslateResponse, Translator, resolve_auto_target_lang,
+    },
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -63,6 +65,7 @@ pub async fn translate_text_lines(
             "OCR did not detect any translatable text".to_owned(),
         ));
     }
+    let target = resolve_auto_target_lang(&source_text, target);
 
     let TranslateResponse {
         translated_texts,
@@ -206,6 +209,24 @@ mod tests {
         assert_eq!(result.target_lang, "fr");
         assert_eq!(result.text_lines.len(), 2);
         assert!(result.dictionary_entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn translate_text_lines_resolves_auto_target_language_from_source_text() {
+        let translator = RecordingTranslator::default();
+        let result = translate_text_lines(
+            &translator,
+            vec![line("你好", 0, 10)],
+            Lang("auto".to_owned()),
+            HistorySource::Screenshot,
+        )
+        .await
+        .expect("translation result");
+        let requests = translator.requests.lock().expect("request lock");
+
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].target, Lang("en".to_owned()));
+        assert_eq!(result.target_lang, "en");
     }
 
     #[tokio::test]

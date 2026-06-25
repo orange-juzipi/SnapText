@@ -32,6 +32,7 @@ export function sourceLabel(source: string, labels: Labels) {
 export function targetLangLabel(targetLang: string, labels: Labels) {
   const value = targetLang.trim();
   if (!value) return labels.noTarget;
+  if (value === "auto") return labels.autoDetectLanguage;
   return languageDisplayName(value);
 }
 

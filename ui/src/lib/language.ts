@@ -1,5 +1,6 @@
 export const AUTO_SOURCE_LANG = "auto";
 export const DEFAULT_TARGET_LANG = "en";
+export const AUTO_TARGET_LANG = "auto";
 
 export type GoogleTranslateLanguage = {
   code: string;
@@ -158,7 +159,7 @@ export function normalizeLangCode(value: string) {
 
 export function normalizeTargetLang(value?: string | null) {
   const normalized = normalizeLangCode(value ?? "");
-  return !normalized || normalized === AUTO_SOURCE_LANG ? DEFAULT_TARGET_LANG : normalized;
+  return !normalized ? DEFAULT_TARGET_LANG : normalized;
 }
 
 export function languageByCode(code?: string | null) {
@@ -505,4 +506,11 @@ export function resolveSourceSpeechLang(sourceText: string, sourceLang = AUTO_SO
 
 export function looksLikeChinese(text: string) {
   return detectSourceLang(text) === "zh_cn";
+}
+
+export function resolveTargetLang(sourceText: string, targetLang: string) {
+  const normalized = normalizeTargetLang(targetLang);
+  if (normalized !== AUTO_TARGET_LANG) return normalized;
+  // 自动目标语言只在中文和英文之间切换，避免把输出落到用户看不懂的第三种语言。
+  return looksLikeChinese(sourceText) ? DEFAULT_TARGET_LANG : "zh_cn";
 }

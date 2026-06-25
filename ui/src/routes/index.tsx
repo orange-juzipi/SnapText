@@ -21,6 +21,7 @@ import {
   normalizeTargetLang,
   resolveSourceLang,
   resolveSourceSpeechLang,
+  resolveTargetLang,
 } from "@/lib/language";
 import { errorMessage } from "@/lib/errors";
 import { isSpeechSupported, speakAudioUrl, speakText, stopSpeech } from "@/lib/speech";
@@ -164,7 +165,7 @@ export function WorkspacePage() {
       return;
     }
     const sourceLang = resolveSourceLang(sourceText, workspace.sourceLang) ?? AUTO_SOURCE_LANG;
-    const targetLang = normalizeTargetLang(workspace.targetLang);
+    const targetLang = resolveTargetLang(sourceText, workspace.targetLang);
     const requestKey = autoTranslateKey(sourceText, sourceLang, targetLang);
     if (requestKey === lastAutoTranslatedKeyRef.current) return;
 
@@ -187,7 +188,7 @@ export function WorkspacePage() {
     const sourceText = workspace.snapshot.sourceText.trim();
     if (!workspace.snapshot.result.trim() || sourceText !== workspace.textInput.trim()) return;
     const sourceLang = resolveSourceLang(sourceText, workspace.sourceLang) ?? AUTO_SOURCE_LANG;
-    const targetLang = normalizeTargetLang(workspace.snapshot.targetLang);
+    const targetLang = resolveTargetLang(sourceText, workspace.snapshot.targetLang);
     lastAutoTranslatedKeyRef.current = autoTranslateKey(sourceText, sourceLang, targetLang);
   }, [
     workspace.snapshot.result,
@@ -246,7 +247,7 @@ export function WorkspacePage() {
       return;
     }
     const sourceLang = resolveSourceLang(sourceText, workspace.sourceLang) ?? AUTO_SOURCE_LANG;
-    const targetLang = normalizeTargetLang(workspace.targetLang);
+    const targetLang = resolveTargetLang(sourceText, workspace.targetLang);
     autoTranslatePendingRef.current = null;
     await runTranslateText(sourceText, sourceLang, targetLang, "manual");
   }
@@ -656,6 +657,7 @@ export function WorkspacePage() {
             <LanguageCombobox
               ariaLabel={labels.targetLanguage}
               className="workspace-language-select"
+              includeAuto
               labels={labels}
               uiLanguage={configQuery.data?.ui.language}
               value={workspace.targetLang}

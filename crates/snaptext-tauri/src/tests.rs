@@ -88,6 +88,38 @@ async fn translate_text_writes_text_history_source() {
     );
 }
 
+#[tokio::test]
+async fn translate_text_auto_target_resolves_chinese_input_to_english() {
+    let state = AppState::new(
+        AppConfig::default(),
+        HistoryStore::in_memory().expect("history store"),
+    )
+    .expect("app state");
+    set_fake_translated_text(&state, "hello");
+
+    let record = translate_text_inner(&state, " 你好 ".to_owned(), Some("auto".to_owned()), None)
+        .await
+        .expect("translated text record");
+
+    assert_eq!(record.target_lang, "en");
+}
+
+#[tokio::test]
+async fn translate_text_auto_target_resolves_english_input_to_chinese() {
+    let state = AppState::new(
+        AppConfig::default(),
+        HistoryStore::in_memory().expect("history store"),
+    )
+    .expect("app state");
+    set_fake_translated_text(&state, "你好");
+
+    let record = translate_text_inner(&state, " hello ".to_owned(), Some("auto".to_owned()), None)
+        .await
+        .expect("translated text record");
+
+    assert_eq!(record.target_lang, "zh_cn");
+}
+
 #[test]
 fn normalize_selection_text_for_translation_removes_control_edges() {
     let text = normalize_selection_text_for_translation("\0 hello\r\nworld \t".to_owned())

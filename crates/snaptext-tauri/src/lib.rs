@@ -8,7 +8,7 @@ use snaptext_core::{
     ocr::OcrEngine,
     pipeline::{TranslationResult, first_translated_text},
     selection::{SelectionEvent, looks_like_garbled_selection, normalize_selection_text},
-    translate::{DictionaryEntry, TranslateRequest, TranslatorRegistry},
+    translate::{DictionaryEntry, TranslateRequest, TranslatorRegistry, resolve_auto_target_lang},
 };
 use std::time::Duration;
 #[cfg(not(test))]
@@ -645,6 +645,7 @@ async fn translate_text_with_source_inner(
                 .map(|config| config.target_lang.clone())
                 .unwrap_or_else(|_| Lang("en".to_owned()))
         });
+    let target_lang = resolve_auto_target_lang(&text, target_lang);
     ensure_supported_target_lang_for_translation(&target_lang)?;
     let source_lang = source_lang
         .map(|value| Lang(value.trim().to_owned()))
@@ -751,6 +752,7 @@ async fn retranslate_result_text_inner(
                 .map(|config| config.target_lang.clone())
                 .unwrap_or_else(|_| Lang("en".to_owned()))
         });
+    let target_lang = resolve_auto_target_lang(&source_text, target_lang);
     ensure_supported_target_lang_for_translation(&target_lang)?;
     let translation = translator
         .translate(TranslateRequest {
@@ -943,6 +945,7 @@ async fn translate_dynamic_image_inner(
     }
 
     let ocr_result = ocr_dynamic_image_inner(state, image).await?;
+    let target = resolve_auto_target_lang(&ocr_result.source_text, target);
     let translation = translator
         .translate(TranslateRequest {
             texts: vec![ocr_result.source_text.clone()],

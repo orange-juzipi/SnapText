@@ -19,6 +19,9 @@ use crate::{
 pub const MAX_TRANSLATE_TEXTS: usize = 8;
 pub const MAX_TRANSLATE_TEXT_CHARS: usize = 12_000;
 pub const MAX_TRANSLATE_TOTAL_CHARS: usize = 24_000;
+pub const AUTO_TARGET_LANG: &str = "auto";
+pub const ENGLISH_TARGET_LANG: &str = "en";
+pub const CHINESE_TARGET_LANG: &str = "zh_cn";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TranslateRequest {
@@ -445,6 +448,23 @@ pub fn validate_translate_response_texts(
     }
 
     Ok(())
+}
+
+pub fn resolve_auto_target_lang(text: &str, target: Lang) -> Lang {
+    if !is_auto_lang(&target) {
+        return target;
+    }
+
+    // 自动目标语言只在中英之间切换，保持规则简单且可预测。
+    if contains_chinese(text) {
+        Lang(ENGLISH_TARGET_LANG.to_owned())
+    } else {
+        Lang(CHINESE_TARGET_LANG.to_owned())
+    }
+}
+
+pub fn is_auto_lang(lang: &Lang) -> bool {
+    lang.0.trim().eq_ignore_ascii_case(AUTO_TARGET_LANG)
 }
 
 fn required_key<'a>(key: Option<&'a str>, provider: &str) -> Result<&'a str> {
@@ -1145,6 +1165,22 @@ mod tests {
             empty_text
                 .to_string()
                 .contains("translator returned empty text")
+        );
+    }
+
+    #[test]
+    fn resolve_auto_target_lang_switches_between_english_and_chinese() {
+        assert_eq!(
+            resolve_auto_target_lang("你好", Lang("auto".to_owned())),
+            Lang("en".to_owned())
+        );
+        assert_eq!(
+            resolve_auto_target_lang("hello", Lang("auto".to_owned())),
+            Lang("zh_cn".to_owned())
+        );
+        assert_eq!(
+            resolve_auto_target_lang("你好", Lang("ja".to_owned())),
+            Lang("ja".to_owned())
         );
     }
 

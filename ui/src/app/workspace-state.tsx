@@ -1,6 +1,10 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 import type { DictionaryEntry, HistoryRecord, TranslationRequest, WorkspaceSnapshot } from "@/lib/types";
-import { AUTO_SOURCE_LANG, DEFAULT_TARGET_LANG, normalizeTargetLang } from "@/lib/language";
+import {
+  AUTO_SOURCE_LANG,
+  AUTO_TARGET_LANG,
+  normalizeTargetLang,
+} from "@/lib/language";
 
 export type AppToast = {
   id: string;
@@ -78,7 +82,7 @@ export function WorkspaceStateProvider({ children }: { children: ReactNode }) {
   const [textInput, setTextInput] = useState("");
   const [ocrLoading, setOcrLoading] = useState(false);
   const [sourceLang, setSourceLang] = useState(AUTO_SOURCE_LANG);
-  const [targetLang, setTargetLangState] = useState(DEFAULT_TARGET_LANG);
+  const [targetLang, setTargetLangState] = useState(AUTO_TARGET_LANG);
   const [translating, setTranslating] = useState(false);
   const [pinned, setPinned] = useState(false);
   const [lastRequest, setLastRequest] = useState<TranslationRequest | null>(null);
