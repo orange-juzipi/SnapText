@@ -36,6 +36,7 @@ url = { version = "2", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
 xcap = "0.9.6"
 ndarray = "0.17"
+windows = "0.61.3"
 core-foundation = "0.10"
 core-foundation-sys = "0.8"
 objc2 = "0.6"

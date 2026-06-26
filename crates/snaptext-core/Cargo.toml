@@ -39,6 +39,16 @@ objc2-app-kit.workspace = true
 objc2-core-foundation.workspace = true
 objc2-foundation.workspace = true
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
 [dev-dependencies]
 ab_glyph = "0.2"
 tempfile = "3"

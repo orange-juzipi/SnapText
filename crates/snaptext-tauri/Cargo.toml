@@ -27,6 +27,12 @@ objc2-core-audio-types.workspace = true
 objc2-foundation.workspace = true
 objc2-speech.workspace = true
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

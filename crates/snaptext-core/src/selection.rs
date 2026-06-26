@@ -641,10 +641,39 @@ mod windows {
     use std::{
         io,
         process::{Command, Output},
+        ptr, thread,
+        time::Duration,
     };
 
     use super::{SelectionEvent, selection_event_from_text};
     use crate::{Error, Result};
+    use windows::Win32::{
+        Foundation::{HANDLE, HGLOBAL, HWND},
+        System::{
+            DataExchange::{
+                CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable,
+                OpenClipboard, SetClipboardData,
+            },
+            Memory::{GHND, GlobalAlloc, GlobalLock, GlobalUnlock},
+            Ole::CF_UNICODETEXT,
+        },
+        UI::{
+            Input::KeyboardAndMouse::{
+                GetAsyncKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
+                SendInput, VIRTUAL_KEY, VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_RCONTROL,
+                VK_RMENU, VK_RSHIFT,
+            },
+            WindowsAndMessaging::{GetForegroundWindow, SetForegroundWindow},
+        },
+    };
+
+    const CLIPBOARD_COPY_ATTEMPTS: usize = 6;
+    const CLIPBOARD_COPY_SETTLE_MS: u64 = 70;
+    const CLIPBOARD_COPY_ROUNDS: usize = 2;
+    const HOTKEY_MODIFIER_RELEASE_ATTEMPTS: usize = 20;
+    const HOTKEY_MODIFIER_RELEASE_SETTLE_MS: u64 = 25;
+    const CLIPBOARD_UNICODE_TEXT_FORMAT: u32 = CF_UNICODETEXT.0 as u32;
+    const KEY_CODE_C: u16 = b'C' as u16;
 
     const UIA_SELECTION_SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
@@ -669,6 +698,15 @@ if ($texts.Count -eq 0) { exit 1 }
 "#;
 
     pub fn current_selection() -> Result<Option<SelectionEvent>> {
+        let foreground_window = unsafe { GetForegroundWindow() };
+        if let Some(event) = current_uia_selection()? {
+            return Ok(Some(event));
+        }
+
+        current_clipboard_selection(foreground_window)
+    }
+
+    fn current_uia_selection() -> Result<Option<SelectionEvent>> {
         let output = match Command::new("powershell")
             .args([
                 "-NoProfile",
@@ -710,6 +748,218 @@ if ($texts.Count -eq 0) { exit 1 }
         Err(Error::Selection(format!(
             "PowerShell UI Automation selection reader failed: {stderr}"
         )))
+    }
+
+    fn current_clipboard_selection(foreground_window: HWND) -> Result<Option<SelectionEvent>> {
+        let previous_clipboard = read_clipboard_text().ok();
+        let marker = format!("snaptext-selection-marker-{}", uuid::Uuid::new_v4());
+
+        write_clipboard_text(&marker)?;
+        if !copy_frontmost_selection_to_clipboard(foreground_window, &marker)? {
+            if let Some(previous) = previous_clipboard.as_deref() {
+                restore_clipboard(previous);
+            }
+            return Ok(None);
+        }
+
+        let selected_text = read_clipboard_text()?;
+        if let Some(previous) = previous_clipboard.as_deref() {
+            // Ctrl+C 是 Windows 上很多浏览器/编辑器唯一可靠的选中文本兜底。
+            // 只恢复文本剪贴板，避免长期覆盖用户原本复制的文字。
+            restore_clipboard(previous);
+        }
+
+        Ok(selection_event_from_text(selected_text, None))
+    }
+
+    fn copy_frontmost_selection_to_clipboard(
+        foreground_window: HWND,
+        marker: &str,
+    ) -> Result<bool> {
+        for round in 0..CLIPBOARD_COPY_ROUNDS {
+            copy_frontmost_selection(foreground_window)?;
+            if wait_for_copied_selection(marker)? {
+                return Ok(true);
+            }
+
+            if round + 1 < CLIPBOARD_COPY_ROUNDS {
+                thread::sleep(Duration::from_millis(CLIPBOARD_COPY_SETTLE_MS));
+            }
+        }
+
+        Ok(false)
+    }
+
+    fn wait_for_copied_selection(marker: &str) -> Result<bool> {
+        for _ in 0..CLIPBOARD_COPY_ATTEMPTS {
+            thread::sleep(Duration::from_millis(CLIPBOARD_COPY_SETTLE_MS));
+            let text = read_clipboard_text()?;
+            if !text.is_empty() && text != marker {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn copy_frontmost_selection(foreground_window: HWND) -> Result<()> {
+        wait_for_hotkey_modifiers_to_release();
+        if !foreground_window.is_invalid() {
+            unsafe {
+                // 全局快捷键回调可能短暂改变前台窗口，复制前把焦点还给原应用。
+                let _ = SetForegroundWindow(foreground_window);
+            }
+            thread::sleep(Duration::from_millis(CLIPBOARD_COPY_SETTLE_MS));
+        }
+
+        let inputs = [
+            keyboard_input(VK_CONTROL.0, false),
+            keyboard_input(KEY_CODE_C, false),
+            keyboard_input(KEY_CODE_C, true),
+            keyboard_input(VK_CONTROL.0, true),
+        ];
+        let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+        if sent != inputs.len() as u32 {
+            return Err(Error::Selection(
+                "failed to send Windows copy keyboard event".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn keyboard_input(key_code: u16, key_up: bool) -> INPUT {
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VIRTUAL_KEY(key_code),
+                    wScan: 0,
+                    dwFlags: if key_up {
+                        KEYEVENTF_KEYUP
+                    } else {
+                        Default::default()
+                    },
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        }
+    }
+
+    fn wait_for_hotkey_modifiers_to_release() {
+        for _ in 0..HOTKEY_MODIFIER_RELEASE_ATTEMPTS {
+            if !modifier_key_is_pressed(VK_LCONTROL)
+                && !modifier_key_is_pressed(VK_RCONTROL)
+                && !modifier_key_is_pressed(VK_LMENU)
+                && !modifier_key_is_pressed(VK_RMENU)
+                && !modifier_key_is_pressed(VK_LSHIFT)
+                && !modifier_key_is_pressed(VK_RSHIFT)
+            {
+                return;
+            }
+            thread::sleep(Duration::from_millis(HOTKEY_MODIFIER_RELEASE_SETTLE_MS));
+        }
+
+        tracing::debug!("copying selection while a Windows keyboard modifier is still pressed");
+    }
+
+    fn modifier_key_is_pressed(key: VIRTUAL_KEY) -> bool {
+        unsafe { GetAsyncKeyState(key.0 as i32) & 0x8000_u16 as i16 != 0 }
+    }
+
+    fn read_clipboard_text() -> Result<String> {
+        let _clipboard = ClipboardGuard::open()?;
+        if unsafe { IsClipboardFormatAvailable(CLIPBOARD_UNICODE_TEXT_FORMAT) }.is_err() {
+            return Ok(String::new());
+        }
+
+        let handle = unsafe { GetClipboardData(CLIPBOARD_UNICODE_TEXT_FORMAT) }
+            .map_err(|err| Error::Selection(format!("failed to read clipboard text: {err}")))?;
+        if handle.is_invalid() {
+            return Ok(String::new());
+        }
+
+        let clipboard_memory = HGLOBAL(handle.0);
+        let ptr = unsafe { GlobalLock(clipboard_memory) } as *const u16;
+        if ptr.is_null() {
+            return Ok(String::new());
+        }
+
+        let text = read_wide_null_terminated(ptr);
+        unsafe {
+            let _ = GlobalUnlock(clipboard_memory);
+        }
+        Ok(text)
+    }
+
+    fn write_clipboard_text(text: &str) -> Result<()> {
+        let _clipboard = ClipboardGuard::open()?;
+        unsafe {
+            EmptyClipboard()
+                .map_err(|err| Error::Selection(format!("failed to clear clipboard: {err}")))?;
+        }
+
+        let mut wide: Vec<u16> = text.encode_utf16().collect();
+        wide.push(0);
+        let byte_len = wide.len() * std::mem::size_of::<u16>();
+        let handle = unsafe { GlobalAlloc(GHND, byte_len) }
+            .map_err(|err| Error::Selection(format!("failed to allocate clipboard text: {err}")))?;
+        let ptr = unsafe { GlobalLock(handle) } as *mut u16;
+        if ptr.is_null() {
+            return Err(Error::Selection(
+                "failed to lock clipboard text allocation".to_owned(),
+            ));
+        }
+
+        unsafe {
+            ptr::copy_nonoverlapping(wide.as_ptr(), ptr, wide.len());
+            let _ = GlobalUnlock(handle);
+        }
+
+        let set_result =
+            unsafe { SetClipboardData(CLIPBOARD_UNICODE_TEXT_FORMAT, Some(HANDLE(handle.0))) };
+        if set_result.is_err() {
+            return Err(Error::Selection(
+                "failed to write clipboard text".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn restore_clipboard(previous: &str) {
+        if let Err(err) = write_clipboard_text(previous) {
+            tracing::warn!(error = %err, "failed to restore clipboard after Windows selection fallback");
+        }
+    }
+
+    fn read_wide_null_terminated(ptr: *const u16) -> String {
+        let mut len = 0;
+        loop {
+            let value = unsafe { *ptr.add(len) };
+            if value == 0 {
+                break;
+            }
+            len += 1;
+        }
+
+        String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(ptr, len) })
+    }
+
+    struct ClipboardGuard;
+
+    impl ClipboardGuard {
+        fn open() -> Result<Self> {
+            unsafe { OpenClipboard(None) }
+                .map_err(|err| Error::Selection(format!("failed to open clipboard: {err}")))?;
+            Ok(Self)
+        }
+    }
+
+    impl Drop for ClipboardGuard {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = CloseClipboard();
+            }
+        }
     }
 }
 

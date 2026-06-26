@@ -40,6 +40,8 @@ pub struct AppState {
     pub(crate) selection_hotkey_busy: AtomicBool,
     #[cfg(not(test))]
     pub(crate) last_selection_hotkey_at: Mutex<Option<Instant>>,
+    #[cfg(not(test))]
+    pub(crate) result_window_pinned: AtomicBool,
 }
 
 #[derive(Debug, Clone)]
@@ -102,6 +104,8 @@ impl AppState {
             selection_hotkey_busy: AtomicBool::new(false),
             #[cfg(not(test))]
             last_selection_hotkey_at: Mutex::new(None),
+            #[cfg(not(test))]
+            result_window_pinned: AtomicBool::new(false),
         })
     }
 }

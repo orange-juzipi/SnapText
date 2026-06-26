@@ -10,7 +10,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
 use crate::{
     AppState, current_selection_text_inner, emit_selection_failure, emit_selection_text,
-    show_main_window, start_screenshot_overlay_inner,
+    show_main_window, start_screenshot_overlay_from_hotkey_inner,
 };
 
 const SELECTION_HOTKEY_DEBOUNCE_MS: u64 = 800;
@@ -65,9 +65,11 @@ pub(crate) fn handle_global_hotkey(app: AppHandle, action: HotkeyAction) {
     tauri::async_runtime::spawn(async move {
         let state = app.state::<AppState>();
         let result = match action {
-            HotkeyAction::Screenshot => start_screenshot_overlay_inner(&app, state.inner())
-                .await
-                .map(|_| ()),
+            HotkeyAction::Screenshot => {
+                start_screenshot_overlay_from_hotkey_inner(&app, state.inner())
+                    .await
+                    .map(|_| ())
+            }
             HotkeyAction::Selection => {
                 if should_ignore_selection_hotkey(state.inner()) {
                     tracing::debug!("selection hotkey ignored because it was triggered recently");
@@ -86,6 +88,9 @@ pub(crate) fn handle_global_hotkey(app: AppHandle, action: HotkeyAction) {
                         show_main_window(&app).map(|_| emit_selection_text(&app, &payload))
                     }
                     Err(err) => {
+                        if let Err(show_err) = show_main_window(&app) {
+                            tracing::warn!(error = %show_err, "failed to show main window after selection hotkey failure");
+                        }
                         emit_selection_failure(&app, &err);
                         Err(err)
                     }

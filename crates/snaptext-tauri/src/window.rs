@@ -1,4 +1,6 @@
 use snaptext_core::{Error, Result};
+#[cfg(all(not(test), target_os = "windows"))]
+use std::sync::atomic::Ordering;
 #[cfg(all(not(test), not(target_os = "macos")))]
 use tauri::WebviewUrl;
 #[cfg(all(not(test), not(target_os = "macos")))]
@@ -140,6 +142,11 @@ pub(crate) fn show_main_window(app: &AppHandle) -> Result<()> {
         window
             .show()
             .map_err(|err| Error::Config(err.to_string()))?;
+        #[cfg(target_os = "windows")]
+        {
+            // Windows 对后台进程抢前台有额外限制；先置顶再聚焦能让热键结果稳定浮到最前。
+            pulse_main_window_to_front(app, &window)?;
+        }
         window
             .set_focus()
             .map_err(|err| Error::Config(err.to_string()))?;
@@ -159,4 +166,27 @@ pub(crate) fn set_main_window_always_on_top(app: &AppHandle, always_on_top: bool
     window
         .set_always_on_top(always_on_top)
         .map_err(|err| Error::Config(err.to_string()))
+}
+
+#[cfg(all(not(test), target_os = "windows"))]
+fn pulse_main_window_to_front(app: &AppHandle, window: &tauri::WebviewWindow) -> Result<()> {
+    window
+        .set_always_on_top(true)
+        .map_err(|err| Error::Config(err.to_string()))?;
+
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+        let Some(state) = app.try_state::<crate::AppState>() else {
+            return;
+        };
+        if state.inner().result_window_pinned.load(Ordering::Acquire) {
+            return;
+        }
+        if let Err(err) = set_main_window_always_on_top(&app, false) {
+            tracing::warn!(error = %err, "failed to clear Windows foreground topmost pulse");
+        }
+    });
+
+    Ok(())
 }

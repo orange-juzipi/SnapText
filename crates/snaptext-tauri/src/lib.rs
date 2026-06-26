@@ -335,14 +335,31 @@ async fn start_screenshot_overlay_inner(
     app: &AppHandle,
     state: &AppState,
 ) -> Result<ScreenshotPayload> {
+    start_screenshot_overlay_with_restore(app, state, false).await
+}
+
+#[cfg(not(test))]
+pub(crate) async fn start_screenshot_overlay_from_hotkey_inner(
+    app: &AppHandle,
+    state: &AppState,
+) -> Result<ScreenshotPayload> {
+    start_screenshot_overlay_with_restore(app, state, true).await
+}
+
+async fn start_screenshot_overlay_with_restore(
+    app: &AppHandle,
+    state: &AppState,
+    force_restore_main_window: bool,
+) -> Result<ScreenshotPayload> {
     #[cfg(target_os = "macos")]
     {
-        return start_native_screenshot_selection_inner(app, state).await;
+        return start_native_screenshot_selection_inner(app, state, force_restore_main_window)
+            .await;
     }
 
     #[cfg(not(target_os = "macos"))]
     {
-        start_webview_screenshot_overlay_inner(app, state).await
+        start_webview_screenshot_overlay_inner(app, state, force_restore_main_window).await
     }
 }
 
@@ -350,8 +367,9 @@ async fn start_screenshot_overlay_inner(
 async fn start_native_screenshot_selection_inner(
     app: &AppHandle,
     state: &AppState,
+    force_restore_main_window: bool,
 ) -> Result<ScreenshotPayload> {
-    let restore_main_window = main_window_is_visible(app);
+    let restore_main_window = force_restore_main_window || main_window_is_visible(app);
     hide_overlay_window(app)?;
     hide_main_window(app)?;
     tokio::time::sleep(Duration::from_millis(MAIN_WINDOW_HIDE_SETTLE_MS)).await;
@@ -375,11 +393,11 @@ async fn start_native_screenshot_selection_inner(
 async fn start_webview_screenshot_overlay_inner(
     app: &AppHandle,
     state: &AppState,
+    force_restore_main_window: bool,
 ) -> Result<ScreenshotPayload> {
-    let restore_main_window = main_window_is_visible(app);
+    let restore_main_window = force_restore_main_window || main_window_is_visible(app);
     hide_main_window(app)?;
-    // macOS may not remove the window from the compositor immediately after hide().
-    // Waiting briefly prevents the overlay screenshot from capturing SnapText itself.
+    // 等待主窗口从合成器里消失，避免 overlay 背景截图把 SnapText 自己截进去。
     tokio::time::sleep(Duration::from_millis(MAIN_WINDOW_HIDE_SETTLE_MS)).await;
     let payload = match screenshot_full_inner(state).await {
         Ok(payload) => payload,
@@ -590,6 +608,14 @@ fn close_overlay(app: AppHandle, state: State<'_, AppState>) -> Result<()> {
 #[tauri::command]
 #[allow(dead_code)]
 fn pin_result_window(app: AppHandle) -> Result<()> {
+    #[cfg(not(test))]
+    {
+        let state = app.state::<AppState>();
+        state
+            .inner()
+            .result_window_pinned
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
     set_main_window_always_on_top(&app, true)?;
     emit_result_window_state(&app, true)?;
     Ok(())
@@ -598,6 +624,14 @@ fn pin_result_window(app: AppHandle) -> Result<()> {
 #[tauri::command]
 #[allow(dead_code)]
 fn unpin_result_window(app: AppHandle) -> Result<()> {
+    #[cfg(not(test))]
+    {
+        let state = app.state::<AppState>();
+        state
+            .inner()
+            .result_window_pinned
+            .store(false, std::sync::atomic::Ordering::Release);
+    }
     set_main_window_always_on_top(&app, false)?;
     emit_result_window_state(&app, false)?;
     Ok(())
