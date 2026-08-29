@@ -22,7 +22,14 @@ DEFAULT_MODEL_DIR = ROOT / "models"
 REQUIRED_MODEL_FILES = ("det.onnx", "cls.onnx", "rec.onnx", "rec_dict.txt")
 CHECKSUM_FILE = "SHA256SUMS"
 MANIFEST_FILE = "manifest.json"
-PLACEHOLDER_TOKENS = ("example.com", "replace-with", "placeholder", "/path/to/")
+# Keep reserved example domains from being mistaken for release assets.
+PLACEHOLDER_TOKENS = (
+    "example.com",
+    "example.invalid",
+    "replace-with",
+    "placeholder",
+    "/path/to/",
+)
 
 
 def run(cmd: list[str], env: dict[str, str]) -> None:

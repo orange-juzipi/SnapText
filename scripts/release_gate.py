@@ -277,7 +277,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--qa-record",
-        default="docs/desktop-qa-record.json",
+        default=".release/desktop-qa-record.json",
         help="Filled manual desktop QA record.",
     )
     parser.add_argument(
@@ -303,7 +303,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--signing-record",
-        default="docs/release-signing-record.json",
+        default=".release/release-signing-record.json",
         help="Filled release signing and notarization JSON record.",
     )
     return parser.parse_args(argv)

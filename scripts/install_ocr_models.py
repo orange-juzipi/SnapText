@@ -25,7 +25,14 @@ DEFAULT_MANIFEST = ROOT / "models" / "manifest.json"
 DEFAULT_MODEL_DIR = ROOT / "models"
 REQUIRED_MODEL_FILES = ("det.onnx", "cls.onnx", "rec.onnx", "rec_dict.txt")
 CHECKSUM_FILE = "SHA256SUMS"
-PLACEHOLDER_TOKENS = ("example.com", "replace-with", "placeholder", "/path/to/")
+# Keep reserved example domains from being mistaken for release assets.
+PLACEHOLDER_TOKENS = (
+    "example.com",
+    "example.invalid",
+    "replace-with",
+    "placeholder",
+    "/path/to/",
+)
 
 
 def check(condition: bool, message: str) -> None:

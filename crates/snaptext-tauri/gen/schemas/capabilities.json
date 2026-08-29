@@ -1,1 +1,0 @@
-{"default":{"identifier":"default","description":"Default desktop permissions for the SnapText shell.","local":true,"windows":["main","overlay","result"],"permissions":["core:default","global-shortcut:default"]}}

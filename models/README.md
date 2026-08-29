@@ -21,8 +21,7 @@ SnapText 的桌面 OCR 流程要求 `models/` 目录包含 PP-OCRv6 multilingual
 推荐先使用官方 PaddleOCR 推理模型自动落地脚本。该脚本默认下载 PP-OCRv6 tiny 检测、识别和方向分类模型，使用 PaddleX/Paddle2ONNX 转为 ONNX，再写入 SnapText 需要的四个固定文件：
 
 ```bash
-rm -rf .venv-paddle
-/usr/local/bin/python3.12 -m venv .venv-paddle
+python3.12 -m venv .venv-paddle
 source .venv-paddle/bin/activate
 python -m pip install --upgrade pip
 python -m pip install paddlepaddle paddleocr paddlex
@@ -33,6 +32,8 @@ python3 scripts/install_paddleocr_onnx_models.py --tier tiny --skip-smoke-test
 不要使用 Python 3.14 创建该 venv；PaddlePaddle 通常不会立即提供新 Python 大版本的 wheel，容易出现 `No matching distribution found for paddlepaddle`。
 
 如果需要更高精度，可以把 `--tier tiny` 改为 `--tier small` 或 `--tier medium`。如果官方地址访问不稳定，可以通过 `--det-url`、`--rec-url` 和 `--cls-url` 指向内部镜像；如果识别模型压缩包里没有可识别的字典文件，可以用 `--rec-dict /path/to/dict.txt` 显式指定。
+
+模型文件和转换工具来自 PaddleOCR/PaddleX 等上游项目，分发应用或模型资产前请核对对应版本的上游许可证和使用限制。SnapText 仓库只提供安装、校验和打包脚本，不声明这些上游模型的版权。
 
 也可以使用 manifest 驱动的安装脚本安装已经转换好的 ONNX 文件。先复制示例 manifest，并把四个文件的 URL 和 SHA-256 替换为本次发布选定的官方地址或内部镜像地址：
 
@@ -109,7 +110,7 @@ python3 scripts/verify_ocr_models.py --require-sha256 models
 
 ## 当前状态
 
-仓库当前只保留目录占位符，没有附带真实模型文件。因此：
+仓库当前只保留本说明和 manifest 示例，没有附带真实模型文件。因此：
 
 - OCR 代码路径已完成
 - 模型资产校验门已完成

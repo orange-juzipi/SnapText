@@ -297,8 +297,8 @@ def main() -> int:
             f"scripts/test_desktop_bundles.py is missing bundle verifier coverage for {expected}",
         )
     check(
-        "--platform all` 只验证汇总安装包产物" in read_text(ROOT / "docs/release-packaging.md"),
-        "release docs must state that --platform all verifies aggregated installers only",
+        "--platform all` 只验证汇总安装包产物" in read_text(ROOT / "README.md"),
+        "README must state that --platform all verifies aggregated installers only",
     )
     generate_release_manifest_script = ROOT / "scripts/generate_release_manifest.py"
     check(
@@ -917,103 +917,86 @@ def main() -> int:
             f"snaptext-tauri cargo run fallback is missing React dev server support: {expected}",
         )
 
-    release_docs = read_text(ROOT / "docs/release-packaging.md")
+    # README is the single public release guide; generated evidence stays local.
+    release_guide = read_text(ROOT / "README.md")
     check(
         "GitHub Actions 已配置 macOS、Windows、Linux 三平台基础检查矩阵"
-        in release_docs,
-        "release docs are missing CI coverage note",
+        in release_guide,
+        "README is missing CI coverage note",
     )
     check(
-        "python3 scripts/verify_translator_providers.py" in release_docs,
-        "release docs are missing translator provider verification command",
+        "python3 scripts/verify_translator_providers.py" in release_guide,
+        "README is missing translator provider verification command",
     )
     check(
-        "python3 scripts/package_desktop.py" in release_docs,
-        "release docs are missing desktop packaging command",
+        "python3 scripts/package_desktop.py" in release_guide,
+        "README is missing desktop packaging command",
     )
     check(
-        "python3 scripts/verify_desktop_bundles.py" in release_docs,
-        "release docs are missing desktop bundle verification command",
+        "python3 scripts/verify_desktop_bundles.py" in release_guide,
+        "README is missing desktop bundle verification command",
     )
     check(
-        "混入其他版本或未知命名的 `SnapText` 安装包" in release_docs,
-        "release docs are missing stale bundle artifact rejection note",
+        "混入其他版本或未知命名的 `SnapText` 安装包" in release_guide,
+        "README is missing stale bundle artifact rejection note",
     )
     check(
-        "python3 scripts/generate_release_manifest.py" in release_docs,
-        "release docs are missing release manifest command",
+        "python3 scripts/generate_release_manifest.py" in release_guide,
+        "README is missing release manifest command",
     )
     check(
-        "--require-artifact-kinds all" in release_docs,
-        "release docs are missing the release manifest artifact-kind requirement",
+        "--require-artifact-kinds all" in release_guide,
+        "README is missing the release manifest artifact-kind requirement",
     )
     check(
         "python3 scripts/generate_release_manifest.py --manifest dist/release-manifest.json --checksums dist/SHA256SUMS --require-platforms all --require-artifact-kinds all"
-        in release_docs,
-        "release docs are missing the complete release manifest verification command",
+        in release_guide,
+        "README is missing the complete release manifest verification command",
     )
     check(
-        "python3 scripts/verify_desktop_qa.py" in release_docs,
-        "release docs are missing desktop QA verification command",
+        "python3 scripts/verify_desktop_qa.py" in release_guide,
+        "README is missing desktop QA verification command",
     )
     check(
-        "python3 scripts/verify_release_signing.py" in release_docs,
-        "release docs are missing release signing verification command",
+        "python3 scripts/verify_release_signing.py" in release_guide,
+        "README is missing release signing verification command",
     )
     check(
-        "codesign" in release_docs
-        and "notarytool" in release_docs
-        and "spctl" in release_docs
-        and "signtool" in release_docs
-        and "SHA256SUMS" in release_docs
-        and "AppImage" in release_docs,
-        "release docs are missing signing evidence keyword requirements",
-    )
-    release_signing_example = check_json(ROOT / "docs/release-signing-record.example.json")
-    for platform_name in ("macos", "windows", "linux"):
-        check(
-            platform_name in release_signing_example.get("platforms", {}),
-            f"release signing example is missing {platform_name}",
-        )
-    check(
-        'python3 scripts/release_gate.py --release-commit "$(git rev-parse HEAD)"' in release_docs,
-        "release docs are missing final release gate command with --release-commit",
+        "codesign" in release_guide
+        and "notarytool" in release_guide
+        and "spctl" in release_guide
+        and "signtool" in release_guide
+        and "SHA256SUMS" in release_guide
+        and "AppImage" in release_guide,
+        "README is missing signing evidence keyword requirements",
     )
     check(
-        "`--release-commit` 必须等于当前 checkout 的 `git rev-parse HEAD`" in release_docs,
-        "release docs are missing the release commit HEAD identity rule",
+        'python3 scripts/release_gate.py --release-commit "$(git rev-parse HEAD)"' in release_guide,
+        "README is missing final release gate command with --release-commit",
     )
     check(
-        "`--allow-dirty-worktree` 只用于本地进度汇总" in release_docs,
-        "release docs are missing the dirty worktree summary-only rule",
+        "`--release-commit` 必须等于当前 checkout 的 `git rev-parse HEAD`" in release_guide,
+        "README is missing the release commit HEAD identity rule",
     )
     check(
-        "python3 scripts/install_ocr_models.py" in release_docs,
-        "release docs are missing OCR model install command",
+        "`--allow-dirty-worktree` 只用于本地进度汇总" in release_guide,
+        "README is missing the dirty worktree summary-only rule",
     )
     check(
-        "React/Vite" in release_docs and "ui/dist" in release_docs and "ui/pkg" not in release_docs,
-        "release docs must describe the React/Vite ui/dist frontend build, not the old ui/pkg build",
+        "python3 scripts/install_ocr_models.py" in release_guide,
+        "README is missing OCR model install command",
     )
     check(
-        "WASM 前端" not in release_docs and "wasm-bindgen" not in release_docs,
-        "release docs still contain stale WASM frontend build guidance",
+        "React/Vite" in release_guide and "ui/dist" in release_guide and "ui/pkg" not in release_guide,
+        "README must describe the React/Vite ui/dist frontend build, not the old ui/pkg build",
     )
-    desktop_qa_checklist = read_text(ROOT / "docs/desktop-qa-checklist.md")
-    for expected in (
-        "screen_recording_permission",
-        "ui_automation_selection",
-        "wayland_session",
-        "python3 scripts/verify_desktop_qa.py docs/desktop-qa-record.json",
-    ):
-        check(
-            expected in desktop_qa_checklist,
-            f"desktop QA checklist is missing required coverage: {expected}",
-        )
-    check_json(ROOT / "docs/desktop-qa-record.example.json")
     check(
-        "python3 scripts/verify_ocr_models.py --require-sha256 models" in release_docs,
-        "release docs are missing the required model checksum verification command",
+        "WASM 前端" not in release_guide and "wasm-bindgen" not in release_guide,
+        "README still contains stale WASM frontend build guidance",
+    )
+    check(
+        "python3 scripts/verify_ocr_models.py --require-sha256 models" in release_guide,
+        "README is missing the required model checksum verification command",
     )
 
     ci_workflow = read_text(ROOT / ".github/workflows/ci.yml")

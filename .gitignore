@@ -18,14 +18,21 @@ ui/dist
 ui/node_modules
 ui/pkg
 .tools
+# Tauri CLI-generated editor schemas
+crates/snaptext-tauri/gen/
 
 # Python helper script caches
 .venv/
 .venv-ocr/
 .venv-paddle/
+.venv-piper/
 __pycache__/
 **/__pycache__/
 *.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
 
 # Generated release manifests
 dist/release-manifest.json
@@ -38,8 +45,7 @@ models/SHA256SUMS
 models/manifest.json
 
 # Release evidence records may contain internal artifact paths or certificate details
-docs/desktop-qa-record.json
-docs/release-signing-record.json
+.release/
 
 # MSVC Windows builds of rustc generate these, which store debugging information
 *.pdb
@@ -59,3 +65,6 @@ docs/release-signing-record.json
 goal
 .playwright-mcp
 .env
+.env.*
+!.env.example
+*.log

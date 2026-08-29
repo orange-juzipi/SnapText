@@ -1,0 +1,48 @@
+name: Bug report
+description: 报告可复现的问题
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先搜索已有 issue。不要在公开 issue 中粘贴 API key、设备私钥、用户数据或未脱敏日志。
+  - type: input
+    id: version
+    attributes:
+      label: SnapText 版本
+      placeholder: 例如 0.1.0 或 main@commit
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: 操作系统
+      placeholder: 例如 macOS 15.6 arm64
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 请给出最小、可重复的步骤。
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期行为
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 脱敏日志或截图
+      description: 仅粘贴已删除密钥、个人数据和本地路径的内容。

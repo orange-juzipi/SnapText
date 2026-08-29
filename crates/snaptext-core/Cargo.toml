@@ -1,6 +1,7 @@
 [package]
 name = "snaptext-core"
 version = "0.1.0"
+description = "Core OCR, translation, screenshot, selection, and history logic for SnapText."
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -50,5 +51,5 @@ windows = { workspace = true, features = [
 ] }
 
 [dev-dependencies]
-ab_glyph = "0.2"
-tempfile = "3"
+ab_glyph = "0.2.32"
+tempfile = "3.27.0"

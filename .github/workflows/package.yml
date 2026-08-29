@@ -17,7 +17,7 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -216,6 +216,8 @@ jobs:
     name: Create GitHub Release
     needs: package
     if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

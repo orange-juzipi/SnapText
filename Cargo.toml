@@ -7,43 +7,46 @@ members = [
 
 [workspace.package]
 edition = "2024"
-license = "MIT OR Apache-2.0"
-repository = "https://example.invalid/snaptext"
-rust-version = "1.96"
+license = "MIT"
+repository = "https://github.com/orange-juzipi/SnapText"
+homepage = "https://github.com/orange-juzipi/SnapText"
+description = "A cross-platform desktop OCR and translation utility."
+authors = ["SnapText contributors"]
+rust-version = "1.98"
 
 [workspace.dependencies]
-async-trait = "0.1"
-base64 = "0.22"
-directories = "6"
-ed25519-dalek = "2"
-getrandom = "0.3"
-hex = "0.4"
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-rusqlite = { version = "0.37", features = ["bundled"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-serde_yaml = "0.9"
-sha2 = "0.10"
-ort = "2.0.0-rc.12"
-tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
-tauri-plugin-global-shortcut = "2"
-thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-url = { version = "2", features = ["serde"] }
-uuid = { version = "1", features = ["v4"] }
-xcap = "0.9.6"
-ndarray = "0.17"
-windows = "0.61.3"
-core-foundation = "0.10"
-core-foundation-sys = "0.8"
-objc2 = "0.6"
-objc2-app-kit = "0.3"
-objc2-avf-audio = "0.3"
-objc2-core-audio-types = "0.3"
-objc2-core-foundation = "0.3"
-objc2-foundation = "0.3"
-objc2-speech = "0.3"
-block2 = "0.6"
+async-trait = "0.1.92"
+base64 = "0.23.1"
+directories = "6.0.0"
+ed25519-dalek = "3.0.0"
+getrandom = "0.4.3"
+hex = "0.4.3"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+serde_yaml = "0.9.34"
+sha2 = "0.11.0"
+ort = "2.0.0-rc.13"
+tauri = { version = "2.11.5", features = ["macos-private-api", "tray-icon"] }
+tauri-plugin-global-shortcut = "2.3.2"
+thiserror = "2.0.20"
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "sync"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+url = { version = "2.5.8", features = ["serde"] }
+uuid = { version = "1.26.0", features = ["v4"] }
+xcap = "0.9.8"
+ndarray = "0.17.2"
+windows = "0.62.2"
+core-foundation = "0.10.1"
+core-foundation-sys = "0.8.7"
+objc2 = "0.6.4"
+objc2-app-kit = "0.3.2"
+objc2-avf-audio = "0.3.2"
+objc2-core-audio-types = "0.3.2"
+objc2-core-foundation = "0.3.2"
+objc2-foundation = "0.3.2"
+objc2-speech = "0.3.2"
+block2 = "0.6.2"

@@ -17,8 +17,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_RECORD = ROOT / "docs" / "desktop-qa-record.json"
-EXAMPLE_RECORD = ROOT / "docs" / "desktop-qa-record.example.json"
+# Keep release evidence outside the public source tree. The directory is
+# ignored, while --write-example still provides an on-demand template.
+RELEASE_DIR = ROOT / ".release"
+DEFAULT_RECORD = RELEASE_DIR / "desktop-qa-record.json"
+EXAMPLE_RECORD = RELEASE_DIR / "desktop-qa-record.example.json"
 PLATFORMS = ("macos", "windows", "linux")
 COMMON_CHECKS = (
     "package_build",
@@ -287,7 +290,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--write-example",
         action="store_true",
-        help="Write docs/desktop-qa-record.example.json and exit.",
+        help="Write .release/desktop-qa-record.example.json and exit.",
     )
     parser.add_argument(
         "--example-output",

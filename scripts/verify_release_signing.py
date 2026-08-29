@@ -11,8 +11,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_RECORD = ROOT / "docs" / "release-signing-record.json"
-EXAMPLE_RECORD = ROOT / "docs" / "release-signing-record.example.json"
+# Keep release evidence outside the public source tree. The directory is
+# ignored, while --write-example still provides an on-demand template.
+RELEASE_DIR = ROOT / ".release"
+DEFAULT_RECORD = RELEASE_DIR / "release-signing-record.json"
+EXAMPLE_RECORD = RELEASE_DIR / "release-signing-record.example.json"
 VALID_RESULTS = {"pass", "fail", "blocked", "not_applicable"}
 PLACEHOLDER_PREFIXES = ("replace-with-", "replace with ")
 MIN_EVIDENCE_LENGTH = 12
@@ -292,7 +295,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--write-example",
         action="store_true",
-        help="Write docs/release-signing-record.example.json and exit.",
+        help="Write .release/release-signing-record.example.json and exit.",
     )
     parser.add_argument(
         "--example-output",

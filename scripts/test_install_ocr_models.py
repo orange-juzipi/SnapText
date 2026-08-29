@@ -41,7 +41,7 @@ def write_manifest(manifest_path: Path, source_dir: Path, hashes: dict[str, str]
 def write_placeholder_url_manifest(manifest_path: Path, source_dir: Path, hashes: dict[str, str]) -> None:
     write_manifest(manifest_path, source_dir, hashes)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["files"]["det.onnx"]["url"] = "https://example.com/path/to/det.onnx"
+    manifest["files"]["det.onnx"]["url"] = "https://example.invalid/snaptext/det.onnx"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
 

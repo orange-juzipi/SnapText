@@ -104,13 +104,13 @@ def main() -> int:
     )
     assert_contains(
         output,
-        "desktop_qa (external): python3 scripts/verify_desktop_qa.py docs/desktop-qa-record.json "
+        "desktop_qa (external): python3 scripts/verify_desktop_qa.py .release/desktop-qa-record.json "
         f"--expected-version 0.1.0 --expected-commit {head}",
     )
     assert_contains(
         output,
         "release_signing (external): python3 scripts/verify_release_signing.py "
-        f"docs/release-signing-record.json --expected-version 0.1.0 --expected-commit {head}",
+        f".release/release-signing-record.json --expected-version 0.1.0 --expected-commit {head}",
     )
 
     skip_static = run_gate("--skip-static")

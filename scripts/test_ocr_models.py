@@ -148,7 +148,7 @@ def main() -> int:
         write_model_manifest(placeholder_model_manifest_dir, placeholder_hashes)
         placeholder_manifest_path = placeholder_model_manifest_dir / "manifest.json"
         placeholder_payload = json.loads(placeholder_manifest_path.read_text(encoding="utf-8"))
-        placeholder_payload["files"]["det.onnx"]["url"] = "https://example.com/det.onnx"
+        placeholder_payload["files"]["det.onnx"]["url"] = "https://example.invalid/det.onnx"
         placeholder_manifest_path.write_text(json.dumps(placeholder_payload, indent=2) + "\n", encoding="utf-8")
         placeholder_manifest = run_verify(placeholder_model_manifest_dir, "--require-sha256")
         assert_failure_contains(
