@@ -22,13 +22,14 @@ docs/                      # 打包、QA、发布记录模板
 - Rust toolchain，项目使用 Rust 2024 edition。
 - Python 3。
 - Bun，前端构建优先使用 Bun。
-- Tauri CLI。仓库内已有本地入口时优先用 `.tools/bin/cargo-tauri`；没有时执行：
+
+首次拉取项目后运行：
 
 ```bash
-cargo install tauri-cli --root .tools --locked
+make init
 ```
 
-前端依赖由构建脚本自动执行 `bun install --frozen-lockfile`，一般不需要手动进 `ui/` 安装。
+该命令会安装锁定的前端依赖、预取 Rust 依赖，并把 Tauri CLI 安装到仓库的 `.tools/` 目录。Rust、Python 3 和 Bun 属于系统工具，需要预先安装。
 
 ## OCR 模型
 
@@ -109,29 +110,16 @@ SNAPTEXT_OCR_ENGINE=paddle cargo run -p snaptext-tauri
 
 ## 本地开发
 
-推荐直接启动 Tauri 开发模式，它会按 `tauri.conf.json` 启动前端开发服务：
+启动 Tauri 调试模式；`tauri.conf.json` 会同时启动 Vite 前端服务：
 
 ```bash
-cd crates/snaptext-tauri
-../../.tools/bin/cargo-tauri dev
-```
-
-也可以从仓库根目录运行桌面包：
-
-```bash
-cargo run -p snaptext-tauri
-```
-
-如果只构建前端静态资源：
-
-```bash
-python3 scripts/build_frontend.py
+make dev
 ```
 
 默认线上服务地址是 `https://snaptext.uuidcx.com`。本地调试云端接口时可以使用：
 
 ```bash
-SNAPTEXT_CLOUD_ENV=local cargo run -p snaptext-tauri
+SNAPTEXT_CLOUD_ENV=local make dev
 ```
 
 该变量只在开发运行时临时覆盖 translator，不会写入 `config.yaml`，设置页也不会展示本地调试入口。
@@ -163,30 +151,15 @@ python3 scripts/release_preflight.py
 
 ## 打包
 
-当前平台打包走统一脚本：
+生成当前平台的正式发布包：
 
 ```bash
-python3 scripts/package_desktop.py --skip-installers
-python3 scripts/package_desktop.py
+make package
 ```
 
-`--skip-installers` 用于只验证 release binary；完整命令会按当前平台生成安装包。也可以指定当前平台的 Tauri bundle 类型：
+macOS 会生成 `dist/macos/SnapText-macos-ad-hoc-signed.app.zip`，完成整个 `.app` 的 ad-hoc 签名，并在 ZIP 解压后再次严格验签。该产物未经 Apple 公证，用户首次启动时仍需在“系统设置 → 隐私与安全性”中点击“仍要打开”。Windows 生成 NSIS 安装包，Linux 生成 deb 安装包。
 
-```bash
-python3 scripts/package_desktop.py --bundles app --no-sign
-python3 scripts/package_desktop.py --bundles dmg --no-sign
-python3 scripts/package_desktop.py --bundles msi
-python3 scripts/package_desktop.py --bundles deb
-```
-
-macOS 也可以使用专用脚本：
-
-```bash
-python3 scripts/package_macos.py --skip-dmg
-python3 scripts/package_macos.py
-```
-
-打包脚本会先检查 OCR 模型，再构建 `ui/dist`，最后执行 Tauri release build。Tauri 配置会把 `models/` 打进应用资源目录，所以打包前模型必须在位。
+打包脚本会先检查 OCR 模型，再构建 `ui/dist`，最后执行 Tauri release build。Tauri 配置会把 `models/` 打进应用资源目录，所以非 macOS 平台打包前模型必须在位；macOS 可以使用系统 Vision OCR fallback。
 
 打包后校验当前平台产物：
 

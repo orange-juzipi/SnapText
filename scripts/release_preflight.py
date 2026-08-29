@@ -699,20 +699,39 @@ def main() -> int:
     )
 
     readme = read_text(ROOT / "README.md")
+    makefile = read_text(ROOT / "Makefile")
     check(
         "python3 scripts/build_frontend.py" in readme,
         "README.md is missing the frontend build command",
     )
     check(
-        "../../.tools/bin/cargo-tauri dev" in readme and "cargo run -p snaptext-tauri" in readme,
-        "README.md is missing desktop development startup commands",
+        all(command in readme for command in ("make init", "make dev", "make package")),
+        "README.md is missing the init, development, or packaging make command",
+    )
+    check(
+        all(
+            command in makefile
+            for command in (
+                "init:",
+                "install --frozen-lockfile",
+                "fetch --locked",
+                "install tauri-cli --root .tools --locked",
+                "dev:",
+                "$(CARGO_TAURI) dev",
+                "package:",
+                "--ad-hoc-sign",
+                "--bundles nsis",
+                "--bundles deb",
+            )
+        ),
+        "Makefile is missing an initialization, development, or platform packaging command",
     )
     check(
         "python3 scripts/install_ocr_models.py" in readme,
         "README.md is missing the OCR model install command",
     )
     check(
-        "python3 scripts/package_desktop.py" in readme,
+        "make package" in readme,
         "README.md is missing the desktop packaging command",
     )
     check(

@@ -91,6 +91,23 @@ def main() -> int:
     assert_contains(macos_unsigned.stdout, "cargo-tauri build --bundles app")
     assert_contains(macos_unsigned.stdout, "--config {\"bundle\":{\"createUpdaterArtifacts\":false}} --no-sign")
 
+    macos_ad_hoc = run_script("package_macos.py", "--skip-dmg", "--ad-hoc-sign")
+    assert_success(macos_ad_hoc)
+    assert_contains(macos_ad_hoc.stdout, "cargo-tauri build --bundles app")
+    assert_contains(
+        macos_ad_hoc.stdout,
+        "--config {\"bundle\":{\"createUpdaterArtifacts\":false}} --no-sign",
+    )
+    assert_contains(
+        macos_ad_hoc.stdout,
+        "ad_hoc_sign_and_archive target/release/bundle/macos/SnapText.app ",
+    )
+
+    macos_ad_hoc_dmg = run_script("package_macos.py", "--ad-hoc-sign")
+    if macos_ad_hoc_dmg.returncode == 0:
+        raise SystemExit("Expected ad-hoc signing without --skip-dmg to fail")
+    assert_contains(macos_ad_hoc_dmg.stdout, "--ad-hoc-sign requires --skip-dmg")
+
     macos_release_models = run_script("package_macos.py", "--skip-dmg", "--require-sha256")
     assert_success(macos_release_models)
     assert_contains(

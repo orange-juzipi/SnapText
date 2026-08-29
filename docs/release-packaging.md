@@ -27,21 +27,24 @@ python3 scripts/verify_ocr_models.py --require-sha256 models
 
 ## 桌面打包
 
-当前平台通用打包入口：
+日常正式打包入口：
 
 ```bash
-python3 scripts/package_desktop.py --skip-installers
-python3 scripts/package_desktop.py
+make package
 ```
 
-macOS 本地打包入口：
+底层脚本仍可用于独立验证或 Developer ID 发布：
 
 ```bash
 python3 scripts/package_macos.py --skip-dmg --no-sign
+python3 scripts/package_macos.py --skip-dmg --ad-hoc-sign
 python3 scripts/package_macos.py --require-sha256
+python3 scripts/package_desktop.py --skip-installers
 ```
 
-`--no-sign` 仅用于本地验证构建，不得作为正式安装包分发。正式 macOS 打包默认要求 `APPLE_SIGNING_IDENTITY`、`APPLE_ID`、`APPLE_PASSWORD`、`APPLE_TEAM_ID` 和 `TAURI_SIGNING_PRIVATE_KEY`，以保证 `.app`、DMG 和 Tauri updater 产物使用稳定签名身份。稳定的 bundle identifier 与签名身份是 macOS Accessibility、Screen Recording 等 TCC 权限在升级后尽量保留的前提。
+`--no-sign` 仅用于本地验证构建，不得直接分发。`--ad-hoc-sign` 会完整签名 `.app`、生成 ZIP 并复验解压后的签名，适合没有 Apple Developer Program 的发布，但用户首次启动时必须在“系统设置 → 隐私与安全性”中手动放行。
+
+需要免手动放行的正式 macOS 发布时，不传签名模式参数，并配置 `APPLE_SIGNING_IDENTITY`、`APPLE_ID`、`APPLE_PASSWORD`、`APPLE_TEAM_ID` 和 `TAURI_SIGNING_PRIVATE_KEY`，以保证 `.app`、DMG 和 Tauri updater 产物使用 Developer ID 签名并经过 Apple 公证。稳定的 bundle identifier 与签名身份是 macOS Accessibility、Screen Recording 等 TCC 权限在升级后尽量保留的前提。
 
 完成 Tauri 打包后校验产物：
 
