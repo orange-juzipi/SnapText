@@ -1,7 +1,7 @@
 import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Home, History, Settings } from "lucide-react";
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { queryKeys, useConfigQuery, useUpdateConfigMutation } from "@/lib/queries";
 import { labelsForLanguage } from "@/lib/labels";
 import {
@@ -34,6 +34,7 @@ export function AppShell() {
   const updateConfig = useUpdateConfigMutation();
   const labels = labelsForLanguage(configQuery.data?.ui.language);
   const workspace = useWorkspaceState();
+  const directTranslationRunIdRef = useRef(0);
   const {
     setOcrTextInput,
     setPinned,
@@ -101,16 +102,21 @@ export function AppShell() {
     };
 
     register(tauriListen<TranslationResult>(events.resultTranslation, (event) => {
+      // A native image/overlay result supersedes any direct selection request still in flight.
+      directTranslationRunIdRef.current += 1;
       setResultFromTranslation(event.payload);
       setStatus(labels.regionTranslated);
     }));
     register(tauriListen<HistoryRecord>(events.resultSelection, (event) => {
+      directTranslationRunIdRef.current += 1;
       ensureWorkspaceRoute();
       setResultFromHistory(event.payload);
       setStatus(labels.textTranslated);
     }));
     register(tauriListen<SelectionTextPayload>(events.selectionText, (event) => {
       const sourceText = event.payload.text;
+      const runId = directTranslationRunIdRef.current + 1;
+      directTranslationRunIdRef.current = runId;
       ensureWorkspaceRoute();
       setOcrLoading(false);
       setOcrTextInput(sourceText, "selection");
@@ -118,52 +124,78 @@ export function AppShell() {
       setTranslating(true);
       translateText(sourceText, resolveTargetLang(sourceText, targetLang), resolveSourceLang(sourceText, sourceLang) ?? AUTO_SOURCE_LANG)
         .then((record) => {
+          if (runId !== directTranslationRunIdRef.current) return;
           setResultSnapshot({ ...record, source: "selection" });
           setStatus(labels.textTranslated);
           void queryClient.invalidateQueries({ queryKey: queryKeys.history(), exact: false });
         })
         .catch((error) => {
+          if (runId !== directTranslationRunIdRef.current) return;
           showError(errorMessage(error));
         })
-        .finally(() => setTranslating(false));
+        .finally(() => {
+          if (runId === directTranslationRunIdRef.current) setTranslating(false);
+        });
     }));
     register(tauriListen<SelectionFailurePayload>(events.resultSelectionFailed, (event) => {
+      directTranslationRunIdRef.current += 1;
       ensureWorkspaceRoute();
       setTranslating(false);
       setOcrLoading(false);
       showError(errorMessage(event.payload.message));
     }));
     register(tauriListen(events.overlayOcrStarted, () => {
+      directTranslationRunIdRef.current += 1;
       ensureWorkspaceRoute();
       setOcrLoading(true);
       setTranslating(false);
       setStatus(labels.ocrSelectedRegion);
     }));
     register(tauriListen(events.overlayOcrFailed, () => {
+      directTranslationRunIdRef.current += 1;
       setOcrLoading(false);
       setTranslating(false);
     }));
     register(tauriListen<OverlayOcrPayload>(events.overlayOcr, (event) => {
       const sourceText = event.payload.result.source_text;
       setOcrLoading(false);
-      setOcrTextInput(sourceText, "screenshot");
+      setOcrTextInput(
+        sourceText,
+        "screenshot",
+        event.payload.result.text_lines,
+        event.payload.translate_after_ocr === false,
+      );
       setStatus(labels.ocrTextExtracted);
+      // Overlay mode can intentionally stop after OCR so the user can correct text first.
+      if (event.payload.translate_after_ocr === false) {
+        directTranslationRunIdRef.current += 1;
+        setTranslating(false);
+        return;
+      }
+      const runId = directTranslationRunIdRef.current + 1;
+      directTranslationRunIdRef.current = runId;
       setTranslating(true);
       translateText(sourceText, resolveTargetLang(sourceText, targetLang), resolveSourceLang(sourceText, sourceLang) ?? AUTO_SOURCE_LANG)
         .then((record) => {
+          if (runId !== directTranslationRunIdRef.current) return;
           setResultSnapshot({ ...record, source: "screenshot" });
           setStatus(labels.regionTranslated);
           void queryClient.invalidateQueries({ queryKey: queryKeys.history(), exact: false });
         })
         .catch((error) => {
+          if (runId !== directTranslationRunIdRef.current) return;
           showError(errorMessage(error));
         })
-        .finally(() => setTranslating(false));
+        .finally(() => {
+          if (runId === directTranslationRunIdRef.current) setTranslating(false);
+        });
     }));
     register(tauriListen<boolean>(events.resultWindowState, (event) => {
       setPinned(Boolean(event.payload));
     }));
     return () => {
+      // In-flight native events belong to this listener generation; invalidate them before detaching.
+      directTranslationRunIdRef.current += 1;
       disposed = true;
       unlisteners.forEach((unlisten) => unlisten());
     };

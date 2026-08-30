@@ -26,6 +26,9 @@ pub struct UiConfig {
     #[serde(default = "default_ui_language")]
     pub language: UiLanguage,
     pub result_panel_dock: ResultPanelDock,
+    /// Whether typing text should trigger the debounced translation request.
+    #[serde(default = "default_auto_translate")]
+    pub auto_translate: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -45,6 +48,11 @@ pub enum UiLanguage {
 
 fn default_ui_language() -> UiLanguage {
     UiLanguage::ZhCn
+}
+
+/// Returns the backwards-compatible default for automatic text translation.
+fn default_auto_translate() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -216,6 +224,7 @@ impl Default for AppConfig {
                 theme: Theme::System,
                 language: UiLanguage::ZhCn,
                 result_panel_dock: ResultPanelDock::Cursor,
+                auto_translate: true,
             },
             hotkeys: HotkeyConfig {
                 screenshot: "Alt+W".to_owned(),
@@ -621,6 +630,7 @@ mod tests {
         assert_eq!(config.hotkeys.selection, "Alt+E");
         assert_eq!(config.target_lang, Lang("auto".to_owned()));
         assert_eq!(config.ui.language, UiLanguage::ZhCn);
+        assert!(config.ui.auto_translate);
         assert_eq!(config.speech.english_accent, EnglishAccent::American);
         assert_eq!(
             config.speech.english_accents,
@@ -798,6 +808,7 @@ ocr:
         let config: AppConfig = serde_yaml::from_str(yaml).expect("legacy config");
 
         assert_eq!(config.speech, SpeechConfig::default());
+        assert!(config.ui.auto_translate);
     }
 
     #[test]

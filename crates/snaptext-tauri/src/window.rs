@@ -1,15 +1,191 @@
-use snaptext_core::{Error, Result};
-#[cfg(all(not(test), target_os = "windows"))]
+#[cfg(not(test))]
+use snaptext_core::Error;
+use snaptext_core::{Result, config::ResultPanelDock};
+#[cfg(not(test))]
 use std::sync::atomic::Ordering;
-#[cfg(all(not(test), not(target_os = "macos")))]
+use tauri::AppHandle;
+#[cfg(not(test))]
+use tauri::Manager;
+#[cfg(not(test))]
 use tauri::WebviewUrl;
-#[cfg(all(not(test), not(target_os = "macos")))]
+#[cfg(not(test))]
 use tauri::webview::WebviewWindowBuilder;
-use tauri::{AppHandle, Manager};
+#[cfg(not(test))]
+use tauri::{PhysicalPosition, WindowEvent};
 
+#[cfg(not(test))]
 use crate::MAIN_WINDOW_LABEL;
 #[cfg(not(target_os = "macos"))]
 use crate::OVERLAY_WINDOW_LABEL;
+#[cfg(not(test))]
+use crate::RESULT_WINDOW_LABEL;
+
+/// Creates the independent result window on first use.
+#[cfg(not(test))]
+pub(crate) fn setup_result_window(app: &AppHandle) -> Result<()> {
+    if app.get_webview_window(RESULT_WINDOW_LABEL).is_some() {
+        return Ok(());
+    }
+
+    let window = WebviewWindowBuilder::new(
+        app,
+        RESULT_WINDOW_LABEL,
+        WebviewUrl::App("index.html".into()),
+    )
+    .initialization_script("window.__SNAPTEXT_WINDOW = 'result';")
+    .title("SnapText Result")
+    .inner_size(460.0, 560.0)
+    .min_inner_size(360.0, 320.0)
+    .visible(false)
+    .decorations(true)
+    .always_on_top(true)
+    .focused(false)
+    .build()
+    .map_err(|err| Error::Config(err.to_string()))?;
+
+    // Closing the native window hides it and keeps the main window's pin state accurate.
+    let close_window = window.clone();
+    let close_app = app.clone();
+    window.on_window_event(move |event| {
+        if let WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            let _ = close_window.hide();
+            if let Some(state) = close_app.try_state::<crate::AppState>() {
+                state.result_window_pinned.store(false, Ordering::Release);
+            }
+            if let Err(err) = crate::events::emit_result_window_state(&close_app, false) {
+                tracing::warn!(error = %err, "failed to broadcast result window close state");
+            }
+        }
+    });
+
+    Ok(())
+}
+
+/// Test stub for result-window setup; unit tests use Tauri's mock runtime without native windows.
+#[cfg(test)]
+#[allow(dead_code)]
+pub(crate) fn setup_result_window(_app: &AppHandle) -> Result<()> {
+    Ok(())
+}
+
+/// Shows the independent result window and positions it using the selected docking mode.
+#[cfg(not(test))]
+pub(crate) fn show_result_window(app: &AppHandle, dock: ResultPanelDock) -> Result<()> {
+    setup_result_window(app)?;
+    let window = app
+        .get_webview_window(RESULT_WINDOW_LABEL)
+        .ok_or_else(|| Error::Config("result window is not available".to_owned()))?;
+
+    window
+        .set_always_on_top(true)
+        .map_err(|err| Error::Config(err.to_string()))?;
+    position_result_window(app, &window, dock);
+    window
+        .show()
+        .map_err(|err| Error::Config(err.to_string()))?;
+    window
+        .set_focus()
+        .map_err(|err| Error::Config(err.to_string()))?;
+    Ok(())
+}
+
+/// Test stub for showing the result window.
+#[cfg(test)]
+#[allow(dead_code)]
+pub(crate) fn show_result_window(_app: &AppHandle, _dock: ResultPanelDock) -> Result<()> {
+    Ok(())
+}
+
+/// Hides the independent result window without destroying its webview state.
+#[cfg(not(test))]
+pub(crate) fn hide_result_window(app: &AppHandle) -> Result<()> {
+    if let Some(window) = app.get_webview_window(RESULT_WINDOW_LABEL) {
+        window
+            .hide()
+            .map_err(|err| Error::Config(err.to_string()))?;
+    }
+    Ok(())
+}
+
+/// Test stub for hiding the result window.
+#[cfg(test)]
+#[allow(dead_code)]
+pub(crate) fn hide_result_window(_app: &AppHandle) -> Result<()> {
+    Ok(())
+}
+
+/// Computes a safe desktop position for cursor-following or fixed result docking.
+#[cfg(not(test))]
+fn position_result_window(
+    app: &AppHandle,
+    result_window: &tauri::WebviewWindow,
+    dock: ResultPanelDock,
+) {
+    let Some(main_window) = app.get_webview_window(MAIN_WINDOW_LABEL) else {
+        return;
+    };
+
+    let position = match dock {
+        ResultPanelDock::Cursor => main_window.cursor_position().ok().map(|cursor| {
+            PhysicalPosition::new(cursor.x.round() as i32 + 18, cursor.y.round() as i32 + 18)
+        }),
+        ResultPanelDock::Fixed => {
+            let main_position = main_window.outer_position().ok();
+            let main_size = main_window.outer_size().ok();
+            let result_size = result_window.outer_size().ok();
+            match (main_position, main_size, result_size) {
+                (Some(position), Some(main_size), Some(result_size)) => {
+                    Some(PhysicalPosition::new(
+                        position.x + ((main_size.width as i32 - result_size.width as i32) / 2),
+                        position.y + ((main_size.height as i32 - result_size.height as i32) / 2),
+                    ))
+                }
+                _ => None,
+            }
+        }
+    };
+
+    let Some(position) = position else {
+        return;
+    };
+    let size = result_window.outer_size().ok();
+    let monitor = result_window
+        .monitor_from_point(f64::from(position.x), f64::from(position.y))
+        .ok()
+        .flatten()
+        .or_else(|| result_window.current_monitor().ok().flatten());
+    let position = size
+        .zip(monitor)
+        .map(|(size, monitor)| clamp_to_work_area(position, size, monitor))
+        .unwrap_or(position);
+
+    if let Err(err) = result_window.set_position(position) {
+        tracing::debug!(error = %err, "failed to position result window");
+    }
+}
+
+/// Keeps the result window entirely inside the active monitor's usable work area.
+#[cfg(not(test))]
+fn clamp_to_work_area(
+    position: PhysicalPosition<i32>,
+    size: tauri::PhysicalSize<u32>,
+    monitor: tauri::Monitor,
+) -> PhysicalPosition<i32> {
+    let work_area = monitor.work_area();
+    let width = i32::try_from(size.width).unwrap_or(i32::MAX);
+    let height = i32::try_from(size.height).unwrap_or(i32::MAX);
+    let area_width = i32::try_from(work_area.size.width).unwrap_or(i32::MAX);
+    let area_height = i32::try_from(work_area.size.height).unwrap_or(i32::MAX);
+    let min_x = work_area.position.x;
+    let min_y = work_area.position.y;
+    let max_x = (min_x + area_width - width).max(min_x);
+    let max_y = (min_y + area_height - height).max(min_y);
+    PhysicalPosition::new(
+        position.x.clamp(min_x, max_x),
+        position.y.clamp(min_y, max_y),
+    )
+}
 
 #[cfg(all(not(test), not(target_os = "macos")))]
 pub(crate) fn setup_overlay_window(app: &AppHandle) -> Result<()> {
@@ -159,15 +335,6 @@ pub(crate) fn show_main_window(_app: &AppHandle) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn set_main_window_always_on_top(app: &AppHandle, always_on_top: bool) -> Result<()> {
-    let window = app
-        .get_webview_window(MAIN_WINDOW_LABEL)
-        .ok_or_else(|| Error::Config("main window is not available".to_owned()))?;
-    window
-        .set_always_on_top(always_on_top)
-        .map_err(|err| Error::Config(err.to_string()))
-}
-
 #[cfg(all(not(test), target_os = "windows"))]
 fn pulse_main_window_to_front(app: &AppHandle, window: &tauri::WebviewWindow) -> Result<()> {
     window
@@ -183,7 +350,10 @@ fn pulse_main_window_to_front(app: &AppHandle, window: &tauri::WebviewWindow) ->
         if state.inner().result_window_pinned.load(Ordering::Acquire) {
             return;
         }
-        if let Err(err) = set_main_window_always_on_top(&app, false) {
+        let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) else {
+            return;
+        };
+        if let Err(err) = window.set_always_on_top(false) {
             tracing::warn!(error = %err, "failed to clear Windows foreground topmost pulse");
         }
     });

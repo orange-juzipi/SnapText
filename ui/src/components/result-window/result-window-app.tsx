@@ -1,7 +1,8 @@
 import type * as React from "react";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { Copy, Volume2, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { events, getConfig, unpinResultWindow } from "@/lib/api";
+import { events, getConfig, getResultSnapshot, unpinResultWindow } from "@/lib/api";
 import { sourceLabel, targetLangLabel } from "@/lib/format";
 import { labelsForLanguage } from "@/lib/labels";
 import { resolveSourceSpeechLang } from "@/lib/language";
@@ -18,17 +19,63 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 
 type SpeechAccent = "american" | "british";
 
+const RESULT_WINDOW_SIZE_STORAGE_KEY = "snaptext.result-window.size";
+const RESULT_WINDOW_MIN_WIDTH = 360;
+const RESULT_WINDOW_MIN_HEIGHT = 320;
+const RESULT_WINDOW_MAX_WIDTH = 1600;
+const RESULT_WINDOW_MAX_HEIGHT = 1800;
+
 export function ResultWindowApp() {
-  const labels = labelsForLanguage("zh_cn");
   const [sourceKind, setSourceKind] = useState("");
   const [sourceText, setSourceText] = useState("");
   const [result, setResult] = useState("");
   const [targetLang, setTargetLang] = useState("");
   const [dictionaryEntries, setDictionaryEntries] = useState<DictionaryEntry[]>([]);
-  const [status, setStatus] = useState(labels.pinnedResultWindow);
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [activeSpeechKey, setActiveSpeechKey] = useState<string | null>(null);
+  const labels = labelsForLanguage(config?.ui.language);
+  const [status, setStatus] = useState(labels.pinnedResultWindow);
   const speechReady = Boolean(config) && isSpeechSupported(config?.speech);
+
+  useEffect(() => {
+    const nativeWindow = getCurrentWindow();
+    let disposed = false;
+    let readyToPersist = false;
+
+    // Restore a logical size so the result window behaves consistently across DPI scales.
+    const storedSize = readStoredResultWindowSize();
+    if (storedSize) {
+      void nativeWindow
+        .setSize(new LogicalSize(storedSize.width, storedSize.height))
+        .catch(() => undefined)
+        .finally(() => {
+          readyToPersist = true;
+        });
+    } else {
+      readyToPersist = true;
+    }
+
+    let unlisten: (() => void) | undefined;
+    void nativeWindow.onResized(({ payload }) => {
+      if (!readyToPersist || disposed) return;
+      void nativeWindow
+        .scaleFactor()
+        .then((scaleFactor) => {
+          if (disposed) return;
+          const logical = payload.toLogical(scaleFactor);
+          writeStoredResultWindowSize(logical.width, logical.height);
+        })
+        .catch(() => undefined);
+    }).then((cleanup) => {
+      if (disposed) cleanup();
+      else unlisten = cleanup;
+    }).catch(() => undefined);
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
     const unlisteners: Array<() => void> = [];
@@ -45,11 +92,16 @@ export function ResultWindowApp() {
       setStatus(labels.textTranslated);
     }).then((unlisten) => unlisteners.push(unlisten));
     return () => unlisteners.forEach((unlisten) => unlisten());
-  }, []);
+  }, [labels]);
 
   useEffect(() => {
-    getConfig()
-      .then(setConfig)
+    // Hydrate both the speech settings and the last result while the native window is opening.
+    void Promise.all([getConfig(), getResultSnapshot()])
+      .then(([nextConfig, snapshot]) => {
+        setConfig(nextConfig);
+        setStatus(labelsForLanguage(nextConfig.ui.language).pinnedResultWindow);
+        if (snapshot) applySnapshot(snapshot);
+      })
       .catch((error) => setStatus(error instanceof Error ? error.message : String(error)));
   }, []);
 
@@ -326,4 +378,41 @@ function IconTooltipButton({
 function visibleEnglishAccents(accents?: string[]): SpeechAccent[] {
   if (!accents) return ["american", "british"];
   return accents.filter((accent): accent is SpeechAccent => accent === "american" || accent === "british");
+}
+
+/** Reads and validates the user's last result-window logical size. */
+function readStoredResultWindowSize(): { width: number; height: number } | null {
+  try {
+    const raw = window.localStorage.getItem(RESULT_WINDOW_SIZE_STORAGE_KEY);
+    if (!raw) return null;
+    const value = JSON.parse(raw) as { width?: unknown; height?: unknown };
+    if (typeof value.width !== "number" || typeof value.height !== "number") return null;
+    if (!Number.isFinite(value.width) || !Number.isFinite(value.height)) return null;
+    return {
+      width: clampWindowDimension(value.width, RESULT_WINDOW_MIN_WIDTH, RESULT_WINDOW_MAX_WIDTH),
+      height: clampWindowDimension(value.height, RESULT_WINDOW_MIN_HEIGHT, RESULT_WINDOW_MAX_HEIGHT),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Persists a validated logical result-window size without letting storage failures affect the UI. */
+function writeStoredResultWindowSize(width: number, height: number) {
+  try {
+    window.localStorage.setItem(
+      RESULT_WINDOW_SIZE_STORAGE_KEY,
+      JSON.stringify({
+        width: clampWindowDimension(width, RESULT_WINDOW_MIN_WIDTH, RESULT_WINDOW_MAX_WIDTH),
+        height: clampWindowDimension(height, RESULT_WINDOW_MIN_HEIGHT, RESULT_WINDOW_MAX_HEIGHT),
+      }),
+    );
+  } catch {
+    // Private browsing or storage quotas should not prevent the result window from working.
+  }
+}
+
+/** Rounds and bounds a native window dimension before it is written to local storage. */
+function clampWindowDimension(value: number, min: number, max: number) {
+  return Math.round(Math.min(max, Math.max(min, value)));
 }

@@ -88,7 +88,33 @@ impl HistoryStore {
     }
 
     pub fn recent(&self, limit: usize) -> Result<Vec<HistoryRecord>> {
-        let limit = limit.min(MAX_HISTORY_RECORDS) as i64;
+        self.search(None, None, limit)
+    }
+
+    /// Returns recent records matching an optional text and source filter.
+    pub fn search(
+        &self,
+        query: Option<&str>,
+        source: Option<&HistorySource>,
+        limit: usize,
+    ) -> Result<Vec<HistoryRecord>> {
+        self.search_with_dates(query, source, None, None, limit)
+    }
+
+    /// Returns recent records matching text, source, and an inclusive epoch-millisecond date range.
+    pub fn search_with_dates(
+        &self,
+        query: Option<&str>,
+        source: Option<&HistorySource>,
+        created_after: Option<i64>,
+        created_before: Option<i64>,
+        limit: usize,
+    ) -> Result<Vec<HistoryRecord>> {
+        let limit = limit.min(MAX_HISTORY_RECORDS);
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
         let mut stmt = self.conn.prepare(
             "SELECT id, created_at, source, source_text, target_lang, translated_text
              FROM history
@@ -96,11 +122,47 @@ impl HistoryStore {
              LIMIT ?1",
         )?;
 
-        let rows = stmt.query_map([limit], row_to_record)?;
-        rows.collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(Into::into)
+        let rows = stmt.query_map([MAX_HISTORY_RECORDS as i64], row_to_record)?;
+        let records = rows
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Error::from)?;
+        let query = query.map(str::trim).filter(|value| !value.is_empty());
+
+        Ok(records
+            .into_iter()
+            .filter(|record| {
+                let matches_query = query.is_none_or(|query| {
+                    record
+                        .source_text
+                        .to_lowercase()
+                        .contains(&query.to_lowercase())
+                        || record
+                            .translated_text
+                            .to_lowercase()
+                            .contains(&query.to_lowercase())
+                });
+                let matches_source = source.is_none_or(|source| &record.source == source);
+                let matches_after =
+                    created_after.is_none_or(|created_at| record.created_at >= created_at);
+                let matches_before =
+                    created_before.is_none_or(|created_at| record.created_at <= created_at);
+                matches_query && matches_source && matches_after && matches_before
+            })
+            .take(limit)
+            .collect())
     }
 
+    /// Deletes one history record; deleting an already absent id is idempotent.
+    pub fn delete(&self, id: i64) -> Result<()> {
+        if id <= 0 {
+            return Err(Error::History("history id must be positive".to_owned()));
+        }
+        self.conn
+            .execute("DELETE FROM history WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// Removes all persisted history records.
     pub fn clear(&self) -> Result<()> {
         self.conn.execute("DELETE FROM history", [])?;
         Ok(())
@@ -374,6 +436,70 @@ mod tests {
         let recent = store.recent(0).expect("recent history");
 
         assert!(recent.is_empty());
+    }
+
+    /// Verifies text and source filters are applied before the result limit.
+    #[test]
+    fn search_filters_text_and_source() {
+        let store = HistoryStore::in_memory().expect("history store");
+        store
+            .insert(NewHistoryRecord {
+                source: HistorySource::Selection,
+                source_text: "Hello from selection".to_owned(),
+                target_lang: "zh_cn".to_owned(),
+                translated_text: "来自划词".to_owned(),
+            })
+            .expect("selection record");
+        store
+            .insert(NewHistoryRecord {
+                source: HistorySource::Image,
+                source_text: "Hello from image".to_owned(),
+                target_lang: "zh_cn".to_owned(),
+                translated_text: "来自图片".to_owned(),
+            })
+            .expect("image record");
+
+        let records = store
+            .search(Some("IMAGE"), Some(&HistorySource::Image), 10)
+            .expect("filtered history");
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].source, HistorySource::Image);
+    }
+
+    /// Verifies that the optional date range is inclusive and does not alter the default search API.
+    #[test]
+    fn search_with_dates_filters_created_at_range() {
+        let store = HistoryStore::in_memory().expect("history store");
+        insert_raw_record_with_timestamp(&store, 1, 100);
+        insert_raw_record_with_timestamp(&store, 2, 200);
+        insert_raw_record_with_timestamp(&store, 3, 300);
+
+        let records = store
+            .search_with_dates(None, None, Some(100), Some(200), 10)
+            .expect("dated history");
+
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| record.created_at)
+                .collect::<Vec<_>>(),
+            [200, 100]
+        );
+    }
+
+    /// Verifies deleting a record leaves unrelated history intact.
+    #[test]
+    fn delete_removes_only_requested_record() {
+        let store = HistoryStore::in_memory().expect("history store");
+        let first = store.insert(record(1)).expect("first record");
+        let second = store.insert(record(2)).expect("second record");
+
+        store.delete(first.id).expect("delete first record");
+
+        let records = store.recent(10).expect("remaining history");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].id, second.id);
     }
 
     #[test]

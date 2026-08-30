@@ -10,8 +10,9 @@ use snaptext_core::{
     selection::{SelectionEvent, looks_like_garbled_selection, normalize_selection_text},
     translate::{DictionaryEntry, TranslateRequest, TranslatorRegistry, resolve_auto_target_lang},
 };
+#[cfg(target_os = "macos")]
+use std::process::Command;
 use std::time::Duration;
-#[cfg(not(test))]
 use tauri::Manager;
 use tauri::{AppHandle, Emitter, State};
 #[cfg(not(test))]
@@ -30,9 +31,10 @@ mod voice_input;
 mod window;
 use capabilities::{OcrModelStatus, validate_ocr_models_inner};
 use events::{
-    OverlayTranslationPayload, SelectionTextPayload, emit_overlay_ocr, emit_result_translation,
-    emit_result_window_state, emit_selection_record, history_record_to_translation_result,
-    overlay_translation_event, parse_history_source,
+    OverlayTranslationPayload, PinnedResultPayload, SelectionTextPayload, emit_overlay_ocr,
+    emit_result_translation, emit_result_window_state, emit_selection_record,
+    history_record_to_translation_result, overlay_translation_event, parse_history_source,
+    remember_result_snapshot,
 };
 #[cfg(target_os = "macos")]
 use events::{emit_overlay_ocr_failed, emit_overlay_ocr_started};
@@ -48,8 +50,8 @@ use hotkeys::{
 use model::resolve_model_dir;
 pub use payload::ScreenshotPayload;
 use payload::{
-    base64_image_to_dynamic_image, crop_image, png_payload_to_image,
-    validate_decoded_image_dimensions,
+    ImagePreprocessOptions, base64_image_to_dynamic_image, crop_image, png_payload_to_image,
+    preprocess_image, validate_decoded_image_dimensions,
 };
 #[cfg(all(test, target_os = "macos"))]
 use screenshots::mac_screenshot_selection_error;
@@ -66,11 +68,13 @@ use window::show_main_window;
 #[cfg(not(target_os = "macos"))]
 use window::show_overlay_window;
 use window::{
-    hide_main_window, hide_overlay_window, main_window_is_visible, restore_main_window_if_needed,
-    set_main_window_always_on_top,
+    hide_main_window, hide_overlay_window, hide_result_window, main_window_is_visible,
+    restore_main_window_if_needed, show_result_window,
 };
 
 const MAIN_WINDOW_LABEL: &str = "main";
+/// Label used by the independent result WebViewWindow.
+pub(crate) const RESULT_WINDOW_LABEL: &str = "result";
 #[cfg(not(target_os = "macos"))]
 const OVERLAY_WINDOW_LABEL: &str = "overlay";
 const MAIN_WINDOW_HIDE_SETTLE_MS: u64 = 160;
@@ -154,8 +158,11 @@ pub fn run_tauri(config: AppConfig, history: HistoryStore) -> Result<()> {
         )
         .invoke_handler(tauri::generate_handler![
             get_history,
+            search_history,
+            delete_history,
             clear_history,
             get_config,
+            get_result_snapshot,
             get_overlay_screenshot,
             clear_overlay_screenshot,
             screenshot_full,
@@ -163,6 +170,7 @@ pub fn run_tauri(config: AppConfig, history: HistoryStore) -> Result<()> {
             start_screenshot_overlay,
             update_config,
             validate_ocr_models,
+            open_system_settings,
             translate_image_base64,
             translate_screenshot_base64,
             translate_screenshot_region,
@@ -249,6 +257,42 @@ fn get_history(state: State<'_, AppState>, limit: Option<usize>) -> Result<Vec<H
     history.recent(limit.unwrap_or(50))
 }
 
+/// Searches local history by source/translation text and optional source kind.
+#[tauri::command]
+#[allow(dead_code)]
+fn search_history(
+    state: State<'_, AppState>,
+    query: Option<String>,
+    source: Option<String>,
+    from: Option<i64>,
+    to: Option<i64>,
+    limit: Option<usize>,
+) -> Result<Vec<HistoryRecord>> {
+    let source = source.as_deref().map(parse_history_source).transpose()?;
+    let history = state
+        .history
+        .lock()
+        .map_err(|err| Error::History(err.to_string()))?;
+    history.search_with_dates(
+        query.as_deref(),
+        source.as_ref(),
+        from,
+        to,
+        limit.unwrap_or(50),
+    )
+}
+
+/// Deletes one local history record without touching other records.
+#[tauri::command]
+#[allow(dead_code)]
+fn delete_history(state: State<'_, AppState>, id: i64) -> Result<()> {
+    let history = state
+        .history
+        .lock()
+        .map_err(|err| Error::History(err.to_string()))?;
+    history.delete(id)
+}
+
 #[tauri::command]
 #[allow(dead_code)]
 fn clear_history(state: State<'_, AppState>) -> Result<()> {
@@ -305,6 +349,60 @@ fn update_config(
 #[allow(dead_code)]
 fn validate_ocr_models(state: State<'_, AppState>) -> Result<OcrModelStatus> {
     validate_ocr_models_inner(state.inner())
+}
+
+/// Opens the requested macOS privacy pane without attempting to infer its grant state.
+#[tauri::command]
+#[allow(dead_code)]
+fn open_system_settings(section: String) -> Result<()> {
+    open_system_settings_inner(&section)
+}
+
+#[cfg(target_os = "macos")]
+/// Opens a supported macOS privacy pane using the system `open` command.
+fn open_system_settings_inner(section: &str) -> Result<()> {
+    let pane = match section {
+        "screen_recording" => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+        }
+        "accessibility" => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        }
+        "microphone" => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+        }
+        _ => {
+            return Err(Error::Config(
+                "unsupported system settings section".to_owned(),
+            ));
+        }
+    };
+    Command::new("open")
+        .arg(pane)
+        .status()
+        .map_err(|err| Error::Config(format!("failed to open system settings: {err}")))?
+        .success()
+        .then_some(())
+        .ok_or_else(|| Error::Config("system settings could not be opened".to_owned()))
+}
+
+#[cfg(not(target_os = "macos"))]
+/// Reports that privacy-pane deep links are unavailable on non-macOS platforms.
+fn open_system_settings_inner(_section: &str) -> Result<()> {
+    Err(Error::Config(
+        "system settings links are only available on macOS".to_owned(),
+    ))
+}
+
+/// Returns the latest translation so a newly opened result window can hydrate immediately.
+#[tauri::command]
+#[allow(dead_code)]
+fn get_result_snapshot(state: State<'_, AppState>) -> Result<Option<PinnedResultPayload>> {
+    state
+        .result_snapshot
+        .lock()
+        .map(|snapshot| snapshot.clone())
+        .map_err(|err| Error::Config(err.to_string()))
 }
 
 #[tauri::command]
@@ -380,7 +478,19 @@ async fn start_native_screenshot_selection_inner(
     let (payload, image) = capture?;
     emit_overlay_ocr_started(app, payload_to_full_region(&payload));
     match ocr_dynamic_image_inner(state, image).await {
-        Ok(result) => emit_overlay_ocr(app, result, payload_to_full_region(&payload)),
+        Ok(result) => {
+            let translate_after_ocr = state
+                .config
+                .read()
+                .map(|config| config.ui.auto_translate)
+                .unwrap_or(true);
+            emit_overlay_ocr(
+                app,
+                result,
+                payload_to_full_region(&payload),
+                translate_after_ocr,
+            )
+        }
         Err(err) => {
             emit_overlay_ocr_failed(app, payload_to_full_region(&payload));
             return Err(err);
@@ -445,19 +555,31 @@ fn clear_overlay_screenshot(state: State<'_, AppState>) -> Result<()> {
 
 #[tauri::command]
 #[allow(dead_code)]
-async fn translate_selection(state: State<'_, AppState>, text: String) -> Result<HistoryRecord> {
-    translate_selection_inner(state.inner(), text).await
+/// Translates selected text and stores it for the independent result window.
+async fn translate_selection(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    text: String,
+) -> Result<HistoryRecord> {
+    let record = translate_selection_inner(state.inner(), text).await?;
+    // Direct selection commands do not emit an event, so keep the result window snapshot current.
+    remember_result_snapshot(&app, PinnedResultPayload::from(&record));
+    Ok(record)
 }
 
 #[tauri::command]
 #[allow(dead_code)]
 async fn translate_text(
+    app: AppHandle,
     state: State<'_, AppState>,
     source_text: String,
     target_lang: Option<String>,
     source_lang: Option<String>,
 ) -> Result<HistoryRecord> {
-    translate_text_inner(state.inner(), source_text, target_lang, source_lang).await
+    let record = translate_text_inner(state.inner(), source_text, target_lang, source_lang).await?;
+    // Text commands do not necessarily emit a result event, so persist the snapshot here too.
+    remember_result_snapshot(&app, PinnedResultPayload::from(&record));
+    Ok(record)
 }
 
 #[tauri::command]
@@ -498,8 +620,17 @@ async fn translate_image_base64(
     app: AppHandle,
     state: State<'_, AppState>,
     base64_png: String,
+    bbox: Option<snaptext_core::ocr::BBox>,
+    preprocess_options: Option<ImagePreprocessOptions>,
 ) -> Result<TranslationResult> {
-    let result = translate_image_base64_inner(state.inner(), base64_png).await?;
+    let result = translate_base64_image_inner(
+        state.inner(),
+        base64_png,
+        HistorySource::Image,
+        bbox,
+        preprocess_options,
+    )
+    .await?;
     emit_result_translation(&app, &result);
     Ok(result)
 }
@@ -534,8 +665,9 @@ async fn ocr_image_region(
     state: State<'_, AppState>,
     base64_png: String,
     bbox: snaptext_core::ocr::BBox,
+    preprocess_options: Option<ImagePreprocessOptions>,
 ) -> Result<OcrTextResult> {
-    ocr_image_region_inner(state.inner(), base64_png, bbox).await
+    ocr_image_region_with_options_inner(state.inner(), base64_png, bbox, preprocess_options).await
 }
 
 #[tauri::command]
@@ -553,13 +685,19 @@ async fn ocr_overlay_selection(
     app: AppHandle,
     state: State<'_, AppState>,
     bbox: snaptext_core::ocr::BBox,
+    translate_after_ocr: Option<bool>,
 ) -> Result<OcrTextResult> {
     let restore_main_window = overlay_restore_main_window(state.inner())?;
     hide_overlay_window(&app)?;
     restore_main_window_if_needed(&app, restore_main_window)?;
 
     let result = ocr_overlay_selection_inner(state.inner(), bbox).await?;
-    emit_overlay_ocr(&app, result.clone(), bbox);
+    emit_overlay_ocr(
+        &app,
+        result.clone(),
+        bbox,
+        translate_after_ocr.unwrap_or(true),
+    );
     Ok(result)
 }
 
@@ -607,17 +745,38 @@ fn close_overlay(app: AppHandle, state: State<'_, AppState>) -> Result<()> {
 
 #[tauri::command]
 #[allow(dead_code)]
-fn pin_result_window(app: AppHandle) -> Result<()> {
+fn pin_result_window(app: AppHandle, snapshot: Option<PinnedResultPayload>) -> Result<()> {
+    if let Some(snapshot) = snapshot {
+        // The caller owns the current editing state; prefer it over a stale native snapshot.
+        remember_result_snapshot(&app, snapshot);
+    }
+    let dock = app
+        .try_state::<AppState>()
+        .and_then(|state| {
+            state
+                .config
+                .read()
+                .ok()
+                .map(|config| config.ui.result_panel_dock.clone())
+        })
+        .unwrap_or(snaptext_core::config::ResultPanelDock::Cursor);
+    show_result_window(&app, dock)?;
     #[cfg(not(test))]
-    {
-        let state = app.state::<AppState>();
+    if let Some(state) = app.try_state::<AppState>() {
         state
-            .inner()
             .result_window_pinned
             .store(true, std::sync::atomic::Ordering::Release);
     }
-    set_main_window_always_on_top(&app, true)?;
     emit_result_window_state(&app, true)?;
+    if let Some(snapshot) = app.try_state::<AppState>().and_then(|state| {
+        state
+            .result_snapshot
+            .lock()
+            .ok()
+            .and_then(|snapshot| snapshot.clone())
+    }) {
+        remember_result_snapshot(&app, snapshot);
+    }
     Ok(())
 }
 
@@ -625,14 +784,12 @@ fn pin_result_window(app: AppHandle) -> Result<()> {
 #[allow(dead_code)]
 fn unpin_result_window(app: AppHandle) -> Result<()> {
     #[cfg(not(test))]
-    {
-        let state = app.state::<AppState>();
+    if let Some(state) = app.try_state::<AppState>() {
         state
-            .inner()
             .result_window_pinned
             .store(false, std::sync::atomic::Ordering::Release);
     }
-    set_main_window_always_on_top(&app, false)?;
+    hide_result_window(&app)?;
     emit_result_window_state(&app, false)?;
     Ok(())
 }
@@ -842,18 +999,20 @@ async fn translate_optional_selection_inner(
     translate_selection_inner(state, selection.text).await
 }
 
+/// Keeps the original image translation helper available to callers without crop options.
+#[allow(dead_code)]
 async fn translate_image_base64_inner(
     state: &AppState,
     base64_png: String,
 ) -> Result<TranslationResult> {
-    translate_base64_image_inner(state, base64_png, HistorySource::Image).await
+    translate_base64_image_inner(state, base64_png, HistorySource::Image, None, None).await
 }
 
 async fn translate_screenshot_base64_inner(
     state: &AppState,
     base64_png: String,
 ) -> Result<TranslationResult> {
-    translate_base64_image_inner(state, base64_png, HistorySource::Screenshot).await
+    translate_base64_image_inner(state, base64_png, HistorySource::Screenshot, None, None).await
 }
 
 async fn translate_screenshot_region_inner(
@@ -924,14 +1083,27 @@ async fn ocr_overlay_selection_inner(
     ocr_dynamic_image_inner(state, cropped).await
 }
 
+/// Keeps the original image OCR helper available for native unit tests and callers without options.
+#[allow(dead_code)]
 async fn ocr_image_region_inner(
     state: &AppState,
     base64_png: String,
     bbox: snaptext_core::ocr::BBox,
 ) -> Result<OcrTextResult> {
+    ocr_image_region_with_options_inner(state, base64_png, bbox, None).await
+}
+
+/// Runs OCR on an imported image region after applying an optional preprocessing profile.
+async fn ocr_image_region_with_options_inner(
+    state: &AppState,
+    base64_png: String,
+    bbox: snaptext_core::ocr::BBox,
+    preprocess_options: Option<ImagePreprocessOptions>,
+) -> Result<OcrTextResult> {
     let image = base64_image_to_dynamic_image(&base64_png)?;
     let cropped = crop_image(&image, bbox)?;
-    ocr_dynamic_image_inner(state, cropped).await
+    let processed = preprocess_image(cropped, preprocess_options.as_ref())?;
+    ocr_dynamic_image_inner(state, processed).await
 }
 
 async fn ocr_screenshot_region_inner(
@@ -946,8 +1118,16 @@ async fn translate_base64_image_inner(
     state: &AppState,
     base64_png: String,
     source: HistorySource,
+    bbox: Option<snaptext_core::ocr::BBox>,
+    preprocess_options: Option<ImagePreprocessOptions>,
 ) -> Result<TranslationResult> {
     let image = base64_image_to_dynamic_image(&base64_png)?;
+    let image = if let Some(bbox) = bbox {
+        crop_image(&image, bbox)?
+    } else {
+        image
+    };
+    let image = preprocess_image(image, preprocess_options.as_ref())?;
     translate_dynamic_image_inner(state, image, source).await
 }
 

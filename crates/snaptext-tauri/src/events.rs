@@ -1,10 +1,13 @@
-use snaptext_core::{Error, Result, history::HistoryRecord, pipeline::TranslationResult};
-use tauri::{AppHandle, Emitter};
+use snaptext_core::{
+    Error, Result, history::HistoryRecord, pipeline::TranslationResult, translate::DictionaryEntry,
+};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::{HistorySource, MAIN_WINDOW_LABEL, OcrTextResult};
 
 const RESULT_TRANSLATION_EVENT: &str = "snaptext://result-translation";
 const RESULT_SELECTION_EVENT: &str = "snaptext://result-selection";
+pub(crate) const RESULT_SNAPSHOT_EVENT: &str = "snaptext://result-snapshot";
 #[cfg(not(test))]
 const SELECTION_TEXT_EVENT: &str = "snaptext://selection-text";
 #[cfg(not(test))]
@@ -27,7 +30,11 @@ pub struct OverlayTranslationPayload {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct OverlayOcrPayload {
+    /// OCR output for the selected screen region.
     pub result: OcrTextResult,
+    /// Whether the UI should start translation after showing the OCR text.
+    pub translate_after_ocr: bool,
+    /// Selected screen region in physical pixels.
     pub region: snaptext_core::ocr::BBox,
 }
 
@@ -41,6 +48,46 @@ pub struct SelectionFailurePayload {
 pub struct SelectionTextPayload {
     pub text: String,
     pub app_bundle_id: Option<String>,
+}
+
+/// Carries the latest translated result to the independent result window.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct PinnedResultPayload {
+    /// Identifies whether the result came from text, a selection, a screenshot, or an image.
+    pub source: HistorySource,
+    /// The recognized or typed source text.
+    pub source_text: String,
+    /// The translated output shown to the user.
+    pub translated_text: String,
+    /// The language used for the translated output.
+    pub target_lang: String,
+    /// Optional dictionary entries associated with the translation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dictionary_entries: Vec<DictionaryEntry>,
+}
+
+impl From<&TranslationResult> for PinnedResultPayload {
+    fn from(result: &TranslationResult) -> Self {
+        Self {
+            source: result.source.clone(),
+            source_text: result.source_text.clone(),
+            translated_text: result.translated_text.clone(),
+            target_lang: result.target_lang.clone(),
+            dictionary_entries: result.dictionary_entries.clone(),
+        }
+    }
+}
+
+impl From<&HistoryRecord> for PinnedResultPayload {
+    fn from(record: &HistoryRecord) -> Self {
+        Self {
+            source: record.source.clone(),
+            source_text: record.source_text.clone(),
+            translated_text: record.translated_text.clone(),
+            target_lang: record.target_lang.clone(),
+            dictionary_entries: record.dictionary_entries.clone(),
+        }
+    }
 }
 
 // 语音输入依赖 macOS Speech 框架，非 macOS 平台不保留该事件 payload，避免 clippy dead_code。
@@ -68,14 +115,39 @@ pub(crate) fn result_window_state_targets() -> [&'static str; 1] {
 }
 
 pub(crate) fn emit_result_translation(app: &AppHandle, result: &TranslationResult) {
+    remember_result_snapshot(app, PinnedResultPayload::from(result));
     if let Err(err) = app.emit_to(MAIN_WINDOW_LABEL, RESULT_TRANSLATION_EVENT, result.clone()) {
         tracing::warn!(error = %err, "failed to emit result translation to main window");
     }
+    emit_to_result_window(app, RESULT_TRANSLATION_EVENT, result);
 }
 
 pub(crate) fn emit_selection_record(app: &AppHandle, record: &HistoryRecord) {
+    remember_result_snapshot(app, PinnedResultPayload::from(record));
     if let Err(err) = app.emit_to(MAIN_WINDOW_LABEL, RESULT_SELECTION_EVENT, record.clone()) {
         tracing::warn!(error = %err, "failed to emit selection result to main window");
+    }
+    emit_to_result_window(app, RESULT_SELECTION_EVENT, record);
+}
+
+/// Stores a result for the next result-window open and notifies an already-open window.
+pub(crate) fn remember_result_snapshot(app: &AppHandle, payload: PinnedResultPayload) {
+    if let Some(state) = app.try_state::<crate::AppState>() {
+        match state.result_snapshot.lock() {
+            Ok(mut snapshot) => *snapshot = Some(payload.clone()),
+            Err(err) => tracing::warn!(error = %err, "failed to store result window snapshot"),
+        }
+    }
+    emit_to_result_window(app, RESULT_SNAPSHOT_EVENT, &payload);
+}
+
+/// Sends an event only when the independent result window has already been created.
+fn emit_to_result_window<S: serde::Serialize>(app: &AppHandle, event: &str, payload: &S) {
+    if app.get_webview_window(crate::RESULT_WINDOW_LABEL).is_none() {
+        return;
+    }
+    if let Err(err) = app.emit_to(crate::RESULT_WINDOW_LABEL, event, payload) {
+        tracing::warn!(error = %err, event, "failed to emit result event to independent window");
     }
 }
 
@@ -128,8 +200,13 @@ pub(crate) fn emit_overlay_ocr(
     app: &AppHandle,
     result: OcrTextResult,
     region: snaptext_core::ocr::BBox,
+    translate_after_ocr: bool,
 ) {
-    let event = OverlayOcrPayload { result, region };
+    let event = OverlayOcrPayload {
+        result,
+        translate_after_ocr,
+        region,
+    };
     if let Err(err) = app.emit_to(MAIN_WINDOW_LABEL, OVERLAY_OCR_EVENT, event) {
         tracing::warn!(error = %err, "failed to emit overlay OCR result");
     }

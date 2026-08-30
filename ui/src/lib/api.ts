@@ -1,6 +1,7 @@
 import { tauriInvoke } from "@/lib/tauri";
 import type {
   AppConfig,
+  ImagePreprocessOptions,
   HistoryRecord,
   OcrModelStatus,
   OcrTextResult,
@@ -10,6 +11,7 @@ import type {
   TranslationRequest,
   TranslationResult,
   VoiceInputResult,
+  PinnedResultPayload,
 } from "@/lib/types";
 
 export const events = {
@@ -38,12 +40,39 @@ export function getHistory(limit = 50) {
   return tauriInvoke<HistoryRecord[]>("get_history", { limit });
 }
 
+/** Loads local history using the same filters shown in the history screen. */
+/** Searches local history with optional text, source, and inclusive date bounds. */
+export function searchHistory(
+  query?: string,
+  source?: string,
+  from?: number,
+  to?: number,
+  limit = 50,
+) {
+  return tauriInvoke<HistoryRecord[]>("search_history", { query, source, from, to, limit });
+}
+
+/** Removes one local history record by id. */
+export function deleteHistory(id: number) {
+  return tauriInvoke<void>("delete_history", { id });
+}
+
 export function clearHistory() {
   return tauriInvoke<void>("clear_history");
 }
 
 export function validateOcrModels() {
   return tauriInvoke<OcrModelStatus>("validate_ocr_models");
+}
+
+/** Opens a specific macOS privacy pane so the user can grant a required permission. */
+export function openSystemSettings(section: "screen_recording" | "accessibility" | "microphone") {
+  return tauriInvoke<void>("open_system_settings", { section });
+}
+
+/** Loads the latest result snapshot when the independent result window opens. */
+export function getResultSnapshot() {
+  return tauriInvoke<PinnedResultPayload | null>("get_result_snapshot");
 }
 
 export function screenshotFull() {
@@ -70,8 +99,17 @@ export function screenshotRegion(bbox: Region) {
   return tauriInvoke<ScreenshotPayload>("screenshot_region", { bbox });
 }
 
-export function translateImageBase64(base64Png: string) {
-  return tauriInvoke<TranslationResult>("translate_image_base64", { base64Png });
+/** Runs image OCR and translation with an optional crop and preprocessing profile. */
+export function translateImageBase64(
+  base64Png: string,
+  bbox?: Region,
+  preprocessOptions?: ImagePreprocessOptions,
+) {
+  return tauriInvoke<TranslationResult>("translate_image_base64", {
+    base64Png,
+    bbox,
+    preprocessOptions,
+  });
 }
 
 export function translateScreenshotBase64(base64Png: string) {
@@ -82,16 +120,20 @@ export function translateScreenshotRegion(bbox: Region) {
   return tauriInvoke<TranslationResult>("translate_screenshot_region", { bbox });
 }
 
-export function ocrImageRegion(base64Png: string, bbox: Region) {
-  return tauriInvoke<OcrTextResult>("ocr_image_region", { base64Png, bbox });
+export function ocrImageRegion(
+  base64Png: string,
+  bbox: Region,
+  preprocessOptions?: ImagePreprocessOptions,
+) {
+  return tauriInvoke<OcrTextResult>("ocr_image_region", { base64Png, bbox, preprocessOptions });
 }
 
 export function ocrScreenshotRegion(bbox: Region) {
   return tauriInvoke<OcrTextResult>("ocr_screenshot_region", { bbox });
 }
 
-export function ocrOverlaySelection(bbox: Region) {
-  return tauriInvoke<OcrTextResult>("ocr_overlay_selection", { bbox });
+export function ocrOverlaySelection(bbox: Region, translateAfterOcr = true) {
+  return tauriInvoke<OcrTextResult>("ocr_overlay_selection", { bbox, translateAfterOcr });
 }
 
 export function translateOverlaySelection(bbox: Region) {
@@ -118,8 +160,9 @@ export function retranslateResultText(request: TranslationRequest) {
   });
 }
 
-export function pinResultWindow() {
-  return tauriInvoke<void>("pin_result_window");
+/** Opens the independent result window with the exact snapshot currently shown in the UI. */
+export function pinResultWindow(snapshot?: PinnedResultPayload) {
+  return tauriInvoke<void>("pin_result_window", { snapshot });
 }
 
 export function unpinResultWindow() {

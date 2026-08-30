@@ -11,6 +11,8 @@ export type UiConfig = {
   theme: string;
   language: string;
   result_panel_dock: string;
+  /** Controls whether source text is translated after the debounce window. */
+  auto_translate: boolean;
 };
 
 export type HotkeyConfig = {
@@ -141,11 +143,17 @@ export type BBox = {
 };
 
 export type OcrModelStatus = {
+  /** Resolved OCR model directory reported by the native validator. */
   model_dir: string;
+  /** Whether required files and ONNX sessions passed validation. */
   valid: boolean;
+  /** Required model assets that are absent. */
   missing_files: string[];
+  /** Number of entries in the recognition dictionary. */
   recognition_dict_len: number;
+  /** Whether the ONNX runtime could load all sessions. */
   loadable: boolean;
+  /** Human-readable native validation detail. */
   message: string;
 };
 
@@ -155,16 +163,38 @@ export type OverlayTranslationPayload = {
 };
 
 export type OverlayOcrPayload = {
+  /** OCR region in screen coordinates. */
   result: OcrTextResult;
+  /** Whether the overlay action should continue into translation. */
+  translate_after_ocr: boolean;
   region: Region;
 };
 
 export type PinnedResultPayload = {
+  /** Source kind serialized by the native result snapshot. */
   source: string;
+  /** Source or OCR text shown in the result window. */
   source_text: string;
+  /** Translated output shown in the result window. */
   translated_text: string;
+  /** Target language used for the output. */
   target_lang: string;
+  /** Optional dictionary entries attached to the result. */
   dictionary_entries?: DictionaryEntry[];
+};
+
+/** Options applied to a user-provided image before local OCR. */
+export type ImagePreprocessOptions = {
+  /** Multiplicative resize applied after rotation. */
+  scale: number;
+  /** Converts the image to grayscale before OCR. */
+  grayscale: boolean;
+  /** Contrast multiplier where 1 keeps the original contrast. */
+  contrast: number;
+  /** Applies a local unsharp mask after resizing to clarify glyph edges. */
+  sharpen: boolean;
+  /** Clockwise rotation in degrees; supported values are 0, 90, 180, and 270. */
+  rotation: 0 | 90 | 180 | 270;
 };
 
 export type TranslationRequest = {
@@ -185,9 +215,18 @@ export type VoiceInputPartialPayload = {
 export type WindowKind = "main" | "overlay" | "result";
 
 export type WorkspaceSnapshot = {
+  /** Latest translated text shown in the result panel. */
   result: string;
+  /** Source text associated with the latest result. */
   sourceText: string;
+  /** Source kind used for history and result-window labels. */
   sourceKind: string;
+  /** Target language associated with the latest result. */
   targetLang: string;
+  /** Dictionary entries associated with the latest result. */
   dictionaryEntries: DictionaryEntry[];
+  /** OCR text boxes and confidence values for the source text. */
+  textLines: TextLine[];
+  /** Keeps OCR-only results from being translated before the user reviews them. */
+  requiresReview: boolean;
 };

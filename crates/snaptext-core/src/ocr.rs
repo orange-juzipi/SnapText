@@ -274,13 +274,14 @@ impl OcrEngine {
                 lines.push(TextLine {
                     text: recognition.text,
                     bbox: candidate.bbox,
-                    confidence: (candidate.score
-                        + classification.confidence
-                        + recognition.confidence)
-                        / 3.0,
+                    // Classification confidence only describes text rotation. Recognition and
+                    // detection scores are the useful signal for whether the text itself is reliable.
+                    confidence: (recognition.confidence * 0.8 + candidate.score * 0.2)
+                        .clamp(0.0, 1.0),
                 });
             }
 
+            deduplicate_text_lines(&mut lines);
             sort_text_lines_for_reading(&mut lines);
             Ok(lines)
         })
@@ -494,6 +495,7 @@ mod macos_vision {
             });
         }
 
+        super::deduplicate_text_lines(&mut lines);
         super::sort_text_lines_for_reading(&mut lines);
         Ok(lines)
     }
@@ -1210,13 +1212,93 @@ fn argmax(values: &[f32]) -> (usize, f32) {
 }
 
 pub fn sort_text_lines_for_reading(lines: &mut [TextLine]) {
-    // Sort by top edge first, then by left edge. Later OCR work can refine this
-    // with line clustering for multi-column documents.
-    lines.sort_by_key(|line| (line.bbox.y, line.bbox.x));
+    // Group boxes that occupy the same visual row before sorting left-to-right. A plain
+    // `(y, x)` sort interleaves columns and becomes unstable when detector boxes have
+    // slightly different top edges.
+    let mut pending = lines.to_vec();
+    pending.sort_by_key(|line| (line.bbox.y, line.bbox.x));
+    let mut rows: Vec<Vec<TextLine>> = Vec::new();
+    for line in pending {
+        if let Some(row) = rows
+            .iter_mut()
+            .find(|row| row.iter().any(|existing| same_reading_row(existing, &line)))
+        {
+            row.push(line);
+        } else {
+            rows.push(vec![line]);
+        }
+    }
+
+    let ordered = rows
+        .into_iter()
+        .flat_map(|mut row| {
+            row.sort_by_key(|line| (line.bbox.x, line.bbox.y));
+            row
+        })
+        .collect::<Vec<_>>();
+    lines.clone_from_slice(&ordered);
+}
+
+/// Removes only overlapping detector duplicates while preserving repeated text at different locations.
+fn deduplicate_text_lines(lines: &mut Vec<TextLine>) {
+    let mut unique = Vec::with_capacity(lines.len());
+    for line in lines.drain(..) {
+        let duplicate_index = unique.iter().position(|existing: &TextLine| {
+            existing.text.trim() == line.text.trim()
+                && bbox_overlap_ratio(&existing.bbox, &line.bbox) >= 0.5
+        });
+        if let Some(index) = duplicate_index {
+            if line.confidence > unique[index].confidence {
+                unique[index] = line;
+            }
+        } else {
+            unique.push(line);
+        }
+    }
+    *lines = unique;
+}
+
+/// Reports whether two OCR boxes belong to the same visual text row.
+fn same_reading_row(left: &TextLine, right: &TextLine) -> bool {
+    let left_top = left.bbox.y;
+    let right_top = right.bbox.y;
+    let left_bottom = left_top.saturating_add(left.bbox.height);
+    let right_bottom = right_top.saturating_add(right.bbox.height);
+    let overlap = left_bottom
+        .min(right_bottom)
+        .saturating_sub(left_top.max(right_top));
+    let min_height = left.bbox.height.max(1).min(right.bbox.height.max(1));
+    let center_left = left_top.saturating_add(left.bbox.height / 2);
+    let center_right = right_top.saturating_add(right.bbox.height / 2);
+    overlap.saturating_mul(3) >= min_height
+        || center_left.abs_diff(center_right).saturating_mul(2) <= min_height
+}
+
+/// Returns the overlap ratio relative to the smaller OCR box.
+fn bbox_overlap_ratio(left: &BBox, right: &BBox) -> f32 {
+    let left_edge = left.x.max(right.x) as u64;
+    let top_edge = left.y.max(right.y) as u64;
+    let right_edge = left
+        .x
+        .saturating_add(left.width)
+        .min(right.x.saturating_add(right.width)) as u64;
+    let bottom_edge = left
+        .y
+        .saturating_add(left.height)
+        .min(right.y.saturating_add(right.height)) as u64;
+    let intersection = right_edge.saturating_sub(left_edge) * bottom_edge.saturating_sub(top_edge);
+    let smaller =
+        (left.width as u64 * left.height as u64).min(right.width as u64 * right.height as u64);
+    if smaller == 0 {
+        0.0
+    } else {
+        intersection as f32 / smaller as f32
+    }
 }
 
 pub fn aggregate_text(lines: &[TextLine]) -> String {
     let mut sorted = lines.to_vec();
+    deduplicate_text_lines(&mut sorted);
     sort_text_lines_for_reading(&mut sorted);
     sorted
         .into_iter()
@@ -1247,6 +1329,36 @@ mod tests {
         let lines = vec![line("world", 0, 20), line("hello", 0, 10)];
 
         assert_eq!(aggregate_text(&lines), "hello\nworld");
+    }
+
+    /// Verifies that minor detector y drift still keeps one visual row together.
+    #[test]
+    fn sort_groups_boxes_with_small_vertical_drift() {
+        let mut lines = vec![
+            line("right", 80, 12),
+            line("left", 0, 10),
+            line("next", 0, 40),
+        ];
+
+        sort_text_lines_for_reading(&mut lines);
+
+        let texts = lines.into_iter().map(|line| line.text).collect::<Vec<_>>();
+        assert_eq!(texts, ["left", "right", "next"]);
+    }
+
+    /// Verifies that duplicate boxes collapse without removing repeated text elsewhere.
+    #[test]
+    fn aggregate_text_removes_only_overlapping_duplicate_boxes() {
+        let mut duplicate = line("same", 1, 1);
+        duplicate.confidence = 0.5;
+        let mut stronger = line("same", 1, 1);
+        stronger.confidence = 0.9;
+        let second_location = line("same", 100, 1);
+
+        assert_eq!(
+            aggregate_text(&[duplicate, stronger, second_location]),
+            "same\nsame"
+        );
     }
 
     #[test]

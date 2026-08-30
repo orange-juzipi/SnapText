@@ -16,6 +16,7 @@ use snaptext_core::{
     selection::SelectionWatcher, translate::TranslatorRegistry,
 };
 
+use crate::events::PinnedResultPayload;
 #[cfg(target_os = "macos")]
 use crate::voice_input::VoiceInputSession;
 use crate::{ScreenshotPayload, model::resolve_model_dir, translator_registry_for_config};
@@ -32,6 +33,8 @@ pub struct AppState {
     #[cfg(target_os = "macos")]
     pub(crate) voice_input: Mutex<Option<VoiceInputSession>>,
     pub(crate) translator: RwLock<TranslatorRegistry>,
+    /// Latest translated result used to hydrate a result window created after the translation.
+    pub(crate) result_snapshot: Mutex<Option<PinnedResultPayload>>,
     #[cfg(test)]
     pub(crate) fake_translated_text: Mutex<Option<String>>,
     #[cfg(not(test))]
@@ -96,6 +99,7 @@ impl AppState {
             #[cfg(target_os = "macos")]
             voice_input: Mutex::new(None),
             translator: RwLock::new(translator),
+            result_snapshot: Mutex::new(None),
             #[cfg(test)]
             fake_translated_text: Mutex::new(None),
             #[cfg(not(test))]

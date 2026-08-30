@@ -7,6 +7,56 @@ use snaptext_core::{Error, Result, screenshot::ImageMeta};
 const MAX_IMAGE_PAYLOAD_BYTES: usize = 25 * 1024 * 1024;
 const MAX_IMAGE_PIXELS: u64 = 24_000_000;
 
+/// Describes the bounded image transformations exposed by the image workspace.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ImagePreprocessOptions {
+    /// Multiplicative resize applied after rotation.
+    pub scale: f32,
+    /// Converts the image to grayscale before OCR.
+    pub grayscale: bool,
+    /// Contrast multiplier where 1.0 preserves the original contrast.
+    pub contrast: f32,
+    /// Applies a restrained unsharp mask after resizing to clarify glyph edges.
+    pub sharpen: bool,
+    /// Clockwise rotation in degrees; only quarter turns are supported.
+    pub rotation: u16,
+}
+
+impl Default for ImagePreprocessOptions {
+    fn default() -> Self {
+        Self {
+            scale: 1.0,
+            grayscale: false,
+            contrast: 1.0,
+            sharpen: false,
+            rotation: 0,
+        }
+    }
+}
+
+impl ImagePreprocessOptions {
+    /// Validates user-controlled values before allocating a transformed image.
+    pub(crate) fn validate(&self) -> Result<()> {
+        if !self.scale.is_finite() || !(0.25..=4.0).contains(&self.scale) {
+            return Err(Error::Image(
+                "image scale must be between 0.25 and 4.0".to_owned(),
+            ));
+        }
+        if !self.contrast.is_finite() || !(0.5..=2.0).contains(&self.contrast) {
+            return Err(Error::Image(
+                "image contrast must be between 0.5 and 2.0".to_owned(),
+            ));
+        }
+        if !matches!(self.rotation, 0 | 90 | 180 | 270) {
+            return Err(Error::Image(
+                "image rotation must be 0, 90, 180, or 270 degrees".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct ScreenshotPayload {
     pub meta: ImageMeta,
@@ -162,4 +212,57 @@ pub(crate) fn crop_image(
     let width = bbox.width.min(image_width.saturating_sub(bbox.x)).max(1);
     let height = bbox.height.min(image_height.saturating_sub(bbox.y)).max(1);
     Ok(image.crop_imm(bbox.x, bbox.y, width, height))
+}
+
+/// Applies the validated image profile while preserving the global pixel limit.
+pub(crate) fn preprocess_image(
+    image: DynamicImage,
+    options: Option<&ImagePreprocessOptions>,
+) -> Result<DynamicImage> {
+    let options = options.cloned().unwrap_or_default();
+    options.validate()?;
+
+    let mut processed = match options.rotation {
+        90 => image.rotate90(),
+        180 => image.rotate180(),
+        270 => image.rotate270(),
+        _ => image,
+    };
+    if options.grayscale {
+        processed = processed.grayscale();
+    }
+    if (options.contrast - 1.0).abs() > f32::EPSILON {
+        processed = processed.adjust_contrast((options.contrast - 1.0) * 100.0);
+    }
+
+    if (options.scale - 1.0).abs() > f32::EPSILON {
+        let width = ((processed.width() as f64) * f64::from(options.scale)).round();
+        let height = ((processed.height() as f64) * f64::from(options.scale)).round();
+        if width < 1.0
+            || height < 1.0
+            || width > f64::from(u32::MAX)
+            || height > f64::from(u32::MAX)
+        {
+            return Err(Error::Image(
+                "processed image dimensions are invalid".to_owned(),
+            ));
+        }
+        let pixels = (width as u64).saturating_mul(height as u64);
+        if pixels > MAX_IMAGE_PIXELS {
+            return Err(Error::Image(format!(
+                "processed image is too large: {pixels} pixels. Reduce the scale or crop the image."
+            )));
+        }
+        processed = processed.resize_exact(
+            width as u32,
+            height as u32,
+            image::imageops::FilterType::Lanczos3,
+        );
+    }
+    if options.sharpen {
+        processed = processed.unsharpen(1.0, 1);
+    }
+
+    validate_decoded_image_dimensions(&processed)?;
+    Ok(processed)
 }

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Languages, ScanText } from "lucide-react";
 import { closeOverlay, events, getOverlayScreenshot, ocrOverlaySelection } from "@/lib/api";
 import { labelsForLanguage } from "@/lib/labels";
 import { tauriEmit } from "@/lib/tauri";
@@ -23,6 +24,7 @@ export function OverlayApp() {
   const [screenshot, setScreenshot] = useState<ScreenshotPayload | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [selection, setSelection] = useState<SelectionBox | null>(null);
+  const [translateAfterOcr, setTranslateAfterOcr] = useState(true);
 
   useEffect(() => {
     getOverlayScreenshot()
@@ -70,7 +72,7 @@ export function OverlayApp() {
     try {
       // The main window owns the input box, so announce OCR start before the blocking command.
       await tauriEmit(events.overlayOcrStarted, region);
-      await ocrOverlaySelection(region);
+      await ocrOverlaySelection(region, translateAfterOcr);
       await closeOverlay();
     } catch (error) {
       await tauriEmit(events.overlayOcrFailed, region);
@@ -90,9 +92,33 @@ export function OverlayApp() {
       ) : null}
       <div className="overlay-status-bar fixed left-3 right-3 top-3 z-10 flex min-h-10 items-center justify-between gap-3 rounded-lg border border-white/15 bg-slate-950/80 px-3 py-2 text-sm text-white">
         <span>{status}</span>
-        <Button size="sm" variant="ghost" className="text-white hover:bg-white/10" onClick={handleCancel}>
-          {labels.cancel}
-        </Button>
+        <div className="overlay-mode-actions">
+          <div className="overlay-mode-control" role="group" aria-label={labels.overlayResultMode}>
+            <Button
+              size="sm"
+              type="button"
+              variant={translateAfterOcr ? "ghost" : "primary"}
+              className="text-white hover:bg-white/10"
+              onClick={() => setTranslateAfterOcr(false)}
+            >
+              <ScanText size={14} />
+              {labels.imageOcrOnly}
+            </Button>
+            <Button
+              size="sm"
+              type="button"
+              variant={translateAfterOcr ? "primary" : "ghost"}
+              className="text-white hover:bg-white/10"
+              onClick={() => setTranslateAfterOcr(true)}
+            >
+              <Languages size={14} />
+              {labels.imageOcrAndTranslate}
+            </Button>
+          </div>
+          <Button size="sm" variant="ghost" className="text-white hover:bg-white/10" onClick={handleCancel}>
+            {labels.cancel}
+          </Button>
+        </div>
       </div>
       <div
         className="fixed inset-0 cursor-crosshair"

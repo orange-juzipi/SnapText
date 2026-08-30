@@ -4,9 +4,22 @@ use std::io::Cursor;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::{ImageFormat, RgbaImage};
 use model::resolve_model_dir;
-use payload::{image_payload_base64_segment, max_base64_payload_chars};
+use payload::{
+    ImagePreprocessOptions, image_payload_base64_segment, max_base64_payload_chars,
+    preprocess_image,
+};
 use snaptext_core::config::{ModelDir, TranslatorProvider};
 use tray::{TRAY_HIDE, TRAY_QUIT, TRAY_SHOW, TrayAction, tray_action_for_id};
+
+/// Verifies that unknown system-settings sections are rejected before any process launch.
+#[test]
+fn open_system_settings_rejects_unknown_section() {
+    let err = open_system_settings_inner("unknown").expect_err("unknown settings section");
+    assert!(
+        err.to_string()
+            .contains("unsupported system settings section")
+    );
+}
 
 #[tokio::test]
 async fn translate_selection_rejects_empty_text() {
@@ -567,6 +580,58 @@ fn screenshot_payload_encodes_png_metadata() {
     assert_eq!(payload.meta.width, 2);
     assert_eq!(payload.meta.height, 3);
     assert!(!payload.base64_png.is_empty());
+}
+
+/// Verifies that the image profile applies grayscale, contrast, rotation, scaling, and sharpening together.
+#[test]
+fn image_preprocess_applies_bounded_transformations() {
+    let image = image::DynamicImage::ImageRgba8(RgbaImage::from_pixel(
+        4,
+        2,
+        image::Rgba([80, 120, 160, 255]),
+    ));
+    let options = ImagePreprocessOptions {
+        scale: 2.0,
+        grayscale: true,
+        contrast: 1.2,
+        sharpen: true,
+        rotation: 90,
+    };
+
+    let processed = preprocess_image(image, Some(&options)).expect("processed image");
+
+    assert_eq!((processed.width(), processed.height()), (4, 8));
+    let rgb = processed.to_rgb8();
+    let pixel = rgb.get_pixel(0, 0);
+    assert_eq!(pixel[0], pixel[1]);
+    assert_eq!(pixel[1], pixel[2]);
+}
+
+/// Verifies that unsafe preprocessing values are rejected before image allocation.
+#[test]
+fn image_preprocess_rejects_invalid_options() {
+    let image = image::DynamicImage::ImageRgba8(RgbaImage::new(2, 2));
+    let invalid_scale = ImagePreprocessOptions {
+        scale: 0.1,
+        ..ImagePreprocessOptions::default()
+    };
+    let invalid_rotation = ImagePreprocessOptions {
+        rotation: 45,
+        ..ImagePreprocessOptions::default()
+    };
+
+    assert!(
+        preprocess_image(image.clone(), Some(&invalid_scale))
+            .expect_err("invalid scale")
+            .to_string()
+            .contains("scale must be between")
+    );
+    assert!(
+        preprocess_image(image, Some(&invalid_rotation))
+            .expect_err("invalid rotation")
+            .to_string()
+            .contains("rotation must be 0, 90, 180, or 270")
+    );
 }
 
 #[test]

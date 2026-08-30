@@ -4,11 +4,17 @@ use crate::AppState;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct OcrModelStatus {
+    /// Resolved directory containing the OCR model assets.
     pub model_dir: String,
+    /// Whether all required files and runtime sessions are usable.
     pub valid: bool,
+    /// Required model assets that are absent from the model directory.
     pub missing_files: Vec<String>,
+    /// Number of entries loaded from the recognition dictionary.
     pub recognition_dict_len: usize,
+    /// Whether ONNX sessions loaded successfully.
     pub loadable: bool,
+    /// Human-readable validation detail for the settings screen.
     pub message: String,
 }
 
