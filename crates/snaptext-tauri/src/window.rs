@@ -1,5 +1,7 @@
 #[cfg(not(test))]
 use snaptext_core::Error;
+#[cfg(not(test))]
+use snaptext_core::config::CloseBehavior;
 use snaptext_core::{Result, config::ResultPanelDock};
 #[cfg(not(test))]
 use std::sync::atomic::Ordering;
@@ -19,6 +21,53 @@ use crate::MAIN_WINDOW_LABEL;
 use crate::OVERLAY_WINDOW_LABEL;
 #[cfg(not(test))]
 use crate::RESULT_WINDOW_LABEL;
+
+/// Installs the main-window close policy using the live application configuration.
+#[cfg(not(test))]
+pub(crate) fn setup_main_window_close_behavior(app: &AppHandle) -> Result<()> {
+    let window = app
+        .get_webview_window(MAIN_WINDOW_LABEL)
+        .ok_or_else(|| Error::Config("main window is not available".to_owned()))?;
+    let close_window = window.clone();
+    let close_app = app.clone();
+
+    window.on_window_event(move |event| {
+        let tauri::WindowEvent::CloseRequested { api, .. } = event else {
+            return;
+        };
+
+        match configured_close_behavior(&close_app) {
+            CloseBehavior::Hide => {
+                // Keep the process and tray alive while removing the native window.
+                api.prevent_close();
+                if let Err(err) = close_window.hide() {
+                    tracing::warn!(error = %err, "failed to hide main window on close");
+                }
+            }
+            CloseBehavior::Exit => {
+                // Explicitly exit so an independently pinned result window cannot keep the process alive.
+                api.prevent_close();
+                close_app.exit(0);
+            }
+        }
+    });
+
+    Ok(())
+}
+
+/// Reads the current close policy and falls back to hiding the window if state is unavailable.
+#[cfg(not(test))]
+fn configured_close_behavior(app: &AppHandle) -> CloseBehavior {
+    app.try_state::<crate::AppState>()
+        .and_then(|state| {
+            state
+                .config
+                .read()
+                .ok()
+                .map(|config| config.ui.close_behavior)
+        })
+        .unwrap_or(CloseBehavior::Hide)
+}
 
 /// Creates the independent result window on first use.
 #[cfg(not(test))]

@@ -8,7 +8,7 @@ use payload::{
     ImagePreprocessOptions, image_payload_base64_segment, max_base64_payload_chars,
     preprocess_image,
 };
-use snaptext_core::config::{ModelDir, TranslatorProvider};
+use snaptext_core::config::{CloseBehavior, ModelDir, TranslatorProvider};
 use tray::{TRAY_HIDE, TRAY_QUIT, TRAY_SHOW, TrayAction, tray_action_for_id};
 
 /// Verifies that unknown system-settings sections are rejected before any process launch.
@@ -295,6 +295,34 @@ fn update_config_persists_and_rebuilds_state() {
     assert_eq!(updated.target_lang.0, "ja");
     assert_eq!(loaded.target_lang.0, "ja");
     assert_eq!(get_config_inner(&state).expect("state config"), config);
+}
+
+/// Verifies that changing the close policy is persisted and applied to runtime state.
+#[test]
+fn update_config_persists_close_behavior() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let config_path = tempdir.path().join("config.yaml");
+    let mut config = AppConfig::default();
+    config.ui.close_behavior = CloseBehavior::Hide;
+    let state = AppState::with_config_path(
+        AppConfig::default(),
+        HistoryStore::in_memory().expect("history store"),
+        Some(config_path.clone()),
+    )
+    .expect("app state");
+
+    let updated = update_config_inner(&state, config).expect("updated config");
+    let loaded = AppConfig::load_or_default(Some(config_path)).expect("loaded config");
+
+    assert_eq!(updated.ui.close_behavior, CloseBehavior::Hide);
+    assert_eq!(loaded.ui.close_behavior, CloseBehavior::Hide);
+    assert_eq!(
+        get_config_inner(&state)
+            .expect("state config")
+            .ui
+            .close_behavior,
+        CloseBehavior::Hide
+    );
 }
 
 #[test]

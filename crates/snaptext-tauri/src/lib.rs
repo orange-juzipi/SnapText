@@ -62,6 +62,8 @@ use state::OverlaySession;
 #[cfg(not(test))]
 use tray::setup_tray;
 #[cfg(not(test))]
+use window::setup_main_window_close_behavior;
+#[cfg(not(test))]
 use window::show_main_window;
 #[cfg(not(target_os = "macos"))]
 use window::show_overlay_window;
@@ -195,6 +197,7 @@ pub fn run_tauri(config: AppConfig, history: HistoryStore) -> Result<()> {
                 .map_err(|err| Error::Config(err.to_string()))? = hotkey_routes;
             app.manage(app_state);
             setup_tray(app.handle())?;
+            setup_main_window_close_behavior(app.handle())?;
 
             let state = app.state::<AppState>();
             let config = state

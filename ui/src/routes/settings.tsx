@@ -34,7 +34,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Field, FieldLabel } from "@/components/ui/field";
+import { Field, FieldHint, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -65,6 +65,8 @@ export function SettingsPage() {
   const editVersionRef = useRef(0);
   const scrollPanelRef = useRef<HTMLDivElement | null>(null);
   const sectionRefs = useRef<Partial<Record<SettingsTab, HTMLElement | null>>>({});
+  const programmaticScrollRef = useRef<SettingsTab | null>(null);
+  const programmaticScrollTimerRef = useRef<number | null>(null);
   const speechEnabled = draft?.speech.enabled ?? false;
   const labels = labelsForLanguage(
     draft?.ui.language ?? configQuery.data?.ui.language,
@@ -82,6 +84,22 @@ export function SettingsPage() {
     }, 600);
     return () => window.clearTimeout(timeout);
   }, [configQuery.data, draft]);
+
+  /** Releases the temporary navigation lock when the settings view is unmounted. */
+  useEffect(() => {
+    return () => {
+      if (programmaticScrollTimerRef.current !== null) {
+        window.clearTimeout(programmaticScrollTimerRef.current);
+      }
+    };
+  }, []);
+
+  /** Keeps the active settings tab in sync when a narrow layout scrolls the document instead of the inner panel. */
+  useEffect(() => {
+    const handleWindowScroll = () => handleSettingsScroll();
+    window.addEventListener("scroll", handleWindowScroll, true);
+    return () => window.removeEventListener("scroll", handleWindowScroll, true);
+  }, []);
 
   const providerConfig = useMemo(
     () => visibleProvider(draft?.translator.provider),
@@ -152,25 +170,69 @@ export function SettingsPage() {
     }
   }
 
+  /** Moves the settings scroll container directly to a section without letting intermediate scroll events change the active tab. */
   function scrollToSettingsSection(tab: SettingsTab) {
     setActiveTab(tab);
-    sectionRefs.current[tab]?.scrollIntoView({ behavior: "smooth", block: "start" });
+    const container = scrollPanelRef.current;
+    const target = sectionRefs.current[tab];
+    if (!target) return;
+
+    if (programmaticScrollTimerRef.current !== null) {
+      window.clearTimeout(programmaticScrollTimerRef.current);
+    }
+    programmaticScrollRef.current = tab;
+
+    const scrollRange = container ? container.scrollHeight - container.clientHeight : 0;
+    if (container && scrollRange > 2) {
+      const containerRect = container.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const targetTop = container.scrollTop + targetRect.top - containerRect.top - 12;
+      container.scrollTo({
+        top: Math.min(Math.max(targetTop, 0), scrollRange),
+        behavior: "auto",
+      });
+    } else {
+      // On narrow layouts the settings panel grows with the page, so the document is the scroll owner.
+      target.scrollIntoView({ behavior: "auto", block: "start", inline: "nearest" });
+    }
+
+    // A native scroll event can be dispatched on the next task even for an instant scroll.
+    programmaticScrollTimerRef.current = window.setTimeout(() => {
+      programmaticScrollRef.current = null;
+      programmaticScrollTimerRef.current = null;
+      if (container && container.scrollHeight - container.clientHeight > 2) {
+        handleSettingsScroll();
+      }
+    }, 240);
   }
 
+  /** Derives the active settings section from the reading line while respecting both nested and document scrolling. */
   function handleSettingsScroll() {
     const container = scrollPanelRef.current;
     if (!container) return;
+    const requestedSection = programmaticScrollRef.current;
+    if (requestedSection) {
+      setActiveTab((current) => (current === requestedSection ? current : requestedSection));
+      return;
+    }
+
     const containerTop = container.getBoundingClientRect().top;
     let currentSection = sectionOrder[0];
-    let closestDistance = Number.POSITIVE_INFINITY;
+    const scrollRange = Math.max(container.scrollHeight - container.clientHeight, 0);
 
-    for (const section of sectionOrder) {
-      const node = sectionRefs.current[section];
-      if (!node) continue;
-      const distance = Math.abs(node.getBoundingClientRect().top - containerTop);
-      if (distance < closestDistance) {
-        currentSection = section;
-        closestDistance = distance;
+    if (scrollRange > 2 && container.scrollTop >= scrollRange - 2) {
+      // scrollIntoView cannot align a final section to the top when there is no trailing content.
+      currentSection = sectionOrder[sectionOrder.length - 1];
+    } else {
+      const readingLine =
+        scrollRange > 2
+          ? containerTop + Math.min(120, container.clientHeight * 0.35)
+          : Math.max(120, window.innerHeight - 160);
+      for (const section of sectionOrder) {
+        const node = sectionRefs.current[section];
+        if (node && node.getBoundingClientRect().top <= readingLine) {
+          currentSection = section;
+        }
       }
     }
 
@@ -298,6 +360,24 @@ export function SettingsPage() {
                 <option value="cursor">{labels.dockCursor}</option>
                 <option value="fixed">{labels.dockFixed}</option>
               </Select>
+            </Field>
+            <Field>
+              <FieldLabel>{labels.closeBehavior}</FieldLabel>
+              <Select
+                value={normalizeCloseBehavior(draft.ui.close_behavior)}
+                onChange={(event) =>
+                  updateDraft(
+                    setDraft,
+                    userEditedRef,
+                    editVersionRef,
+                    (next) => (next.ui.close_behavior = event.target.value),
+                  )
+                }
+              >
+                <option value="exit">{labels.closeBehaviorExit}</option>
+                <option value="hide">{labels.closeBehaviorHide}</option>
+              </Select>
+              <FieldHint>{labels.closeBehaviorDescription}</FieldHint>
             </Field>
           </div>
           </section>
@@ -1012,6 +1092,7 @@ function SettingsTabButton({
 }) {
   return (
     <button
+      aria-pressed={active}
       className={active ? "settings-tab is-active" : "settings-tab"}
       onClick={onClick}
       type="button"
@@ -1326,6 +1407,7 @@ function sanitizeConfig(config: AppConfig): AppConfig {
   next.target_lang = next.target_lang.trim();
   next.ui.theme = next.ui.theme.trim();
   next.ui.language = next.ui.language.trim();
+  next.ui.close_behavior = normalizeCloseBehavior(next.ui.close_behavior);
   next.hotkeys.screenshot = normalizeShortcutForConfig(next.hotkeys.screenshot);
   next.hotkeys.selection = normalizeShortcutForConfig(next.hotkeys.selection);
   next.translator.provider = visibleProvider(next.translator.provider.trim());
@@ -1353,6 +1435,11 @@ function sanitizeConfig(config: AppConfig): AppConfig {
   next.speech.rate = clampNumber(next.speech.rate, 0.1, 3);
   next.speech.volume = clampNumber(next.speech.volume, 0, 1);
   return next;
+}
+
+/** Keeps the close policy within the values understood by the native window handler. */
+function normalizeCloseBehavior(value: string | undefined) {
+  return value === "exit" ? "exit" : "hide";
 }
 
 function optionalTrim(value: string | null | undefined) {

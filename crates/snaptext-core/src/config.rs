@@ -22,13 +22,19 @@ pub struct AppConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub struct UiConfig {
+    /// Visual theme used by the application window.
     pub theme: Theme,
+    /// Language used by the application interface.
     #[serde(default = "default_ui_language")]
     pub language: UiLanguage,
+    /// Docking mode used by the independent result window.
     pub result_panel_dock: ResultPanelDock,
     /// Whether typing text should trigger the debounced translation request.
     #[serde(default = "default_auto_translate")]
     pub auto_translate: bool,
+    /// Action taken when the native main-window close button is pressed.
+    #[serde(default = "default_close_behavior")]
+    pub close_behavior: CloseBehavior,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -55,11 +61,26 @@ fn default_auto_translate() -> bool {
     true
 }
 
+/// Returns the default behavior for the native close button.
+fn default_close_behavior() -> CloseBehavior {
+    CloseBehavior::Hide
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ResultPanelDock {
     Cursor,
     Fixed,
+}
+
+/// Defines whether closing the main window exits the process or leaves it in the tray.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CloseBehavior {
+    /// Exit the whole application when the main window is closed.
+    Exit,
+    /// Hide the main window while keeping the application and tray available.
+    Hide,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -225,6 +246,7 @@ impl Default for AppConfig {
                 language: UiLanguage::ZhCn,
                 result_panel_dock: ResultPanelDock::Cursor,
                 auto_translate: true,
+                close_behavior: CloseBehavior::Hide,
             },
             hotkeys: HotkeyConfig {
                 screenshot: "Alt+W".to_owned(),
@@ -631,6 +653,7 @@ mod tests {
         assert_eq!(config.target_lang, Lang("auto".to_owned()));
         assert_eq!(config.ui.language, UiLanguage::ZhCn);
         assert!(config.ui.auto_translate);
+        assert_eq!(config.ui.close_behavior, CloseBehavior::Hide);
         assert_eq!(config.speech.english_accent, EnglishAccent::American);
         assert_eq!(
             config.speech.english_accents,
@@ -767,6 +790,7 @@ speech:
         assert!(saved.contains("provider: snaptext_cloud"));
         assert!(saved.contains("screenshot: CmdOrCtrl+Shift+T"));
         assert!(saved.contains("selection: Alt+F8"));
+        assert!(saved.contains("close_behavior: hide"));
         assert!(saved.contains("api_key: sk-test"));
         assert!(saved.contains("model: gpt-test"));
         assert!(saved.contains("english_accent: british"));
@@ -809,6 +833,22 @@ ocr:
 
         assert_eq!(config.speech, SpeechConfig::default());
         assert!(config.ui.auto_translate);
+        assert_eq!(config.ui.close_behavior, CloseBehavior::Hide);
+    }
+
+    /// Verifies that the close policy keeps a stable YAML representation for persisted settings.
+    #[test]
+    fn close_behavior_round_trips_exit_and_hide_values() {
+        for (behavior, expected) in [
+            (CloseBehavior::Exit, "exit\n"),
+            (CloseBehavior::Hide, "hide\n"),
+        ] {
+            let yaml = serde_yaml::to_string(&behavior).expect("serialize close behavior");
+            assert_eq!(yaml, expected);
+            let decoded: CloseBehavior =
+                serde_yaml::from_str(&yaml).expect("deserialize close behavior");
+            assert_eq!(decoded, behavior);
+        }
     }
 
     #[test]

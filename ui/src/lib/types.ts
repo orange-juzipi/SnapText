@@ -13,6 +13,8 @@ export type UiConfig = {
   result_panel_dock: string;
   /** Controls whether source text is translated after the debounce window. */
   auto_translate: boolean;
+  /** Controls whether closing the native main window exits or hides the application. */
+  close_behavior: string;
 };
 
 export type HotkeyConfig = {

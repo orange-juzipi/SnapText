@@ -305,6 +305,7 @@ export function ResultWindowApp() {
   );
 }
 
+/** Renders a speech control with a tonal active state instead of a primary-action fill. */
 function SpeechButton({
   active,
   accentLabel,
@@ -325,7 +326,8 @@ function SpeechButton({
       className={active ? "workspace-speech-button-active" : undefined}
       onClick={onClick}
       label={tooltipLabel ?? ariaLabel}
-      variant={active ? "primary" : "secondary"}
+      pressed={active}
+      variant="secondary"
       size={accentLabel ? "sm" : "icon"}
       disabled={disabled}
     >
@@ -335,12 +337,14 @@ function SpeechButton({
   );
 }
 
+/** Wraps an icon button with a tooltip and optional toggle semantics. */
 function IconTooltipButton({
   children,
   className,
   disabled,
   label,
   onClick,
+  pressed,
   size = "icon",
   variant = "secondary",
 }: {
@@ -349,12 +353,15 @@ function IconTooltipButton({
   disabled?: boolean;
   label: string;
   onClick: () => void;
+  /** Announces the current toggle state to assistive technology. */
+  pressed?: boolean;
   size?: React.ComponentProps<typeof Button>["size"];
   variant?: React.ComponentProps<typeof Button>["variant"];
 }) {
   const button = (
     <Button
       aria-label={label}
+      aria-pressed={pressed}
       className={className}
       disabled={disabled}
       onClick={onClick}
