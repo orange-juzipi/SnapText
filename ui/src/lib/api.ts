@@ -3,7 +3,6 @@ import type {
   AppConfig,
   ImagePreprocessOptions,
   HistoryRecord,
-  OcrModelStatus,
   OcrTextResult,
   OverlayTranslationPayload,
   Region,
@@ -59,10 +58,6 @@ export function deleteHistory(id: number) {
 
 export function clearHistory() {
   return tauriInvoke<void>("clear_history");
-}
-
-export function validateOcrModels() {
-  return tauriInvoke<OcrModelStatus>("validate_ocr_models");
 }
 
 /** Opens a specific macOS privacy pane so the user can grant a required permission. */

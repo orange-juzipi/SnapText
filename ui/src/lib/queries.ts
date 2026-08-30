@@ -10,7 +10,6 @@ import {
   translateImageBase64,
   translateText,
   updateConfig,
-  validateOcrModels,
 } from "@/lib/api";
 import type { ImagePreprocessOptions, Region } from "@/lib/types";
 
@@ -118,12 +117,6 @@ export function useDeleteHistoryMutation() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["history"], exact: false });
     },
-  });
-}
-
-export function useValidateModelsMutation() {
-  return useMutation({
-    mutationFn: validateOcrModels,
   });
 }
 

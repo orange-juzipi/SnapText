@@ -1,14 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  AlertCircle,
   ArrowLeft,
   Check,
-  CircleCheck,
-  Cloud,
   ExternalLink,
   Eye,
   EyeOff,
-  HardDrive,
   Keyboard,
   MonitorCog,
   ServerCog,
@@ -21,9 +17,8 @@ import { labelsForLanguage } from "@/lib/labels";
 import {
   useConfigQuery,
   useUpdateConfigMutation,
-  useValidateModelsMutation,
 } from "@/lib/queries";
-import type { AppConfig, HotkeyConfig, OcrModelStatus } from "@/lib/types";
+import type { AppConfig, HotkeyConfig } from "@/lib/types";
 import { useWorkspaceState } from "@/app/workspace-state";
 import { clientSnapTextCloudEndpoint } from "@/lib/snaptext-cloud";
 import { openSystemSettings } from "@/lib/api";
@@ -59,18 +54,15 @@ const DEFAULT_HOTKEYS: HotkeyConfig = {
 export function SettingsPage() {
   const configQuery = useConfigQuery();
   const updateConfig = useUpdateConfigMutation();
-  const validateModels = useValidateModelsMutation();
   const workspace = useWorkspaceState();
   const [draft, setDraft] = useState<AppConfig | null>(null);
   const [activeTab, setActiveTab] = useState<SettingsTab>("interface");
   const [providerDialogOpen, setProviderDialogOpen] = useState(false);
   const [providerSaveError, setProviderSaveError] = useState("");
-  const [modelStatus, setModelStatus] = useState<OcrModelStatus | null>(null);
   const userEditedRef = useRef(false);
   const savingRef = useRef(false);
   const queuedSaveRef = useRef<QueuedSave | null>(null);
   const editVersionRef = useRef(0);
-  const diagnosticsStartedRef = useRef(false);
   const scrollPanelRef = useRef<HTMLDivElement | null>(null);
   const sectionRefs = useRef<Partial<Record<SettingsTab, HTMLElement | null>>>({});
   const speechEnabled = draft?.speech.enabled ?? false;
@@ -82,22 +74,6 @@ export function SettingsPage() {
     if (!configQuery.data || userEditedRef.current) return;
     setDraft(ensureSpeechDefaults(configQuery.data));
   }, [configQuery.data]);
-
-  useEffect(() => {
-    if (!configQuery.data || diagnosticsStartedRef.current) return;
-    diagnosticsStartedRef.current = true;
-    // Validate once after configuration hydration so a first launch explains missing OCR assets immediately.
-    void validateModels.mutateAsync()
-      .then((status) => {
-        setModelStatus(status);
-        workspace.setStatus(status.valid ? labels.diagnosticsReady : labels.diagnosticsFailed);
-      })
-      .catch((error) => {
-        setModelStatus(null);
-        workspace.setStatus(labels.diagnosticsFailed);
-        workspace.showError(error instanceof Error ? error.message : String(error));
-      });
-  }, [configQuery.data, labels.diagnosticsFailed, labels.diagnosticsReady, validateModels, workspace]);
 
   useEffect(() => {
     if (!draft || !configQuery.data || !userEditedRef.current) return;
@@ -164,19 +140,6 @@ export function SettingsPage() {
       const message = error instanceof Error ? error.message : String(error);
       setProviderSaveError(message);
       workspace.showError(message);
-    }
-  }
-
-  /** Runs the native OCR model validation and keeps its detailed result visible for diagnosis. */
-  async function handleRunDiagnostics() {
-    try {
-      const status = await validateModels.mutateAsync();
-      setModelStatus(status);
-      workspace.setStatus(status.valid ? labels.diagnosticsReady : labels.diagnosticsFailed);
-    } catch (error) {
-      setModelStatus(null);
-      workspace.setStatus(labels.diagnosticsFailed);
-      workspace.showError(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -523,54 +486,10 @@ export function SettingsPage() {
             <div className="settings-section-heading">
               <h2>{labels.diagnostics}</h2>
             </div>
-            <div className="settings-diagnostics-toolbar">
-              <p>{labels.diagnosticsPermissionsNote}</p>
-              <Button
-                type="button"
-                variant="primary"
-                disabled={validateModels.isPending}
-                onClick={() => void handleRunDiagnostics()}
-              >
-                <Stethoscope size={16} />
-                {validateModels.isPending ? labels.saving : labels.runDiagnostics}
-              </Button>
-            </div>
             <div className="settings-diagnostics-grid">
-              <DiagnosticCard
-                icon={<HardDrive size={17} />}
-                label={labels.diagnosticsLocalOcr}
-                value={modelStatus ? (modelStatus.valid ? labels.diagnosticsAvailable : labels.diagnosticsUnavailable) : labels.modelStatusNotChecked}
-                tone={modelStatus ? (modelStatus.valid ? "success" : "warning") : "neutral"}
-              >
-                {modelStatus ? (
-                  <>
-                    <span title={modelStatus.model_dir}>{labels.ocrModelPath}: {modelStatus.model_dir}</span>
-                    <span>{labels.diagnosticsDictionaryLength}: {modelStatus.recognition_dict_len}</span>
-                    <span>{labels.diagnosticsOnnxLoadable}: {modelStatus.loadable ? labels.diagnosticsAvailable : labels.diagnosticsUnavailable}</span>
-                    {modelStatus.missing_files.length > 0 ? (
-                      <span>{labels.diagnosticsMissingFiles}: {modelStatus.missing_files.join(", ")}</span>
-                    ) : null}
-                    <span>{modelStatus.message}</span>
-                  </>
-                ) : (
-                  <span>{labels.configurationNotValidated}</span>
-                )}
-              </DiagnosticCard>
-              <DiagnosticCard
-                icon={<ServerCog size={17} />}
-                label={labels.diagnosticsCloudTranslation}
-                value={providerDiagnosticLabel(draft, labels)}
-                tone={providerDiagnosticTone(draft)}
-              >
-                <span>{labels.provider}: {providerMeta(visibleProvider(draft.translator.provider) as ProviderId, labels).name}</span>
-                <span>{labels.providerStatus}: {providerEndpointLabel(draft)}</span>
-                <span>{labels.localProcessingHint}</span>
-              </DiagnosticCard>
               <DiagnosticCard
                 icon={<ShieldCheck size={17} />}
                 label={labels.permissionStatus}
-                value={labels.diagnosticsPermissionUnknown}
-                tone="neutral"
               >
                 <PermissionSettingRow
                   label={labels.diagnosticsScreenRecording}
@@ -588,14 +507,6 @@ export function SettingsPage() {
                   openLabel={labels.openSystemSettings}
                 />
               </DiagnosticCard>
-            </div>
-            <div className="settings-privacy-note">
-              <Cloud size={17} aria-hidden="true" />
-              <div>
-                <strong>{labels.diagnosticsPrivacyTitle}</strong>
-                <p>{labels.localProcessingHint}</p>
-                <p>{labels.diagnosticsCloudOcrUnavailable}</p>
-              </div>
             </div>
           </section>
         </div>
@@ -616,32 +527,21 @@ export function SettingsPage() {
   );
 }
 
-type DiagnosticTone = "success" | "warning" | "neutral";
-
 /** Presents one diagnostic category with a compact status and supporting details. */
 function DiagnosticCard({
   children,
   icon,
   label,
-  tone,
-  value,
 }: {
   children: React.ReactNode;
   icon: React.ReactNode;
   label: string;
-  tone: DiagnosticTone;
-  value: string;
 }) {
-  const StatusIcon = tone === "success" ? CircleCheck : tone === "warning" ? AlertCircle : ShieldCheck;
   return (
-    <article className={`settings-diagnostic-card is-${tone}`}>
+    <article className="settings-diagnostic-card">
       <div className="settings-diagnostic-card-heading">
         <span className="settings-diagnostic-icon" aria-hidden="true">{icon}</span>
         <strong>{label}</strong>
-        <span className="settings-diagnostic-status">
-          <StatusIcon size={14} aria-hidden="true" />
-          {value}
-        </span>
       </div>
       <div className="settings-diagnostic-details">{children}</div>
     </article>
@@ -673,30 +573,6 @@ function PermissionSettingRow({
       </Button>
     </div>
   );
-}
-
-/** Returns a user-facing provider status without exposing API keys or secret values. */
-function providerDiagnosticLabel(config: AppConfig, labels: ReturnType<typeof labelsForLanguage>) {
-  const provider = visibleProvider(config.translator.provider) as ProviderId;
-  if (provider === "snaptext_cloud") return labels.diagnosticsProviderConfigured;
-  const key = provider === "deepl" ? config.translator.deepl.api_key : config.translator.google.api_key;
-  return key?.trim() ? labels.diagnosticsProviderConfigured : labels.diagnosticsProviderNeedsKey;
-}
-
-/** Maps provider configuration to the diagnostic card's restrained status color. */
-function providerDiagnosticTone(config: AppConfig): DiagnosticTone {
-  const provider = visibleProvider(config.translator.provider) as ProviderId;
-  if (provider === "snaptext_cloud") return "success";
-  const key = provider === "deepl" ? config.translator.deepl.api_key : config.translator.google.api_key;
-  return key?.trim() ? "success" : "warning";
-}
-
-/** Shows only the selected provider endpoint, never credentials. */
-function providerEndpointLabel(config: AppConfig) {
-  const provider = visibleProvider(config.translator.provider) as ProviderId;
-  if (provider === "snaptext_cloud") return clientSnapTextCloudEndpoint();
-  if (provider === "deepl") return config.translator.deepl.base_url;
-  return config.translator.google.base_url;
 }
 
 function HotkeySettingField({

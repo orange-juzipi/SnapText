@@ -18,7 +18,6 @@ use tauri::{AppHandle, Emitter, State};
 #[cfg(not(test))]
 use tauri_plugin_global_shortcut::ShortcutState;
 
-mod capabilities;
 mod events;
 #[cfg(not(test))]
 mod hotkeys;
@@ -29,7 +28,6 @@ mod state;
 mod tray;
 mod voice_input;
 mod window;
-use capabilities::{OcrModelStatus, validate_ocr_models_inner};
 use events::{
     OverlayTranslationPayload, PinnedResultPayload, SelectionTextPayload, emit_overlay_ocr,
     emit_result_translation, emit_result_window_state, emit_selection_record,
@@ -169,7 +167,6 @@ pub fn run_tauri(config: AppConfig, history: HistoryStore) -> Result<()> {
             screenshot_region,
             start_screenshot_overlay,
             update_config,
-            validate_ocr_models,
             open_system_settings,
             translate_image_base64,
             translate_screenshot_base64,
@@ -343,12 +340,6 @@ fn update_config(
     let config = update_config_inner(state.inner(), config)?;
     refresh_global_hotkeys(&app, &config)?;
     Ok(config)
-}
-
-#[tauri::command]
-#[allow(dead_code)]
-fn validate_ocr_models(state: State<'_, AppState>) -> Result<OcrModelStatus> {
-    validate_ocr_models_inner(state.inner())
 }
 
 /// Opens the requested macOS privacy pane without attempting to infer its grant state.

@@ -1,7 +1,19 @@
+import * as Popover from "@radix-ui/react-popover";
 import { useEffect, useState } from "react";
 import type * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { ClipboardCopy, Download, FileText, RefreshCw, Trash2, X } from "lucide-react";
+import {
+  CalendarDays,
+  ChevronLeft,
+  ChevronRight,
+  ChevronDown,
+  ClipboardCopy,
+  Download,
+  FileText,
+  RefreshCw,
+  Trash2,
+  X,
+} from "lucide-react";
 import { historyItemMeta, sourceLabel } from "@/lib/format";
 import { labelsForLanguage } from "@/lib/labels";
 import {
@@ -31,8 +43,8 @@ export function HistoryPage() {
   const [queryText, setQueryText] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [sourceFilter, setSourceFilter] = useState("");
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
+  const [fromDate, setFromDate] = useState(todayDateInputValue);
+  const [toDate, setToDate] = useState(todayDateInputValue);
   const fromDateEpoch = dateInputToEpoch(fromDate, false);
   const toDateEpoch = dateInputToEpoch(toDate, true);
   const hasInvalidFromDate = Boolean(fromDate && fromDateEpoch === undefined);
@@ -162,28 +174,26 @@ export function HistoryPage() {
                 </option>
               ))}
             </Select>
-            <label className="history-date-field">
-              <span>{labels.historyFromDate}</span>
-              <Input
-                aria-label={labels.historyFromDate}
-                aria-invalid={hasInvalidFromDate || hasInvalidDateRange}
-                className="history-date-input"
-                type="date"
+            <div className="history-date-field">
+              <HistoryDatePicker
+                invalid={hasInvalidFromDate || hasInvalidDateRange}
+                label={labels.historyFromDate}
+                labels={labels}
+                uiLanguage={configQuery.data?.ui.language}
                 value={fromDate}
-                onChange={(event) => setFromDate(event.target.value)}
+                onChange={setFromDate}
               />
-            </label>
-            <label className="history-date-field">
-              <span>{labels.historyToDate}</span>
-              <Input
-                aria-label={labels.historyToDate}
-                aria-invalid={hasInvalidToDate || hasInvalidDateRange}
-                className="history-date-input"
-                type="date"
+            </div>
+            <div className="history-date-field">
+              <HistoryDatePicker
+                invalid={hasInvalidToDate || hasInvalidDateRange}
+                label={labels.historyToDate}
+                labels={labels}
+                uiLanguage={configQuery.data?.ui.language}
                 value={toDate}
-                onChange={(event) => setToDate(event.target.value)}
+                onChange={setToDate}
               />
-            </label>
+            </div>
             {fromDate || toDate ? (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -319,6 +329,179 @@ export function HistoryPage() {
   );
 }
 
+/** Describes one day cell in the history date picker's six-week grid. */
+type CalendarCell = {
+  /** Stable YYYY-MM-DD value passed back to the history filter. */
+  value: string;
+  /** Day number rendered in the cell. */
+  day: number;
+  /** Whether this day belongs to the visible month. */
+  isCurrentMonth: boolean;
+  /** Whether this day is the user's local current date. */
+  isToday: boolean;
+};
+
+/** Defines the controlled API for one compact history date picker. */
+type HistoryDatePickerProps = {
+  /** Accessible label shared with the surrounding date field. */
+  label: string;
+  /** Current YYYY-MM-DD filter value, or an empty string. */
+  value: string;
+  /** Reports a newly selected valid local-calendar date. */
+  onChange: (value: string) => void;
+  /** Marks the trigger when the date or range validation fails. */
+  invalid: boolean;
+  /** Localized labels used by calendar controls. */
+  labels: ReturnType<typeof labelsForLanguage>;
+  /** UI language used for the month heading and accessible date text. */
+  uiLanguage?: string;
+};
+
+/** Renders a themed calendar popover instead of the browser-specific date input. */
+function HistoryDatePicker({ label, value, onChange, invalid, labels, uiLanguage }: HistoryDatePickerProps) {
+  const selectedDate = parseCalendarDate(value);
+  const [open, setOpen] = useState(false);
+  const initialDate = selectedDate ?? todayCalendarDate();
+  const [viewYear, setViewYear] = useState(initialDate.year);
+  const [viewMonth, setViewMonth] = useState(initialDate.month);
+  const locale = uiLanguage === "en" ? "en-US" : "zh-CN";
+  const cells = buildCalendarCells(viewYear, viewMonth);
+  const monthLabel = new Intl.DateTimeFormat(locale, { year: "numeric", month: "long" }).format(
+    calendarNativeDate(viewYear, viewMonth, 1),
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    const nextDate = parseCalendarDate(value) ?? todayCalendarDate();
+    setViewYear(nextDate.year);
+    setViewMonth(nextDate.month);
+  }, [open, value]);
+
+  /** Moves the visible month while keeping the calendar year within supported input bounds. */
+  function moveMonth(delta: number) {
+    const next = shiftCalendarMonth(viewYear, viewMonth, delta);
+    if (next.year < 1 || next.year > 9999) return;
+    setViewYear(next.year);
+    setViewMonth(next.month);
+  }
+
+  /** Applies a day cell and closes the popover after a valid selection. */
+  function selectCalendarDate(nextValue: string) {
+    onChange(nextValue);
+    setOpen(false);
+  }
+
+  /** Selects the current local date and returns the view to its month. */
+  function selectToday() {
+    const today = todayCalendarDate();
+    setViewYear(today.year);
+    setViewMonth(today.month);
+    onChange(formatCalendarDate(today.year, today.month, today.day));
+    setOpen(false);
+  }
+
+  /** Clears this individual date filter without affecting the other date field. */
+  function clearDate() {
+    onChange("");
+    setOpen(false);
+  }
+
+  return (
+    <Popover.Root
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (nextOpen) {
+          const nextDate = parseCalendarDate(value) ?? todayCalendarDate();
+          setViewYear(nextDate.year);
+          setViewMonth(nextDate.month);
+        }
+      }}
+    >
+      <Popover.Trigger asChild>
+        <button
+          type="button"
+          className={invalid ? "history-date-trigger is-invalid" : "history-date-trigger"}
+          aria-label={label}
+          aria-invalid={invalid}
+          aria-haspopup="dialog"
+          aria-expanded={open}
+        >
+          <CalendarDays size={15} aria-hidden="true" />
+          <span>{formatCalendarDisplay(value) || labels.calendarSelectDate}</span>
+          <ChevronDown className="history-date-trigger-chevron" size={14} aria-hidden="true" />
+        </button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content align="start" sideOffset={6} className="history-calendar-popover">
+          <div className="history-calendar-header">
+            <button
+              type="button"
+              className="history-calendar-nav"
+              aria-label={labels.calendarPreviousMonth}
+              title={labels.calendarPreviousMonth}
+              onClick={() => moveMonth(-1)}
+            >
+              <ChevronLeft size={16} aria-hidden="true" />
+            </button>
+            <strong>{monthLabel}</strong>
+            <button
+              type="button"
+              className="history-calendar-nav"
+              aria-label={labels.calendarNextMonth}
+              title={labels.calendarNextMonth}
+              onClick={() => moveMonth(1)}
+            >
+              <ChevronRight size={16} aria-hidden="true" />
+            </button>
+          </div>
+          <div className="history-calendar-weekdays" aria-hidden="true">
+            {(uiLanguage === "en" ? ["S", "M", "T", "W", "T", "F", "S"] : ["日", "一", "二", "三", "四", "五", "六"]).map(
+              (weekday, index) => <span key={`${weekday}-${index}`}>{weekday}</span>,
+            )}
+          </div>
+          <div className="history-calendar-grid" role="grid" aria-label={monthLabel}>
+            {cells.map((cell) => {
+              const isSelected = cell.value === value;
+              const className = [
+                "history-calendar-day",
+                cell.isCurrentMonth ? "" : "is-outside",
+                cell.isToday ? "is-today" : "",
+                isSelected ? "is-selected" : "",
+              ].filter(Boolean).join(" ");
+              return (
+                <button
+                  key={cell.value}
+                  type="button"
+                  role="gridcell"
+                  className={className}
+                  aria-label={`${labels.calendarSelectDate}: ${formatCalendarDisplay(cell.value)}`}
+                  aria-current={cell.isToday ? "date" : undefined}
+                  aria-pressed={isSelected}
+                  onClick={() => selectCalendarDate(cell.value)}
+                >
+                  {cell.day}
+                </button>
+              );
+            })}
+          </div>
+          <div className="history-calendar-footer">
+            <button type="button" className="history-calendar-footer-button" onClick={selectToday}>
+              <CalendarDays size={14} aria-hidden="true" />
+              {labels.calendarToday}
+            </button>
+            {value ? (
+              <button type="button" className="history-calendar-footer-button is-muted" onClick={clearDate}>
+                {labels.calendarClear}
+              </button>
+            ) : null}
+          </div>
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
 /** Renders a history item in a portable Markdown format while preserving line breaks. */
 function formatHistoryMarkdown(items: HistoryRecord[], labels: ReturnType<typeof labelsForLanguage>) {
   return items
@@ -371,6 +554,82 @@ function formatHistoryDate(timestamp: number, language?: string) {
 function safeIsoDate(timestamp: number) {
   const date = new Date(timestamp);
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+/** Holds a validated Gregorian calendar date without timezone information. */
+type CalendarDate = {
+  /** Four-digit calendar year. */
+  year: number;
+  /** One-based calendar month. */
+  month: number;
+  /** One-based day of the month. */
+  day: number;
+};
+
+/** Parses the controlled date value and rejects impossible Gregorian dates. */
+function parseCalendarDate(value: string): CalendarDate | undefined {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return undefined;
+  const [year, month, day] = value.split("-").map(Number);
+  if (year < 1 || year > 9999 || month < 1 || month > 12 || day < 1 || day > daysInMonth(year, month)) {
+    return undefined;
+  }
+  return { year, month, day };
+}
+
+/** Formats a calendar date as the stable value consumed by the history query. */
+function formatCalendarDate(year: number, month: number, day: number) {
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+/** Formats a stored date for the compact trigger display. */
+function formatCalendarDisplay(value: string) {
+  const parsed = parseCalendarDate(value);
+  return parsed ? `${String(parsed.year).padStart(4, "0")}/${String(parsed.month).padStart(2, "0")}/${String(parsed.day).padStart(2, "0")}` : "";
+}
+
+/** Creates a local date at noon so calendar navigation is not affected by DST midnight transitions. */
+function calendarNativeDate(year: number, month: number, day: number) {
+  const date = new Date(0);
+  date.setHours(12, 0, 0, 0);
+  date.setFullYear(year, month - 1, day);
+  return date;
+}
+
+/** Returns today's local calendar date for the date picker's quick action. */
+function todayCalendarDate(): CalendarDate {
+  const date = new Date();
+  return { year: date.getFullYear(), month: date.getMonth() + 1, day: date.getDate() };
+}
+
+/** Returns today's local date in the YYYY-MM-DD format used by the history query. */
+function todayDateInputValue() {
+  const today = todayCalendarDate();
+  return formatCalendarDate(today.year, today.month, today.day);
+}
+
+/** Moves a month by a signed offset while preserving a one-based month value. */
+function shiftCalendarMonth(year: number, month: number, delta: number): CalendarDate {
+  const totalMonths = year * 12 + month - 1 + delta;
+  const nextYear = Math.floor(totalMonths / 12);
+  const nextMonth = ((totalMonths % 12) + 12) % 12 + 1;
+  return { year: nextYear, month: nextMonth, day: 1 };
+}
+
+/** Builds a stable six-week grid including adjacent-month days for predictable popover height. */
+function buildCalendarCells(year: number, month: number): CalendarCell[] {
+  const firstDayOffset = calendarNativeDate(year, month, 1).getDay();
+  const today = todayCalendarDate();
+  const todayValue = formatCalendarDate(today.year, today.month, today.day);
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = calendarNativeDate(year, month, index - firstDayOffset + 1);
+    const cellValue = formatCalendarDate(date.getFullYear(), date.getMonth() + 1, date.getDate());
+    return {
+      value: cellValue,
+      day: date.getDate(),
+      isCurrentMonth: date.getFullYear() === year && date.getMonth() + 1 === month,
+      isToday: cellValue === todayValue,
+    };
+  });
 }
 
 /** Converts a validated local calendar date into an inclusive epoch-millisecond search bound. */

@@ -142,21 +142,6 @@ export type BBox = {
   height: number;
 };
 
-export type OcrModelStatus = {
-  /** Resolved OCR model directory reported by the native validator. */
-  model_dir: string;
-  /** Whether required files and ONNX sessions passed validation. */
-  valid: boolean;
-  /** Required model assets that are absent. */
-  missing_files: string[];
-  /** Number of entries in the recognition dictionary. */
-  recognition_dict_len: number;
-  /** Whether the ONNX runtime could load all sessions. */
-  loadable: boolean;
-  /** Human-readable native validation detail. */
-  message: string;
-};
-
 export type OverlayTranslationPayload = {
   result: TranslationResult;
   region: Region;

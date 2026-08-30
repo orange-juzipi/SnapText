@@ -396,48 +396,6 @@ fn bundled_model_dir_uses_packaged_resource_dir_when_available() {
     );
 }
 
-#[test]
-fn validate_ocr_models_reports_missing_files() {
-    let state = AppState::new(
-        AppConfig::default(),
-        HistoryStore::in_memory().expect("history store"),
-    )
-    .expect("app state");
-
-    let status = validate_ocr_models_inner(&state).expect("model status");
-
-    assert!(!status.valid);
-    assert!(status.missing_files.contains(&"det.onnx".to_owned()));
-    assert!(status.missing_files.contains(&"cls.onnx".to_owned()));
-    assert!(status.missing_files.contains(&"rec.onnx".to_owned()));
-    assert!(status.missing_files.contains(&"rec_dict.txt".to_owned()));
-    assert_eq!(status.recognition_dict_len, 0);
-    assert!(!status.loadable);
-    assert!(status.message.contains("missing required files"));
-}
-
-#[test]
-fn validate_ocr_models_reports_unloadable_onnx_files() {
-    let tempdir = tempfile::tempdir().expect("tempdir");
-    std::fs::write(tempdir.path().join("det.onnx"), b"det").expect("det");
-    std::fs::write(tempdir.path().join("cls.onnx"), b"cls").expect("cls");
-    std::fs::write(tempdir.path().join("rec.onnx"), b"rec").expect("rec");
-    std::fs::write(tempdir.path().join("rec_dict.txt"), "a\n").expect("dict");
-
-    let mut config = AppConfig::default();
-    config.ocr.model_dir = ModelDir::Custom(tempdir.path().to_path_buf());
-    let state = AppState::new(config, HistoryStore::in_memory().expect("history store"))
-        .expect("app state");
-
-    let status = validate_ocr_models_inner(&state).expect("model status");
-
-    assert!(!status.valid);
-    assert!(status.missing_files.is_empty());
-    assert_eq!(status.recognition_dict_len, 1);
-    assert!(!status.loadable);
-    assert!(status.message.contains("ONNX sessions failed to load"));
-}
-
 #[tokio::test]
 async fn translate_image_base64_rejects_invalid_image_data() {
     let state = AppState::new(

@@ -855,7 +855,6 @@ def main() -> int:
         '"screenshot_region"',
         '"start_screenshot_overlay"',
         '"update_config"',
-        '"validate_ocr_models"',
         '"translate_image_base64"',
         '"translate_screenshot_base64"',
         '"translate_screenshot_region"',
@@ -875,7 +874,6 @@ def main() -> int:
     for expected in (
         "useConfigQuery",
         "useHistoryQuery",
-        "useValidateModelsMutation",
         "useUpdateConfigMutation",
         "useTranslateTextMutation",
         "useTranslateImageMutation",
