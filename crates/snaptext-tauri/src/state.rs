@@ -45,6 +45,9 @@ pub struct AppState {
     pub(crate) last_selection_hotkey_at: Mutex<Option<Instant>>,
     #[cfg(not(test))]
     pub(crate) result_window_pinned: AtomicBool,
+    /// Tracks whether the main window's Dock/taskbar entry is hidden while the app stays resident.
+    #[cfg(not(test))]
+    pub(crate) main_window_desktop_hidden: AtomicBool,
 }
 
 #[derive(Debug, Clone)]
@@ -110,6 +113,8 @@ impl AppState {
             last_selection_hotkey_at: Mutex::new(None),
             #[cfg(not(test))]
             result_window_pinned: AtomicBool::new(false),
+            #[cfg(not(test))]
+            main_window_desktop_hidden: AtomicBool::new(false),
         })
     }
 }

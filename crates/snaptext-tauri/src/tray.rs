@@ -1,7 +1,7 @@
 #[cfg(not(test))]
 use snaptext_core::{Error, Result};
 #[cfg(not(test))]
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 #[cfg(not(test))]
 use tauri::{
     menu::{Menu, MenuItemBuilder},
@@ -9,9 +9,7 @@ use tauri::{
 };
 
 #[cfg(not(test))]
-use crate::MAIN_WINDOW_LABEL;
-#[cfg(not(test))]
-use crate::window::show_main_window;
+use crate::window::{hide_main_window_to_tray, show_main_window};
 
 pub(crate) const TRAY_SHOW: &str = "show";
 pub(crate) const TRAY_HIDE: &str = "hide";
@@ -59,9 +57,7 @@ fn handle_tray_action(app: &AppHandle, action: Option<TrayAction>) {
             }
         }
         Some(TrayAction::Hide) => {
-            if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL)
-                && let Err(err) = window.hide()
-            {
+            if let Err(err) = hide_main_window_to_tray(app) {
                 tracing::warn!(error = %err, "failed to hide main window from tray");
             }
         }

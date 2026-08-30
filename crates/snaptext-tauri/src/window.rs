@@ -28,7 +28,6 @@ pub(crate) fn setup_main_window_close_behavior(app: &AppHandle) -> Result<()> {
     let window = app
         .get_webview_window(MAIN_WINDOW_LABEL)
         .ok_or_else(|| Error::Config("main window is not available".to_owned()))?;
-    let close_window = window.clone();
     let close_app = app.clone();
 
     window.on_window_event(move |event| {
@@ -38,9 +37,9 @@ pub(crate) fn setup_main_window_close_behavior(app: &AppHandle) -> Result<()> {
 
         match configured_close_behavior(&close_app) {
             CloseBehavior::Hide => {
-                // Keep the process and tray alive while removing the native window.
+                // Keep the process and tray alive while removing the native window and desktop entry.
                 api.prevent_close();
-                if let Err(err) = close_window.hide() {
+                if let Err(err) = hide_main_window_to_tray(&close_app) {
                     tracing::warn!(error = %err, "failed to hide main window on close");
                 }
             }
@@ -52,6 +51,29 @@ pub(crate) fn setup_main_window_close_behavior(app: &AppHandle) -> Result<()> {
         }
     });
 
+    Ok(())
+}
+
+/// Changes the main app's desktop presence without affecting its tray/status-bar icon.
+#[cfg(not(test))]
+fn set_main_window_desktop_presence(app: &AppHandle, visible: bool) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    // macOS does not support window-level taskbar hiding, so toggle the app-level Dock entry.
+    app.set_dock_visibility(visible)
+        .map_err(|err| Error::Config(err.to_string()))?;
+
+    #[cfg(not(target_os = "macos"))]
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        window
+            .set_skip_taskbar(!visible)
+            .map_err(|err| Error::Config(err.to_string()))?;
+    }
+
+    if let Some(state) = app.try_state::<crate::AppState>() {
+        state
+            .main_window_desktop_hidden
+            .store(!visible, Ordering::Release);
+    }
     Ok(())
 }
 
@@ -329,6 +351,13 @@ pub(crate) fn hide_main_window(app: &AppHandle) -> Result<()> {
     Ok(())
 }
 
+/// Hides the main window and removes its Dock/taskbar entry while keeping the tray process alive.
+#[cfg(not(test))]
+pub(crate) fn hide_main_window_to_tray(app: &AppHandle) -> Result<()> {
+    hide_main_window(app)?;
+    set_main_window_desktop_presence(app, false)
+}
+
 #[cfg(test)]
 pub(crate) fn hide_main_window(_app: &AppHandle) -> Result<()> {
     Ok(())
@@ -356,6 +385,14 @@ pub(crate) fn restore_main_window_if_needed(app: &AppHandle, should_restore: boo
 #[cfg(not(test))]
 pub(crate) fn show_main_window(app: &AppHandle) -> Result<()> {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        let desktop_entry_hidden = app
+            .try_state::<crate::AppState>()
+            .map(|state| state.main_window_desktop_hidden.load(Ordering::Acquire))
+            .unwrap_or(false);
+        if desktop_entry_hidden {
+            set_main_window_desktop_presence(app, true)?;
+        }
+
         #[cfg(target_os = "macos")]
         app.show().map_err(|err| Error::Config(err.to_string()))?;
 
