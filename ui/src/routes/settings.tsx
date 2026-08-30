@@ -872,6 +872,7 @@ function LanguageChoiceGroup({
   );
 }
 
+/** Renders the mutually exclusive system, light, and dark appearance choices. */
 function ThemeChoiceGroup({
   labels,
   onChange,
@@ -883,19 +884,13 @@ function ThemeChoiceGroup({
 }) {
   return (
     <div className="settings-theme-options" role="radiogroup" aria-label={labels.theme}>
-      <label className="settings-system-theme-row">
-        <Checkbox
-          checked={value === "system"}
-          onCheckedChange={(checked) => onChange(checked ? "system" : "light")}
-        />
-        <span className="settings-system-theme-copy">
-          <span>{labels.themeSystem}</span>
-          <span className="settings-system-theme-description">
-            {labels.themeSystemDescription}
-          </span>
-        </span>
-      </label>
       <div className="settings-choice-grid">
+        <SettingsChoiceCard
+          checked={value === "system"}
+          label={labels.themeSystem}
+          preview={<ThemePreview tone="system" />}
+          onClick={() => onChange("system")}
+        />
         <SettingsChoiceCard
           checked={value === "light"}
           label={labels.themeLight}
@@ -913,7 +908,8 @@ function ThemeChoiceGroup({
   );
 }
 
-function ThemePreview({ tone }: { tone: "light" | "dark" }) {
+/** Draws a compact visual sample for a system, light, or dark theme. */
+function ThemePreview({ tone }: { tone: "system" | "light" | "dark" }) {
   return (
     <span className={`settings-theme-preview settings-theme-preview-${tone}`}>
       <span />
@@ -923,6 +919,7 @@ function ThemePreview({ tone }: { tone: "light" | "dark" }) {
   );
 }
 
+/** Renders one accessible radio-style theme choice card. */
 function SettingsChoiceCard({
   checked,
   label,

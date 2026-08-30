@@ -1,22 +1,22 @@
 @import "tailwindcss";
 
 @theme {
-  --color-background: #eef1f6;
-  --color-foreground: #111827;
+  --color-background: #f1f5f4;
+  --color-foreground: #14272a;
   --color-card: #ffffff;
-  --color-card-foreground: #111827;
-  --color-control: #fbfcfe;
-  --color-primary: #2457d6;
+  --color-card-foreground: #14272a;
+  --color-control: #f8fbfa;
+  --color-primary: #0f7b70;
   --color-primary-foreground: #ffffff;
-  --color-secondary: #e9edf5;
-  --color-muted: #e5e9f1;
-  --color-muted-foreground: #5b6678;
-  --color-border: #d8dee9;
-  --color-input: #c2cad8;
-  --color-ring: rgba(36, 87, 214, 0.24);
-  --color-destructive: #c03535;
-  --shadow-xs: 0 1px 1px rgba(17, 24, 39, 0.06);
-  --shadow-panel: 0 18px 45px rgba(20, 31, 54, 0.09);
+  --color-secondary: #e4eeeb;
+  --color-muted: #eaf1ef;
+  --color-muted-foreground: #607477;
+  --color-border: #d1dfdc;
+  --color-input: #bccdca;
+  --color-ring: rgba(15, 123, 112, 0.24);
+  --color-destructive: #c44848;
+  --shadow-xs: 0 1px 2px rgba(20, 54, 56, 0.08);
+  --shadow-panel: 0 18px 42px rgba(20, 54, 56, 0.1);
 }
 
 :root {
@@ -30,42 +30,42 @@
   color: var(--color-foreground);
   background: var(--color-background);
   font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    sans-serif;
+    Inter, "SF Pro Text", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
 }
 
 :root[data-theme="dark"] {
-  --color-background: #10151f;
-  --color-foreground: #f5f7fb;
-  --color-card: #182131;
-  --color-card-foreground: #f5f7fb;
-  --color-control: #101827;
-  --color-primary: #6f94ff;
-  --color-primary-foreground: #ffffff;
-  --color-secondary: #111827;
-  --color-muted: #202a3a;
-  --color-muted-foreground: #b8c2d2;
-  --color-border: #2a3547;
-  --color-input: #3a4659;
-  --color-ring: rgba(111, 148, 255, 0.32);
-  --color-destructive: #f87171;
+  --color-background: #0e191b;
+  --color-foreground: #e8f2ef;
+  --color-card: #152628;
+  --color-card-foreground: #e8f2ef;
+  --color-control: #101f21;
+  --color-primary: #5dd4c5;
+  --color-primary-foreground: #082320;
+  --color-secondary: #1b3031;
+  --color-muted: #21393a;
+  --color-muted-foreground: #a9c0bb;
+  --color-border: #2d4848;
+  --color-input: #3e5a59;
+  --color-ring: rgba(93, 212, 197, 0.3);
+  --color-destructive: #ff8585;
 }
 
 :root[data-theme="light"] {
-  --color-background: #eef1f6;
-  --color-foreground: #111827;
+  --color-background: #f1f5f4;
+  --color-foreground: #14272a;
   --color-card: #ffffff;
-  --color-card-foreground: #111827;
-  --color-control: #fbfcfe;
-  --color-primary: #2457d6;
+  --color-card-foreground: #14272a;
+  --color-control: #f8fbfa;
+  --color-primary: #0f7b70;
   --color-primary-foreground: #ffffff;
-  --color-secondary: #e9edf5;
-  --color-muted: #e5e9f1;
-  --color-muted-foreground: #5b6678;
-  --color-border: #d8dee9;
-  --color-input: #c2cad8;
-  --color-ring: rgba(36, 87, 214, 0.24);
-  --color-destructive: #c03535;
+  --color-secondary: #e4eeeb;
+  --color-muted: #eaf1ef;
+  --color-muted-foreground: #607477;
+  --color-border: #d1dfdc;
+  --color-input: #bccdca;
+  --color-ring: rgba(15, 123, 112, 0.24);
+  --color-destructive: #c44848;
 }
 
 * {
@@ -324,37 +324,7 @@ textarea {
 }
 
 .settings-theme-options {
-  display: grid;
-  gap: 0.75rem;
-}
-
-.settings-system-theme-row {
-  display: inline-grid;
   min-width: 0;
-  cursor: pointer;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: start;
-  gap: 0.65rem;
-  color: var(--color-foreground);
-}
-
-.settings-system-theme-row button {
-  margin-top: 0.15rem;
-}
-
-.settings-system-theme-copy {
-  display: grid;
-  min-width: 0;
-  gap: 0.25rem;
-  font-size: 0.95rem;
-  font-weight: 750;
-  line-height: 1.35;
-}
-
-.settings-system-theme-description {
-  color: var(--color-muted-foreground);
-  font-size: 0.82rem;
-  font-weight: 500;
 }
 
 .settings-choice-card {
@@ -413,6 +383,24 @@ textarea {
   display: block;
   height: 0.9rem;
   border-radius: 999px;
+}
+
+.settings-choice-card:has(.settings-theme-preview-system) .settings-choice-preview {
+  background: linear-gradient(to right, #f1f3f7 0 50%, #10151f 50% 100%);
+}
+
+.settings-theme-preview-system span:nth-child(1) {
+  background: linear-gradient(to right, #e5e7eb 0 50%, #3f4654 50% 100%);
+}
+
+.settings-theme-preview-system span:nth-child(2) {
+  width: 72%;
+  background: linear-gradient(to right, #bfdbfe 0 50%, #2758bd 50% 100%);
+}
+
+.settings-theme-preview-system span:nth-child(3) {
+  width: 52%;
+  background: linear-gradient(to right, #2457d6 0 50%, #6f94ff 50% 100%);
 }
 
 .settings-theme-preview-light span:nth-child(1) {
