@@ -22,6 +22,9 @@ use crate::OVERLAY_WINDOW_LABEL;
 #[cfg(not(test))]
 use crate::RESULT_WINDOW_LABEL;
 
+#[cfg(all(not(test), target_os = "macos"))]
+const MACOS_MAIN_WINDOW_ACTIVATION_RETRIES_MS: &[u64] = &[180, 420, 820];
+
 /// Installs the main-window close policy using the live application configuration.
 #[cfg(not(test))]
 pub(crate) fn setup_main_window_close_behavior(app: &AppHandle) -> Result<()> {
@@ -58,9 +61,14 @@ pub(crate) fn setup_main_window_close_behavior(app: &AppHandle) -> Result<()> {
 #[cfg(not(test))]
 fn set_main_window_desktop_presence(app: &AppHandle, visible: bool) -> Result<()> {
     #[cfg(target_os = "macos")]
-    // macOS does not support window-level taskbar hiding, so toggle the app-level Dock entry.
-    app.set_dock_visibility(visible)
-        .map_err(|err| Error::Config(err.to_string()))?;
+    {
+        // macOS does not support window-level taskbar hiding, so toggle the app-level Dock entry.
+        app.set_dock_visibility(visible)
+            .map_err(|err| Error::Config(err.to_string()))?;
+        if visible {
+            restore_macos_window_hiding(app)?;
+        }
+    }
 
     #[cfg(not(target_os = "macos"))]
     if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
@@ -73,6 +81,23 @@ fn set_main_window_desktop_presence(app: &AppHandle, visible: bool) -> Result<()
         state
             .main_window_desktop_hidden
             .store(!visible, Ordering::Release);
+    }
+    Ok(())
+}
+
+/// Restores native Command-H support after Tauri temporarily removes the Dock entry.
+#[cfg(all(not(test), target_os = "macos"))]
+fn restore_macos_window_hiding(app: &AppHandle) -> Result<()> {
+    for window in app.webview_windows().into_values() {
+        window
+            .with_webview(|webview| {
+                // Tao sets canHide to false while converting the app to a UI element,
+                // but does not restore it when the Dock entry is shown again.
+                let native_window =
+                    unsafe { &*webview.ns_window().cast::<objc2_app_kit::NSWindow>() };
+                native_window.setCanHide(true);
+            })
+            .map_err(|err| Error::Config(err.to_string()))?;
     }
     Ok(())
 }
@@ -404,6 +429,12 @@ pub(crate) fn show_main_window(app: &AppHandle) -> Result<()> {
         window
             .show()
             .map_err(|err| Error::Config(err.to_string()))?;
+
+        #[cfg(target_os = "macos")]
+        if desktop_entry_hidden {
+            schedule_macos_main_window_activation(app);
+        }
+
         #[cfg(target_os = "windows")]
         {
             // Windows 对后台进程抢前台有额外限制；先置顶再聚焦能让热键结果稳定浮到最前。
@@ -419,6 +450,51 @@ pub(crate) fn show_main_window(app: &AppHandle) -> Result<()> {
 #[cfg(test)]
 pub(crate) fn show_main_window(_app: &AppHandle) -> Result<()> {
     Ok(())
+}
+
+/// Re-activates the main window after macOS completes its asynchronous Dock transition.
+#[cfg(all(not(test), target_os = "macos"))]
+fn schedule_macos_main_window_activation(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        for delay_ms in MACOS_MAIN_WINDOW_ACTIVATION_RETRIES_MS {
+            tokio::time::sleep(std::time::Duration::from_millis(*delay_ms)).await;
+            let Some(state) = app.try_state::<crate::AppState>() else {
+                return;
+            };
+            if state.main_window_desktop_hidden.load(Ordering::Acquire) {
+                return;
+            }
+            let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) else {
+                return;
+            };
+            // Stop retrying if the user hid the app again while Dock state settled.
+            if !window.is_visible().ok().unwrap_or(false) {
+                return;
+            }
+            // The initial show may have completed while the Dock transition was settling.
+            if window.is_focused().ok().unwrap_or(false) {
+                return;
+            }
+
+            if let Err(err) = app.show() {
+                tracing::warn!(error = %err, "failed to unhide macOS app after Dock transition");
+                continue;
+            }
+            if let Err(err) = restore_macos_window_hiding(&app) {
+                tracing::warn!(error = %err, "failed to restore macOS Command-H behavior");
+            }
+            if let Err(err) = window.show() {
+                tracing::warn!(error = %err, "failed to show main window after macOS Dock transition");
+                continue;
+            }
+            if let Err(err) = window.set_focus() {
+                tracing::warn!(error = %err, "failed to focus main window after macOS Dock transition");
+            } else if window.is_focused().ok().unwrap_or(false) {
+                return;
+            }
+        }
+    });
 }
 
 #[cfg(all(not(test), target_os = "windows"))]
