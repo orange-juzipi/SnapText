@@ -68,3 +68,4 @@ goal
 .env.*
 !.env.example
 *.log
+.playwright-cli
