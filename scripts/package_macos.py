@@ -41,8 +41,12 @@ MACOS_SIGNING_ENV = (
     "APPLE_TEAM_ID",
     "TAURI_SIGNING_PRIVATE_KEY",
 )
-UNSIGNED_LOCAL_CONFIG = '{"bundle":{"createUpdaterArtifacts":false}}'
 AD_HOC_ARCHIVE = ROOT / "dist" / "macos" / "SnapText-macos-ad-hoc-signed.app.zip"
+
+
+def release_version_override(default: str) -> str:
+    """Read the tag version injected by CI, falling back to package metadata."""
+    return os.environ.get("SNAPTEXT_RELEASE_VERSION", "").strip() or default
 
 
 def run(cmd: list[str], cwd: Path = ROOT) -> None:
@@ -56,7 +60,9 @@ def run(cmd: list[str], cwd: Path = ROOT) -> None:
 def read_tauri_config() -> dict:
     """Load the product name and version from the canonical Tauri config."""
     with TAURI_CONF.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+        config = json.load(handle)
+    config["version"] = release_version_override(config.get("version", "0.1.0"))
+    return config
 
 
 def verify_macos_artifacts(product_name: str, version: str, require_dmg: bool) -> None:
@@ -144,10 +150,18 @@ def packaging_commands(
 
     app_build = [tauri, "build", "--bundles", "app"]
     dmg_build = [tauri, "build", "--bundles", "dmg"]
+    release_version = release_version_override("")
     if no_sign:
         # Unsigned local builds should not require the updater private key.
-        app_build.extend(["--config", UNSIGNED_LOCAL_CONFIG, "--no-sign"])
-        dmg_build.extend(["--config", UNSIGNED_LOCAL_CONFIG, "--no-sign"])
+        config = {"bundle": {"createUpdaterArtifacts": False}}
+        if release_version:
+            config["version"] = release_version
+        app_build.extend(["--config", json.dumps(config, separators=(",", ":")), "--no-sign"])
+        dmg_build.extend(["--config", json.dumps(config, separators=(",", ":")), "--no-sign"])
+    elif release_version:
+        config = json.dumps({"version": release_version}, separators=(",", ":"))
+        app_build.extend(["--config", config])
+        dmg_build.extend(["--config", config])
 
     commands = [
         model_check,

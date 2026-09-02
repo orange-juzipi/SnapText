@@ -129,6 +129,57 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Sync release version from tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release tag version: $GITHUB_REF_NAME"
+            exit 1
+          fi
+          python - "$version" <<'PY'
+          import json
+          import re
+          import sys
+          from pathlib import Path
+
+          version = sys.argv[1]
+          root = Path.cwd()
+
+          # Keep the generated binary metadata aligned with the release tag.
+          for relative in ("crates/snaptext-tauri/tauri.conf.json", "ui/package.json"):
+              path = root / relative
+              payload = json.loads(path.read_text(encoding="utf-8"))
+              payload["version"] = version
+              path.write_text(
+                  json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+                  encoding="utf-8",
+              )
+
+          for relative in ("crates/snaptext-core/Cargo.toml", "crates/snaptext-tauri/Cargo.toml"):
+              path = root / relative
+              text = path.read_text(encoding="utf-8")
+              package = re.compile(r'''(?ms)(^\[package\].*?^version\s*=\s*")[^"]+(")''')
+              text = package.sub(rf"\g<1>{version}\g<2>", text, count=1)
+              if relative.endswith("snaptext-tauri/Cargo.toml"):
+                  dependency = re.compile(
+                      r'(snaptext-core\s*=\s*\{\s*path\s*=\s*"\.\./snaptext-core",\s*version\s*=\s*")[^"]+(\")'
+                  )
+                  text = dependency.sub(rf"\g<1>{version}\g<2>", text, count=1)
+              path.write_text(text, encoding="utf-8")
+
+          lock_path = root / "Cargo.lock"
+          lock = lock_path.read_text(encoding="utf-8")
+          for package_name in ("snaptext-core", "snaptext-tauri"):
+              package = re.compile(
+                  rf'(?ms)(^\[\[package\]\]\s*name\s*=\s*"{re.escape(package_name)}"\s*version\s*=\s*")[^"]+(\")'
+              )
+              lock = package.sub(rf"\g<1>{version}\g<2>", lock, count=1)
+          lock_path.write_text(lock, encoding="utf-8")
+          PY
+          echo "SNAPTEXT_RELEASE_VERSION=$version" >> "$GITHUB_ENV"
+
       - name: Add python3 shim on Windows
         if: runner.os == 'Windows'
         shell: bash
@@ -281,7 +332,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          gh release create "${GITHUB_REF_NAME}" release-assets/* \
-            --title "${GITHUB_REF_NAME}" \
-            --notes-file CHANGES.md \
-            --latest
+          tag="${GITHUB_REF_NAME}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            # A tag workflow may be rerun after correcting packaging metadata.
+            # Remove only release-owned assets so a stale installer filename
+            # cannot remain alongside the corrected artifact.
+            while IFS= read -r asset; do
+              case "$asset" in
+                SnapText_*|SnapText-*.zip|CHANGES.md|checksums.txt)
+                  gh release delete-asset "$tag" "$asset" --yes
+                  ;;
+              esac
+            done < <(gh release view "$tag" --json assets --jq '.assets[].name')
+            gh release upload "$tag" release-assets/*
+            gh release edit "$tag" \
+              --title "$tag" \
+              --notes-file CHANGES.md \
+              --latest
+          else
+            gh release create "$tag" release-assets/* \
+              --title "$tag" \
+              --notes-file CHANGES.md \
+              --latest
+          fi

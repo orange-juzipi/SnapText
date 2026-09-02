@@ -3,18 +3,26 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import tempfile
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+FIXTURE_VERSION = "0.1.0"
 
 
 def run_bundles(*args: str) -> subprocess.CompletedProcess[str]:
+    """Run the verifier against the fixture version independent of repo metadata."""
+    child_env = os.environ.copy()
+    # The fixture names intentionally use an older version to exercise exact
+    # filename matching; pass it explicitly instead of relying on the checkout.
+    child_env["SNAPTEXT_RELEASE_VERSION"] = FIXTURE_VERSION
     return subprocess.run(
         ["python3", "scripts/verify_desktop_bundles.py", *args],
         cwd=ROOT,
+        env=child_env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

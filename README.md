@@ -196,7 +196,7 @@ python3 scripts/verify_release_signing.py .release/release-signing-record.json
 python3 scripts/release_gate.py --release-commit "$(git rev-parse HEAD)"
 ```
 
-`--release-commit` 必须等于当前 checkout 的 `git rev-parse HEAD`。`--allow-dirty-worktree` 只用于本地进度汇总；正式发布默认要求工作区干净。确认门禁通过后，维护者可以使用 `./release.sh v0.1.0` 创建并推送版本 tag；该脚本会向 `origin` 推送，请先确认远端和版本号。
+`--release-commit` 必须等于当前 checkout 的 `git rev-parse HEAD`。`--allow-dirty-worktree` 只用于本地进度汇总；正式发布默认要求工作区干净。发布改动提交并推送到 `main` 后，直接运行 `./release.sh v0.1.3` 即可创建并推送版本 tag；GitHub Actions 会在 tag 构建时自动把版本注入 Tauri、Cargo 和 UI 的打包流程，无需额外运行版本脚本。包含新版 workflow 的 tag 若需重跑，流程会先替换旧的 SnapText 安装包资产。已经创建的旧 tag 若不包含这套修复，建议发布新的修正版 tag，避免修改不可变的历史 tag。
 
 ## 运行时边界
 

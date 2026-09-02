@@ -78,13 +78,13 @@ def main() -> int:
     assert_contains(macos_skip.stdout, "cargo-tauri build --bundles app")
     assert_not_contains(macos_skip.stdout, "cargo-tauri build --bundles app --no-sign")
     assert_not_contains(macos_skip.stdout, "cargo-tauri build --bundles dmg")
-    assert_contains(macos_skip.stdout, "verify_macos_artifacts SnapText 0.1.0 require_dmg=False")
+    assert_contains(macos_skip.stdout, "verify_macos_artifacts SnapText 0.1.2 require_dmg=False")
 
     macos_full = run_script("package_macos.py")
     assert_success(macos_full)
     assert_contains(macos_full.stdout, "cargo-tauri build --bundles dmg")
     assert_not_contains(macos_full.stdout, "cargo-tauri build --bundles dmg --no-sign")
-    assert_contains(macos_full.stdout, "verify_macos_artifacts SnapText 0.1.0 require_dmg=True")
+    assert_contains(macos_full.stdout, "verify_macos_artifacts SnapText 0.1.2 require_dmg=True")
 
     macos_unsigned = run_script("package_macos.py", "--skip-dmg", "--no-sign")
     assert_success(macos_unsigned)
@@ -114,7 +114,35 @@ def main() -> int:
         macos_release_models.stdout,
         "python3 scripts/verify_ocr_models.py models --require-sha256",
     )
-    assert_contains(macos_release_models.stdout, "verify_macos_artifacts SnapText 0.1.0 require_dmg=False")
+    assert_contains(macos_release_models.stdout, "verify_macos_artifacts SnapText 0.1.2 require_dmg=False")
+
+    # Tag builds must override stale checkout metadata so Tauri installer names
+    # use the release tag (for example, v0.1.2 -> SnapText_0.1.2_x64-setup.exe).
+    tagged_windows = run_script(
+        "package_desktop.py",
+        "--bundles",
+        "nsis",
+        "--no-sign",
+        env={"SNAPTEXT_RELEASE_VERSION": "0.1.2"},
+    )
+    assert_success(tagged_windows)
+    assert_contains(
+        tagged_windows.stdout,
+        'cargo-tauri build --bundles nsis --config {"version":"0.1.2","bundle":{"createUpdaterArtifacts":false}} --no-sign',
+    )
+
+    tagged_macos = run_script(
+        "package_macos.py",
+        "--skip-dmg",
+        "--no-sign",
+        env={"SNAPTEXT_RELEASE_VERSION": "0.1.2"},
+    )
+    assert_success(tagged_macos)
+    assert_contains(tagged_macos.stdout, "verify_macos_artifacts SnapText 0.1.2 require_dmg=False")
+    assert_contains(
+        tagged_macos.stdout,
+        'cargo-tauri build --bundles app --config {"bundle":{"createUpdaterArtifacts":false},"version":"0.1.2"} --no-sign',
+    )
 
     print("Packaging command self-test passed.")
     return 0

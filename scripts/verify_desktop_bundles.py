@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import platform
 import sys
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[1]
 TAURI_CONF = ROOT / "crates" / "snaptext-tauri" / "tauri.conf.json"
@@ -21,9 +21,17 @@ RELEASE_DIR = ROOT / "target" / "release"
 BUNDLE_DIR = RELEASE_DIR / "bundle"
 
 
+def release_version_override(default: str) -> str:
+    """Read the tag version injected by CI, falling back to package metadata."""
+    return os.environ.get("SNAPTEXT_RELEASE_VERSION", "").strip() or default
+
+
 def read_tauri_config() -> dict:
+    """Load Tauri metadata and apply the CI tag version when present."""
     with TAURI_CONF.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+        config = json.load(handle)
+    config["version"] = release_version_override(config.get("version", "0.1.0"))
+    return config
 
 
 def display_path(path: Path) -> str:

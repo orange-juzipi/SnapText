@@ -619,7 +619,7 @@ def main() -> int:
         "release gate --release-commit must be a 7-40 character git SHA",
         "release gate --release-commit must match current git HEAD",
         "release gate requires a clean git worktree",
-        "release gate --release-version must match tauri.conf.json version 0.1.0",
+        "release gate --release-version must match tauri.conf.json version",
         "static_preflight",
         "real_ocr_models",
         "release_manifest",
@@ -998,6 +998,7 @@ def main() -> int:
     )
 
     ci_workflow = read_text(ROOT / ".github/workflows/ci.yml")
+    package_workflow = read_text(ROOT / ".github/workflows/package.yml")
     for os_name in ("ubuntu-latest", "macos-15", "windows-latest"):
         check(os_name in ci_workflow, f"CI workflow is missing {os_name}")
     check(
@@ -1011,6 +1012,16 @@ def main() -> int:
     check(
         "Build React frontend" in ci_workflow and "python scripts/build_frontend.py" in ci_workflow,
         "CI workflow is missing the React frontend build step",
+    )
+    check(
+        "Sync release version from tag" in package_workflow
+        and "SNAPTEXT_RELEASE_VERSION=$version" in package_workflow,
+        "Package workflow must inject the tag version into release builds",
+    )
+    check(
+        "gh release upload" in package_workflow
+        and "gh release delete-asset" in package_workflow,
+        "Package workflow must support replacing stale assets on reruns",
     )
     for script_name in (
         "scripts/build_frontend.py",

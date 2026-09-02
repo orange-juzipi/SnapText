@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -79,6 +80,8 @@ def run_with_temporary_dirty_worktree(*args: str) -> subprocess.CompletedProcess
 
 def main() -> int:
     head = current_git_head()
+    with (ROOT / "crates/snaptext-tauri/tauri.conf.json").open(encoding="utf-8") as handle:
+        configured_version = json.load(handle)["version"]
     default = run_gate()
     assert_success(default)
     output = default.stdout
@@ -100,17 +103,17 @@ def main() -> int:
         "release_manifest (external): python3 scripts/generate_release_manifest.py "
         "--manifest dist/release-manifest.json --checksums dist/SHA256SUMS --require-platforms all "
         "--require-artifact-kinds all "
-        f"--expected-version 0.1.0 --expected-commit {head}",
+        f"--expected-version {configured_version} --expected-commit {head}",
     )
     assert_contains(
         output,
         "desktop_qa (external): python3 scripts/verify_desktop_qa.py .release/desktop-qa-record.json "
-        f"--expected-version 0.1.0 --expected-commit {head}",
+        f"--expected-version {configured_version} --expected-commit {head}",
     )
     assert_contains(
         output,
         "release_signing (external): python3 scripts/verify_release_signing.py "
-        f".release/release-signing-record.json --expected-version 0.1.0 --expected-commit {head}",
+        f".release/release-signing-record.json --expected-version {configured_version} --expected-commit {head}",
     )
 
     skip_static = run_gate("--skip-static")
@@ -262,7 +265,7 @@ def main() -> int:
     )
     assert_failure_contains(
         mismatched_app_version,
-        "release gate --release-version must match tauri.conf.json version 0.1.0",
+        f"release gate --release-version must match tauri.conf.json version {configured_version}",
     )
 
     print("Release gate self-test passed.")

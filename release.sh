@@ -63,6 +63,12 @@ if [[ -n "$(git status --porcelain)" ]]; then
   exit 1
 fi
 
+# Tauri uses its own config version for installer filenames. The tag-triggered
+# Package Desktop workflow synchronizes that version in its CI checkout, so a
+# release only needs this single command after the release changes are pushed.
+release_version="${version#v}"
+echo "CI 将使用版本 $release_version 构建并发布桌面安装包"
+
 if git rev-parse -q --verify "refs/tags/$version" >/dev/null; then
   echo "错误: 本地 tag 已存在: $version"
   exit 1

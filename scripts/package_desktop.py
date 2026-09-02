@@ -9,6 +9,7 @@ produced on the current operating system.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -22,6 +23,25 @@ ROOT = Path(__file__).resolve().parents[1]
 TAURI_DIR = ROOT / "crates" / "snaptext-tauri"
 LOCAL_CARGO_TAURI = ROOT / ".tools" / "bin" / "cargo-tauri"
 UNSIGNED_LOCAL_CONFIG = '{"bundle":{"createUpdaterArtifacts":false}}'
+
+
+def release_version_override(default: str) -> str:
+    """Read the tag version injected by CI, falling back to package metadata."""
+    return os.environ.get("SNAPTEXT_RELEASE_VERSION", "").strip() or default
+
+
+def tauri_config_override(version: str | None, no_sign: bool) -> str | None:
+    """Build the inline Tauri config used for CI version and signing overrides."""
+    config: dict[str, object] = {}
+    if version:
+        config["version"] = version
+    if no_sign:
+        config["bundle"] = {"createUpdaterArtifacts": False}
+    if not config:
+        return None
+    if not version and no_sign:
+        return UNSIGNED_LOCAL_CONFIG
+    return json.dumps(config, separators=(",", ":"))
 
 
 def env_flag(name: str) -> bool:
@@ -95,25 +115,35 @@ def packaging_commands(args: argparse.Namespace, tauri: str, current_platform: s
         model_check,
         ["python3", "scripts/build_frontend.py"],
     ]
+    release_version = release_version_override("")
     if args.skip_installers:
         commands.append([tauri, "build", "--no-bundle"])
         # A macOS release binary is not directly user-installable; keep the .app
         # bundle in the no-installer path and only skip disk image creation.
         if current_platform == "macos":
             app_cmd = [tauri, "build", "--bundles", "app"]
-            if args.no_sign:
+            config_override = tauri_config_override(release_version or None, args.no_sign)
+            if config_override:
                 # Local unsigned builds should not require the updater private key.
-                app_cmd.extend(["--config", UNSIGNED_LOCAL_CONFIG, "--no-sign"])
+                app_cmd.extend(["--config", config_override])
+            if args.no_sign:
+                app_cmd.append("--no-sign")
             commands.append(app_cmd)
     elif args.bundles:
         build_cmd = [tauri, "build", "--bundles", args.bundles]
+        config_override = tauri_config_override(release_version or None, args.no_sign)
+        if config_override:
+            build_cmd.extend(["--config", config_override])
         if args.no_sign:
-            build_cmd.extend(["--config", UNSIGNED_LOCAL_CONFIG, "--no-sign"])
+            build_cmd.append("--no-sign")
         commands.append(build_cmd)
     else:
         build_cmd = [tauri, "build"]
+        config_override = tauri_config_override(release_version or None, args.no_sign)
+        if config_override:
+            build_cmd.extend(["--config", config_override])
         if args.no_sign:
-            build_cmd.extend(["--config", UNSIGNED_LOCAL_CONFIG, "--no-sign"])
+            build_cmd.append("--no-sign")
         commands.append(build_cmd)
     return commands
 

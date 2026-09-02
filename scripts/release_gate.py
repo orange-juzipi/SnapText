@@ -195,6 +195,18 @@ def current_git_head() -> str:
     return completed.stdout.strip()
 
 
+def configured_release_version() -> str:
+    """Read the canonical application version for release-gate defaults."""
+    try:
+        with TAURI_CONF.open("r", encoding="utf-8") as handle:
+            version = json.load(handle).get("version")
+    except (OSError, json.JSONDecodeError) as error:
+        raise SystemExit(f"release gate could not read tauri.conf.json: {error}") from error
+    if not isinstance(version, str) or SEMVER_PATTERN.fullmatch(version) is None:
+        raise SystemExit("release gate tauri.conf.json version must use semantic version format")
+    return version
+
+
 def ensure_clean_worktree() -> None:
     completed = subprocess.run(
         ["git", "status", "--porcelain"],
@@ -292,7 +304,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--release-version",
-        default="0.1.0",
+        default=None,
         help="Expected release version shared by manifest, QA, and signing records.",
     )
     parser.add_argument(
@@ -322,6 +334,10 @@ def fill_dry_run_release_commit(args: argparse.Namespace) -> None:
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
+    if args.release_version is None:
+        # Keep the documented command concise while ensuring a bumped manifest
+        # version is used consistently by every release evidence gate.
+        args.release_version = configured_release_version()
     fill_dry_run_release_commit(args)
     validate_release_identity(args)
     gates = release_gates(args)
