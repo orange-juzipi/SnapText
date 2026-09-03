@@ -14,6 +14,7 @@ import type {
 } from "@/lib/types";
 
 export const events = {
+  overlayScreenshot: "snaptext://overlay-screenshot",
   overlayTranslation: "snaptext://overlay-translation",
   overlayOcrStarted: "snaptext://overlay-ocr-started",
   overlayOcrFailed: "snaptext://overlay-ocr-failed",

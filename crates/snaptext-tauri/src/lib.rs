@@ -523,6 +523,8 @@ async fn start_webview_screenshot_overlay_inner(
     }
 
     show_overlay_window(app)?;
+    // The overlay WebView is reused after being hidden, so explicitly replace its previous image.
+    emit_overlay_screenshot(app, &payload);
     Ok(payload)
 }
 

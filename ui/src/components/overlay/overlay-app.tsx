@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Languages, ScanText } from "lucide-react";
 import { closeOverlay, events, getOverlayScreenshot, ocrOverlaySelection } from "@/lib/api";
 import { labelsForLanguage } from "@/lib/labels";
-import { tauriEmit } from "@/lib/tauri";
+import { tauriEmit, tauriListen } from "@/lib/tauri";
 import type { Region, ScreenshotMeta, ScreenshotPayload } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 
@@ -27,16 +27,46 @@ export function OverlayApp() {
   const [translateAfterOcr, setTranslateAfterOcr] = useState(true);
 
   useEffect(() => {
-    getOverlayScreenshot()
-      .then((payload) => {
-        if (payload) {
-          setScreenshot(payload);
-          setStatus(labels.overlayInstruction);
-        } else {
-          setStatus(labels.noOverlayScreenshot);
+    let disposed = false;
+    let eventVersion = 0;
+    let unlisten: (() => void) | undefined;
+
+    /** Applies the latest native screenshot and clears state left by the previous overlay session. */
+    function applyScreenshot(payload: ScreenshotPayload | null) {
+      if (disposed) return;
+      setScreenshot(payload);
+      setDrag(null);
+      setSelection(null);
+      setStatus(payload ? labels.overlayInstruction : labels.noOverlayScreenshot);
+    }
+
+    /** Registers refresh delivery before reading state so a newly emitted screenshot cannot be missed. */
+    async function initializeScreenshotSync() {
+      try {
+        const cleanup = await tauriListen<ScreenshotPayload>(events.overlayScreenshot, (event) => {
+          eventVersion += 1;
+          applyScreenshot(event.payload);
+        });
+        if (disposed) {
+          cleanup();
+          return;
         }
-      })
-      .catch((error) => setStatus(error instanceof Error ? error.message : String(error)));
+        unlisten = cleanup;
+
+        const versionBeforeLoad = eventVersion;
+        const payload = await getOverlayScreenshot();
+        // A refresh event received during the command already contains the newer screenshot.
+        if (eventVersion === versionBeforeLoad) applyScreenshot(payload);
+      } catch (error) {
+        if (!disposed) setStatus(error instanceof Error ? error.message : String(error));
+      }
+    }
+
+    void initializeScreenshotSync();
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, []);
 
   useEffect(() => {

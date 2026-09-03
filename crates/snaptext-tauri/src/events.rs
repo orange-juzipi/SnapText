@@ -4,6 +4,8 @@ use snaptext_core::{
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::{HistorySource, MAIN_WINDOW_LABEL, OcrTextResult};
+#[cfg(not(target_os = "macos"))]
+use crate::{OVERLAY_WINDOW_LABEL, ScreenshotPayload};
 
 const RESULT_TRANSLATION_EVENT: &str = "snaptext://result-translation";
 const RESULT_SELECTION_EVENT: &str = "snaptext://result-selection";
@@ -14,6 +16,8 @@ const SELECTION_TEXT_EVENT: &str = "snaptext://selection-text";
 const RESULT_SELECTION_FAILED_EVENT: &str = "snaptext://result-selection-failed";
 const RESULT_WINDOW_STATE_EVENT: &str = "snaptext://result-window-state";
 const OVERLAY_TRANSLATION_EVENT: &str = "snaptext://overlay-translation";
+#[cfg(not(target_os = "macos"))]
+const OVERLAY_SCREENSHOT_EVENT: &str = "snaptext://overlay-screenshot";
 #[cfg(target_os = "macos")]
 const OVERLAY_OCR_STARTED_EVENT: &str = "snaptext://overlay-ocr-started";
 #[cfg(target_os = "macos")]
@@ -100,6 +104,18 @@ pub struct VoiceInputPartialPayload {
 
 pub(crate) fn overlay_translation_event() -> &'static str {
     OVERLAY_TRANSLATION_EVENT
+}
+
+/// Replaces the screenshot shown by a reused Windows/Linux overlay window.
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn emit_overlay_screenshot(app: &AppHandle, payload: &ScreenshotPayload) {
+    if let Err(err) = app.emit_to(
+        OVERLAY_WINDOW_LABEL,
+        OVERLAY_SCREENSHOT_EVENT,
+        payload.clone(),
+    ) {
+        tracing::warn!(error = %err, "failed to refresh overlay screenshot");
+    }
 }
 
 pub(crate) fn emit_result_window_state(app: &AppHandle, pinned: bool) -> Result<()> {
