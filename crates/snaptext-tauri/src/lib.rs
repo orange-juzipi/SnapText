@@ -29,6 +29,8 @@ mod state;
 mod tray;
 mod voice_input;
 mod window;
+#[cfg(not(target_os = "macos"))]
+use events::emit_overlay_screenshot;
 use events::{
     OverlayTranslationPayload, PinnedResultPayload, SelectionTextPayload, emit_overlay_ocr,
     emit_result_translation, emit_result_window_state, emit_selection_record,
