@@ -8,6 +8,8 @@ use snaptext_core::{Error, Result, config::AppConfig, hotkey::HotkeyAction};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
+#[cfg(target_os = "windows")]
+use crate::main_window_is_visible;
 use crate::{
     AppState, current_selection_text_inner, emit_selection_failure, emit_selection_text,
     show_main_window, start_screenshot_overlay_from_hotkey_inner,
@@ -88,10 +90,7 @@ pub(crate) fn handle_global_hotkey(app: AppHandle, action: HotkeyAction) {
                         show_main_window(&app).map(|_| emit_selection_text(&app, &payload))
                     }
                     Err(err) => {
-                        if let Err(show_err) = show_main_window(&app) {
-                            tracing::warn!(error = %show_err, "failed to show main window after selection hotkey failure");
-                        }
-                        emit_selection_failure(&app, &err);
+                        report_selection_failure(&app, &err);
                         Err(err)
                     }
                 };
@@ -107,6 +106,26 @@ pub(crate) fn handle_global_hotkey(app: AppHandle, action: HotkeyAction) {
             tracing::warn!(error = %err, "global hotkey action failed");
         }
     });
+}
+
+/// Reports a selection failure without pulling a hidden Windows window over the selected app.
+fn report_selection_failure(app: &AppHandle, error: &Error) {
+    #[cfg(target_os = "windows")]
+    {
+        if main_window_is_visible(app) {
+            emit_selection_failure(app, error);
+        } else {
+            tracing::warn!(error = %error, "selection hotkey failed while the main window was hidden");
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Err(show_err) = show_main_window(app) {
+            tracing::warn!(error = %show_err, "failed to show main window after selection hotkey failure");
+        }
+        emit_selection_failure(app, error);
+    }
 }
 
 pub(crate) fn refresh_global_hotkeys(app: &AppHandle, config: &AppConfig) -> Result<()> {

@@ -19,6 +19,7 @@ use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_global_shortcut::ShortcutState;
 
 mod events;
+mod hotkey_policy;
 #[cfg(not(test))]
 mod hotkeys;
 mod model;
@@ -136,10 +137,6 @@ pub fn run_tauri(config: AppConfig, history: HistoryStore) -> Result<()> {
                 .with_shortcuts(hotkeys.iter().map(|(_, shortcut)| shortcut.as_str()))
                 .map_err(|err| Error::Config(err.to_string()))?
                 .with_handler(move |app, shortcut, event| {
-                    if event.state != ShortcutState::Pressed {
-                        return;
-                    }
-
                     let action = app
                         .try_state::<AppState>()
                         .and_then(|state| hotkey_action_for_event_id(state.inner(), event.id));
@@ -151,6 +148,15 @@ pub fn run_tauri(config: AppConfig, history: HistoryStore) -> Result<()> {
                         );
                         return;
                     };
+
+                    let shortcut_pressed = event.state == ShortcutState::Pressed;
+                    if !hotkey_policy::should_dispatch_hotkey(
+                        action,
+                        shortcut_pressed,
+                        cfg!(target_os = "windows"),
+                    ) {
+                        return;
+                    }
 
                     handle_global_hotkey(app.clone(), action);
                 })

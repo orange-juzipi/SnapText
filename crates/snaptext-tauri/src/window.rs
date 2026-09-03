@@ -503,13 +503,33 @@ fn pulse_main_window_to_front(app: &AppHandle, window: &tauri::WebviewWindow) ->
         .set_always_on_top(true)
         .map_err(|err| Error::Config(err.to_string()))?;
 
+    let generation = app.try_state::<crate::AppState>().map(|state| {
+        state
+            .main_window_foreground_generation
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1)
+    });
+
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+        let Some(expected) = generation else {
+            return;
+        };
         let Some(state) = app.try_state::<crate::AppState>() else {
             return;
         };
-        if state.inner().result_window_pinned.load(Ordering::Acquire) {
+        // Ignore an obsolete timer when another foreground request refreshed the pulse.
+        if state
+            .main_window_foreground_generation
+            .load(Ordering::Acquire)
+            != expected
+        {
+            return;
+        }
+        // Keep the existing pinned-result behavior: a pinned result window owns the
+        // topmost state until it is explicitly unpinned.
+        if state.result_window_pinned.load(Ordering::Acquire) {
             return;
         }
         let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) else {

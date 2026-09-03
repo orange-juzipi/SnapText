@@ -2,6 +2,8 @@
 use std::collections::HashMap;
 #[cfg(not(test))]
 use std::sync::atomic::AtomicBool;
+#[cfg(all(not(test), target_os = "windows"))]
+use std::sync::atomic::AtomicU64;
 #[cfg(not(test))]
 use std::time::Instant;
 use std::{
@@ -48,6 +50,9 @@ pub struct AppState {
     /// Tracks whether the main window's Dock/taskbar entry is hidden while the app stays resident.
     #[cfg(not(test))]
     pub(crate) main_window_desktop_hidden: AtomicBool,
+    /// Identifies the latest Windows foreground pulse so an older timer cannot clear a newer one.
+    #[cfg(all(not(test), target_os = "windows"))]
+    pub(crate) main_window_foreground_generation: AtomicU64,
 }
 
 #[derive(Debug, Clone)]
@@ -115,6 +120,8 @@ impl AppState {
             result_window_pinned: AtomicBool::new(false),
             #[cfg(not(test))]
             main_window_desktop_hidden: AtomicBool::new(false),
+            #[cfg(all(not(test), target_os = "windows"))]
+            main_window_foreground_generation: AtomicU64::new(0),
         })
     }
 }
