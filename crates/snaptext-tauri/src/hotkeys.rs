@@ -31,17 +31,20 @@ pub(crate) fn configured_hotkeys(config: &AppConfig) -> Vec<(HotkeyAction, Strin
 }
 
 pub(crate) fn configured_hotkey_routes(config: &AppConfig) -> Result<HashMap<u32, HotkeyAction>> {
-    configured_hotkeys(config)
-        .into_iter()
-        .map(|(action, shortcut)| {
-            // Route by the plugin's stable event id. This avoids comparing user-facing
-            // accelerator text with the plugin's canonical display string.
-            let shortcut = shortcut
-                .parse::<Shortcut>()
-                .map_err(|err| Error::Config(err.to_string()))?;
-            Ok((shortcut.id(), action))
-        })
-        .collect()
+    let mut routes = HashMap::new();
+    for (action, shortcut) in configured_hotkeys(config) {
+        // Route by the plugin's stable event id. This avoids comparing user-facing
+        // accelerator text with the plugin's canonical display string.
+        let shortcut = shortcut
+            .parse::<Shortcut>()
+            .map_err(|err| Error::Config(err.to_string()))?;
+        if routes.insert(shortcut.id(), action).is_some() {
+            return Err(Error::Config(
+                "screenshot and selection hotkeys must be different".to_owned(),
+            ));
+        }
+    }
+    Ok(routes)
 }
 
 pub(crate) fn hotkey_action_for_event_id(state: &AppState, id: u32) -> Option<HotkeyAction> {
@@ -128,21 +131,97 @@ fn report_selection_failure(app: &AppHandle, error: &Error) {
     }
 }
 
-pub(crate) fn refresh_global_hotkeys(app: &AppHandle, config: &AppConfig) -> Result<()> {
+/// Replaces the process-wide shortcuts and restores the previous set if any new
+/// registration fails, so a single occupied shortcut cannot disable the rest.
+pub(crate) fn refresh_global_hotkeys(
+    app: &AppHandle,
+    config: &AppConfig,
+    previous_config: Option<&AppConfig>,
+) -> Result<()> {
     let routes = configured_hotkey_routes(config)?;
+    let previous_config = previous_config.cloned().or_else(|| {
+        app.state::<AppState>()
+            .config
+            .read()
+            .ok()
+            .map(|config| config.clone())
+    });
     let manager = app.global_shortcut();
     manager
         .unregister_all()
         .map_err(|err| Error::Config(err.to_string()))?;
+    if let Err(register_error) = register_configured_hotkeys(manager, config) {
+        let restore_result = restore_previous_hotkeys(manager, previous_config.as_ref());
+        restore_hotkey_routes(app, previous_config.as_ref(), restore_result.is_ok());
+        if let Err(restore_error) = restore_result {
+            return Err(Error::Config(format!(
+                "failed to register shortcut: {register_error}; failed to restore previous shortcuts: {restore_error}"
+            )));
+        }
+        return Err(Error::Config(register_error.to_string()));
+    }
+    if let Err(route_error) = app
+        .state::<AppState>()
+        .hotkey_routes
+        .write()
+        .map(|mut routes_guard| *routes_guard = routes)
+        .map_err(|err| Error::Config(err.to_string()))
+    {
+        let restore_result = restore_previous_hotkeys(manager, previous_config.as_ref());
+        restore_hotkey_routes(app, previous_config.as_ref(), restore_result.is_ok());
+        if let Err(restore_error) = restore_result {
+            return Err(Error::Config(format!(
+                "failed to update shortcut routes: {route_error}; failed to restore previous shortcuts: {restore_error}"
+            )));
+        }
+        return Err(route_error);
+    }
+    Ok(())
+}
+
+/// Registers every configured shortcut, preserving the first registration error for rollback.
+fn register_configured_hotkeys(
+    manager: &tauri_plugin_global_shortcut::GlobalShortcut<tauri::Wry>,
+    config: &AppConfig,
+) -> Result<()> {
     for (_, shortcut) in configured_hotkeys(config) {
         manager
             .register(shortcut.as_str())
             .map_err(|err| Error::Config(err.to_string()))?;
     }
-    let state = app.state::<AppState>();
-    *state
-        .hotkey_routes
-        .write()
-        .map_err(|err| Error::Config(err.to_string()))? = routes;
     Ok(())
+}
+
+/// Restores the previous native shortcut registration after a failed refresh.
+fn restore_previous_hotkeys(
+    manager: &tauri_plugin_global_shortcut::GlobalShortcut<tauri::Wry>,
+    previous_config: Option<&AppConfig>,
+) -> Result<()> {
+    manager
+        .unregister_all()
+        .map_err(|err| Error::Config(err.to_string()))?;
+    if let Some(previous) = previous_config {
+        register_configured_hotkeys(manager, previous)?;
+    }
+    Ok(())
+}
+
+/// Restores the in-memory event routes when native shortcut rollback succeeds.
+fn restore_hotkey_routes(
+    app: &AppHandle,
+    previous_config: Option<&AppConfig>,
+    native_restore_succeeded: bool,
+) {
+    if !native_restore_succeeded {
+        return;
+    }
+    let Some(previous) = previous_config else {
+        return;
+    };
+    let Ok(previous_routes) = configured_hotkey_routes(previous) else {
+        return;
+    };
+    if let Ok(mut routes_guard) = app.state::<AppState>().hotkey_routes.write() {
+        *routes_guard = previous_routes;
+    }
 }

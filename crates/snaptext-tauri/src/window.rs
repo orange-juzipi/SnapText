@@ -316,11 +316,16 @@ pub(crate) fn setup_overlay_window(_app: &AppHandle) -> Result<()> {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub(crate) fn show_overlay_window(app: &AppHandle) -> Result<()> {
+/// Shows the overlay on the monitor containing the triggering cursor position.
+pub(crate) fn show_overlay_window(app: &AppHandle, target_point: (i32, i32)) -> Result<()> {
     setup_overlay_window(app)?;
     let window = app
         .get_webview_window(OVERLAY_WINDOW_LABEL)
         .ok_or_else(|| Error::Config("overlay window is not available".to_owned()))?;
+    let monitor = window
+        .monitor_from_point(f64::from(target_point.0), f64::from(target_point.1))
+        .map_err(|err| Error::Config(err.to_string()))?
+        .ok_or_else(|| Error::Config("screenshot monitor is not available".to_owned()))?;
 
     // Re-apply overlay window state before every show because a reused hidden
     // WebView window can retain platform-specific chrome or z-order state.
@@ -334,7 +339,19 @@ pub(crate) fn show_overlay_window(app: &AppHandle) -> Result<()> {
         .set_skip_taskbar(true)
         .map_err(|err| Error::Config(err.to_string()))?;
     window
-        .set_fullscreen(true)
+        .set_fullscreen(false)
+        .map_err(|err| Error::Config(err.to_string()))?;
+    window
+        .set_position(PhysicalPosition::new(
+            monitor.position().x,
+            monitor.position().y,
+        ))
+        .map_err(|err| Error::Config(err.to_string()))?;
+    window
+        .set_size(tauri::PhysicalSize::new(
+            monitor.size().width,
+            monitor.size().height,
+        ))
         .map_err(|err| Error::Config(err.to_string()))?;
     window
         .show()
@@ -347,7 +364,7 @@ pub(crate) fn show_overlay_window(app: &AppHandle) -> Result<()> {
 
 #[cfg(target_os = "macos")]
 #[allow(dead_code)]
-pub(crate) fn show_overlay_window(_app: &AppHandle) -> Result<()> {
+pub(crate) fn show_overlay_window(_app: &AppHandle, _target_point: (i32, i32)) -> Result<()> {
     Ok(())
 }
 

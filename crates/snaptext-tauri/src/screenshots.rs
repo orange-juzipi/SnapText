@@ -11,6 +11,16 @@ pub(crate) async fn screenshot_full_inner(state: &AppState) -> Result<Screenshot
     ScreenshotPayload::from_image(image)
 }
 
+/// Captures the monitor under the cursor using virtual-desktop coordinates.
+#[cfg(not(target_os = "macos"))]
+pub(crate) async fn screenshot_full_inner_at(
+    state: &AppState,
+    point: Option<(i32, i32)>,
+) -> Result<ScreenshotPayload> {
+    let image = state.screencap.capture_full_screen_at(point).await?;
+    ScreenshotPayload::from_image(image)
+}
+
 pub(crate) async fn screenshot_region_inner(
     state: &AppState,
     bbox: snaptext_core::ocr::BBox,

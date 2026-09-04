@@ -330,8 +330,8 @@ impl AppConfig {
 
     pub fn normalized_for_save(mut self) -> Self {
         self.target_lang.0 = self.target_lang.0.trim().to_owned();
-        self.hotkeys.screenshot = self.hotkeys.screenshot.trim().to_owned();
-        self.hotkeys.selection = self.hotkeys.selection.trim().to_owned();
+        self.hotkeys.screenshot = normalize_hotkey_for_save(&self.hotkeys.screenshot);
+        self.hotkeys.selection = normalize_hotkey_for_save(&self.hotkeys.selection);
         self.translator.provider = normalize_translator_provider(self.translator.provider);
         // 官方源地址不作为用户配置保存；本地调试由桌面进程运行时覆盖。
         self.translator.snaptext_cloud.endpoint = snaptext_cloud_production_endpoint();
@@ -430,10 +430,10 @@ fn validate_hotkey(name: &str, value: &str) -> Result<()> {
 }
 
 fn validate_hotkey_conflicts(config: &HotkeyConfig) -> Result<()> {
-    if config
-        .screenshot
-        .trim()
-        .eq_ignore_ascii_case(config.selection.trim())
+    // Compare canonical accelerator forms so modifier order and parser aliases
+    // cannot silently make one route overwrite the other.
+    if canonical_hotkey_signature(&config.screenshot)
+        == canonical_hotkey_signature(&config.selection)
     {
         return Err(Error::Config(
             "screenshot and selection hotkeys must be different".to_owned(),
@@ -443,10 +443,40 @@ fn validate_hotkey_conflicts(config: &HotkeyConfig) -> Result<()> {
     Ok(())
 }
 
+/// Converts accepted modifier aliases into names understood by the runtime parser.
+fn normalize_hotkey_for_save(value: &str) -> String {
+    let mut parts = value.split('+').map(str::trim).collect::<Vec<_>>();
+    let Some(key) = parts.pop() else {
+        return value.trim().to_owned();
+    };
+    let mut normalized = parts
+        .into_iter()
+        .map(|modifier| match modifier.to_ascii_lowercase().as_str() {
+            "cmdorctrl" | "cmdorcontrol" | "commandorctrl" | "commandorcontrol" => "CmdOrCtrl",
+            "super" | "meta" | "cmd" | "command" => "Super",
+            "ctrl" | "control" => "Ctrl",
+            "shift" => "Shift",
+            "alt" | "option" => "Alt",
+            _ => modifier,
+        })
+        .collect::<Vec<_>>();
+    normalized.push(key);
+    normalized.join("+")
+}
+
 fn normalize_hotkey_modifier(value: &str) -> Option<&'static str> {
     match value.to_ascii_lowercase().as_str() {
-        "cmdorctrl" | "commandorcontrol" | "super" | "meta" => Some("cmdorctrl"),
-        "cmd" | "command" => Some("cmd"),
+        "cmdorctrl" | "cmdorcontrol" | "commandorctrl" | "commandorcontrol" => {
+            #[cfg(target_os = "macos")]
+            {
+                Some("super")
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                Some("ctrl")
+            }
+        }
+        "super" | "meta" | "cmd" | "command" => Some("super"),
         "ctrl" | "control" => Some("ctrl"),
         "shift" => Some("shift"),
         "alt" | "option" => Some("alt"),
@@ -461,7 +491,9 @@ fn is_hotkey_modifier(value: &str) -> bool {
 fn is_supported_hotkey_key(value: &str) -> bool {
     let key = value.trim();
     if key.chars().count() == 1 {
-        return key.chars().all(|ch| ch.is_ascii_alphanumeric());
+        return key
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ",./;'[]\\`=-".contains(ch));
     }
 
     matches!(
@@ -496,6 +528,44 @@ fn is_supported_hotkey_key(value: &str) -> bool {
             | "f11"
             | "f12"
     )
+}
+
+/// Produces the platform-aware canonical form used to detect duplicate hotkeys.
+fn canonical_hotkey_signature(value: &str) -> String {
+    let mut parts = value.split('+').map(str::trim).collect::<Vec<_>>();
+    let Some(key) = parts.pop() else {
+        return value.trim().to_ascii_lowercase();
+    };
+
+    let mut modifiers = parts
+        .into_iter()
+        .map(|modifier| normalize_hotkey_modifier(modifier).unwrap_or(modifier))
+        .collect::<Vec<_>>();
+    modifiers.sort_unstable();
+
+    let key = key.to_ascii_lowercase();
+    let key = match key.as_str() {
+        "esc" => "escape",
+        "return" => "enter",
+        "arrowdown" => "down",
+        "arrowleft" => "left",
+        "arrowright" => "right",
+        "arrowup" => "up",
+        "backquote" => "`",
+        "backslash" => "\\",
+        "bracketleft" => "[",
+        "bracketright" => "]",
+        "comma" => ",",
+        "equal" => "=",
+        "minus" => "-",
+        "period" => ".",
+        "quote" => "'",
+        "semicolon" => ";",
+        "slash" => "/",
+        value => value,
+    };
+    modifiers.push(key);
+    modifiers.join("+")
 }
 
 fn validate_translator_config(config: &TranslatorConfig) -> Result<()> {
@@ -718,6 +788,20 @@ mod tests {
         );
         assert_eq!(normalized.speech.rate, 3.0);
         assert_eq!(normalized.speech.volume, 0.0);
+    }
+
+    /// Normalizes accepted aliases to modifier names supported by the global shortcut parser.
+    #[test]
+    fn normalized_for_save_canonicalizes_hotkey_modifier_aliases() {
+        let mut config = AppConfig::default();
+        config.hotkeys.screenshot = " Meta+Option+T ".to_owned();
+        config.hotkeys.selection = " CommandOrControl+Shift+Y ".to_owned();
+
+        let normalized = config.normalized_for_save();
+
+        assert_eq!(normalized.hotkeys.screenshot, "Super+Alt+T");
+        assert_eq!(normalized.hotkeys.selection, "CmdOrCtrl+Shift+Y");
+        normalized.validate().expect("normalized hotkeys");
     }
 
     #[test]
@@ -1027,6 +1111,56 @@ ocr:
             err.to_string()
                 .contains("screenshot and selection hotkeys must be different")
         );
+    }
+
+    /// Rejects shortcuts whose modifier order differs but whose key combination is identical.
+    #[test]
+    fn validate_rejects_hotkeys_with_reordered_modifiers() {
+        let mut config = AppConfig::default();
+        config.hotkeys.screenshot = "Ctrl+Shift+T".to_owned();
+        config.hotkeys.selection = "Shift+Ctrl+T".to_owned();
+
+        let err = config.validate().expect_err("reordered duplicate hotkey");
+
+        assert!(
+            err.to_string()
+                .contains("screenshot and selection hotkeys must be different")
+        );
+    }
+
+    /// Rejects the platform-specific `CmdOrCtrl` alias when it resolves to the same shortcut.
+    #[test]
+    fn validate_rejects_platform_equivalent_hotkey_aliases() {
+        let mut config = AppConfig::default();
+        config.hotkeys.screenshot = "CmdOrCtrl+T".to_owned();
+        #[cfg(target_os = "macos")]
+        {
+            config.hotkeys.selection = "Cmd+T".to_owned();
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            config.hotkeys.selection = "Ctrl+T".to_owned();
+        }
+
+        let err = config
+            .validate()
+            .expect_err("platform-equivalent duplicate hotkey");
+
+        assert!(
+            err.to_string()
+                .contains("screenshot and selection hotkeys must be different")
+        );
+    }
+
+    /// Accepts the punctuation keys the settings shortcut recorder can produce.
+    #[test]
+    fn validate_accepts_shortcut_recorder_punctuation_keys() {
+        for key in ["/", ";", ",", "-", "[", "]", "`", "\\", "=", ".", "'"] {
+            let mut config = AppConfig::default();
+            config.hotkeys.screenshot = format!("Ctrl+Shift+{key}");
+
+            config.validate().expect("supported punctuation hotkey");
+        }
     }
 
     #[test]

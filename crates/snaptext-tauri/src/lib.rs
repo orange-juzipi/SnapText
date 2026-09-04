@@ -57,8 +57,12 @@ use payload::{
 #[cfg(all(test, target_os = "macos"))]
 use screenshots::mac_screenshot_selection_error;
 #[cfg(target_os = "macos")]
+use screenshots::screenshot_full_inner;
+#[cfg(not(target_os = "macos"))]
+use screenshots::screenshot_full_inner_at;
+use screenshots::screenshot_region_inner;
+#[cfg(target_os = "macos")]
 use screenshots::{capture_macos_interactive_screenshot, payload_to_full_region};
-use screenshots::{screenshot_full_inner, screenshot_region_inner};
 use state::AppState;
 #[cfg(not(target_os = "macos"))]
 use state::OverlaySession;
@@ -227,7 +231,11 @@ pub fn run_tauri(config: AppConfig, history: HistoryStore) -> Result<()> {
 }
 
 #[cfg(test)]
-fn refresh_global_hotkeys(_app: &AppHandle, _config: &AppConfig) -> Result<()> {
+fn refresh_global_hotkeys(
+    _app: &AppHandle,
+    _config: &AppConfig,
+    _previous_config: Option<&AppConfig>,
+) -> Result<()> {
     Ok(())
 }
 
@@ -343,14 +351,30 @@ fn get_config(state: State<'_, AppState>) -> Result<AppConfig> {
 
 #[tauri::command]
 #[allow(dead_code)]
+/// Persists validated configuration and refreshes dependent runtime services.
 fn update_config(
     app: AppHandle,
     state: State<'_, AppState>,
     config: AppConfig,
 ) -> Result<AppConfig> {
-    let config = update_config_inner(state.inner(), config)?;
-    refresh_global_hotkeys(&app, &config)?;
-    Ok(config)
+    let previous_config = get_config_inner(state.inner())?;
+    let candidate = config.normalized_for_save();
+    candidate.validate()?;
+    refresh_global_hotkeys(&app, &candidate, Some(&previous_config))?;
+    match update_config_inner(state.inner(), candidate) {
+        Ok(config) => Ok(config),
+        Err(err) => {
+            // Runtime config rebuilds can fail after shortcuts are installed;
+            // put the previous shortcut set back before returning the error.
+            if let Err(restore_err) = refresh_global_hotkeys(&app, &previous_config, None) {
+                tracing::error!(
+                    error = %restore_err,
+                    "failed to restore shortcuts after configuration update failure"
+                );
+            }
+            Err(err)
+        }
+    }
 }
 
 /// Opens the requested macOS privacy pane without attempting to infer its grant state.
@@ -409,8 +433,21 @@ fn get_result_snapshot(state: State<'_, AppState>) -> Result<Option<PinnedResult
 
 #[tauri::command]
 #[allow(dead_code)]
-async fn screenshot_full(state: State<'_, AppState>) -> Result<ScreenshotPayload> {
-    screenshot_full_inner(state.inner()).await
+/// Captures the monitor currently containing the cursor on platforms with virtual desktops.
+async fn screenshot_full(app: AppHandle, state: State<'_, AppState>) -> Result<ScreenshotPayload> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let cursor = app
+            .cursor_position()
+            .map_err(|err| Error::Screenshot(format!("failed to read cursor position: {err}")))?;
+        let point = (cursor.x.round() as i32, cursor.y.round() as i32);
+        return screenshot_full_inner_at(state.inner(), Some(point)).await;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app;
+        screenshot_full_inner(state.inner()).await
+    }
 }
 
 #[tauri::command]
@@ -508,10 +545,14 @@ async fn start_webview_screenshot_overlay_inner(
     force_restore_main_window: bool,
 ) -> Result<ScreenshotPayload> {
     let restore_main_window = force_restore_main_window || main_window_is_visible(app);
+    let cursor = app
+        .cursor_position()
+        .map_err(|err| Error::Screenshot(format!("failed to read cursor position: {err}")))?;
+    let capture_point = (cursor.x.round() as i32, cursor.y.round() as i32);
     hide_main_window(app)?;
     // 等待主窗口从合成器里消失，避免 overlay 背景截图把 SnapText 自己截进去。
     tokio::time::sleep(Duration::from_millis(MAIN_WINDOW_HIDE_SETTLE_MS)).await;
-    let payload = match screenshot_full_inner(state).await {
+    let payload = match screenshot_full_inner_at(state, Some(capture_point)).await {
         Ok(payload) => payload,
         Err(err) => {
             restore_main_window_if_needed(app, restore_main_window)?;
@@ -530,7 +571,17 @@ async fn start_webview_screenshot_overlay_inner(
         });
     }
 
-    show_overlay_window(app)?;
+    if let Err(err) = show_overlay_window(app, capture_point) {
+        if let Ok(mut pending) = state.pending_overlay.lock() {
+            *pending = None;
+        }
+        if let Err(restore_err) = restore_main_window_if_needed(app, restore_main_window) {
+            return Err(Error::Config(format!(
+                "failed to show screenshot overlay: {err}; failed to restore main window: {restore_err}"
+            )));
+        }
+        return Err(err);
+    }
     // The overlay WebView is reused after being hidden, so explicitly replace its previous image.
     emit_overlay_screenshot(app, &payload);
     Ok(payload)
@@ -1242,34 +1293,30 @@ fn get_config_inner(state: &AppState) -> Result<AppConfig> {
         .map_err(|err| Error::Config(err.to_string()))
 }
 
+/// Validates and prepares dependent services before replacing persisted runtime configuration.
 fn update_config_inner(state: &AppState, config: AppConfig) -> Result<AppConfig> {
     let config = config.normalized_for_save();
     config.validate()?;
+    let next_translator = translator_registry_for_config(&config)?;
+    let next_ocr = OcrEngine::new(resolve_model_dir(&config, state.resource_dir.as_deref()))?;
+
+    let mut current = state
+        .config
+        .write()
+        .map_err(|err| Error::Config(err.to_string()))?;
+    let mut translator = state
+        .translator
+        .write()
+        .map_err(|err| Error::Translate(err.to_string()))?;
+    let mut ocr = state
+        .ocr
+        .write()
+        .map_err(|err| Error::Ocr(err.to_string()))?;
+
     config.save(state.config_path.clone())?;
-
-    {
-        let mut current = state
-            .config
-            .write()
-            .map_err(|err| Error::Config(err.to_string()))?;
-        *current = config.clone();
-    }
-
-    {
-        let mut translator = state
-            .translator
-            .write()
-            .map_err(|err| Error::Translate(err.to_string()))?;
-        *translator = translator_registry_for_config(&config)?;
-    }
-
-    {
-        let mut ocr = state
-            .ocr
-            .write()
-            .map_err(|err| Error::Ocr(err.to_string()))?;
-        *ocr = OcrEngine::new(resolve_model_dir(&config, state.resource_dir.as_deref()))?;
-    }
+    *current = config.clone();
+    *translator = next_translator;
+    *ocr = next_ocr;
 
     Ok(config)
 }

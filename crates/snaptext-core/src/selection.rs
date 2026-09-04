@@ -11,6 +11,22 @@ pub struct SelectionEvent {
 #[derive(Debug, Default)]
 pub struct SelectionWatcher;
 
+#[cfg(any(target_os = "windows", test))]
+const WINDOWS_CF_TEXT: u32 = 1;
+#[cfg(any(target_os = "windows", test))]
+const WINDOWS_CF_UNICODETEXT: u32 = 13;
+#[cfg(any(target_os = "windows", test))]
+const WINDOWS_CF_LOCALE: u32 = 16;
+
+/// Returns whether a Windows clipboard format can be restored as plain text.
+#[cfg(any(target_os = "windows", test))]
+fn is_restorable_windows_clipboard_format(format: u32) -> bool {
+    matches!(
+        format,
+        WINDOWS_CF_TEXT | WINDOWS_CF_UNICODETEXT | WINDOWS_CF_LOCALE
+    )
+}
+
 impl SelectionWatcher {
     pub fn new() -> Result<Self> {
         Ok(Self)
@@ -645,16 +661,20 @@ mod windows {
         time::Duration,
     };
 
-    use super::{SelectionEvent, selection_event_from_text};
+    use super::{
+        SelectionEvent, is_restorable_windows_clipboard_format, selection_event_from_text,
+    };
     use crate::{Error, Result};
     use windows::Win32::{
-        Foundation::{HANDLE, HGLOBAL, HWND},
+        Foundation::{
+            ERROR_SUCCESS, GetLastError, GlobalFree, HANDLE, HGLOBAL, HWND, SetLastError,
+        },
         System::{
             DataExchange::{
-                CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable,
-                OpenClipboard, SetClipboardData,
+                CloseClipboard, EmptyClipboard, EnumClipboardFormats, GetClipboardData,
+                IsClipboardFormatAvailable, OpenClipboard, SetClipboardData,
             },
-            Memory::{GHND, GlobalAlloc, GlobalLock, GlobalUnlock},
+            Memory::{GHND, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock},
             Ole::CF_UNICODETEXT,
         },
         UI::{
@@ -751,25 +771,57 @@ if ($texts.Count -eq 0) { exit 1 }
     }
 
     fn current_clipboard_selection(foreground_window: HWND) -> Result<Option<SelectionEvent>> {
-        let previous_clipboard = read_clipboard_text().ok();
+        let Some(previous_clipboard) = snapshot_clipboard()? else {
+            // Do not replace images, rich text, files, or custom clipboard data
+            // merely to probe whether the foreground app supports Ctrl+C.
+            return Ok(None);
+        };
         let marker = format!("snaptext-selection-marker-{}", uuid::Uuid::new_v4());
+        let _restore = ClipboardRestoreGuard::new(previous_clipboard);
 
         write_clipboard_text(&marker)?;
         if !copy_frontmost_selection_to_clipboard(foreground_window, &marker)? {
-            if let Some(previous) = previous_clipboard.as_deref() {
-                restore_clipboard(previous);
-            }
             return Ok(None);
         }
 
         let selected_text = read_clipboard_text()?;
-        if let Some(previous) = previous_clipboard.as_deref() {
-            // Ctrl+C 是 Windows 上很多浏览器/编辑器唯一可靠的选中文本兜底。
-            // 只恢复文本剪贴板，避免长期覆盖用户原本复制的文字。
-            restore_clipboard(previous);
+        Ok(selection_event_from_text(selected_text, None))
+    }
+
+    /// Captures only clipboard states that can be restored without losing data.
+    fn snapshot_clipboard() -> Result<Option<ClipboardSnapshot>> {
+        let _clipboard = ClipboardGuard::open()?;
+        let mut format = 0;
+        let mut has_format = false;
+        loop {
+            unsafe {
+                SetLastError(ERROR_SUCCESS);
+            }
+            format = unsafe { EnumClipboardFormats(format) };
+            if format == 0 {
+                let error = unsafe { GetLastError() };
+                if error != ERROR_SUCCESS {
+                    return Err(Error::Selection(format!(
+                        "failed to enumerate clipboard formats: Windows error {}",
+                        error.0
+                    )));
+                }
+                break;
+            }
+            has_format = true;
+            if !is_restorable_windows_clipboard_format(format) {
+                return Ok(None);
+            }
         }
 
-        Ok(selection_event_from_text(selected_text, None))
+        if !has_format {
+            return Ok(Some(ClipboardSnapshot::Empty));
+        }
+        if unsafe { IsClipboardFormatAvailable(CLIPBOARD_UNICODE_TEXT_FORMAT) }.is_err() {
+            return Ok(None);
+        }
+
+        read_clipboard_text_locked().map(|text| Some(ClipboardSnapshot::Text(text)))
     }
 
     fn copy_frontmost_selection_to_clipboard(
@@ -868,6 +920,11 @@ if ($texts.Count -eq 0) { exit 1 }
 
     fn read_clipboard_text() -> Result<String> {
         let _clipboard = ClipboardGuard::open()?;
+        read_clipboard_text_locked()
+    }
+
+    /// Reads Unicode clipboard text while the caller owns the open clipboard handle.
+    fn read_clipboard_text_locked() -> Result<String> {
         if unsafe { IsClipboardFormatAvailable(CLIPBOARD_UNICODE_TEXT_FORMAT) }.is_err() {
             return Ok(String::new());
         }
@@ -884,7 +941,8 @@ if ($texts.Count -eq 0) { exit 1 }
             return Ok(String::new());
         }
 
-        let text = read_wide_null_terminated(ptr);
+        let max_units = unsafe { GlobalSize(clipboard_memory) } / std::mem::size_of::<u16>();
+        let text = read_wide_null_terminated(ptr, max_units);
         unsafe {
             let _ = GlobalUnlock(clipboard_memory);
         }
@@ -892,12 +950,6 @@ if ($texts.Count -eq 0) { exit 1 }
     }
 
     fn write_clipboard_text(text: &str) -> Result<()> {
-        let _clipboard = ClipboardGuard::open()?;
-        unsafe {
-            EmptyClipboard()
-                .map_err(|err| Error::Selection(format!("failed to clear clipboard: {err}")))?;
-        }
-
         let mut wide: Vec<u16> = text.encode_utf16().collect();
         wide.push(0);
         let byte_len = wide.len() * std::mem::size_of::<u16>();
@@ -905,6 +957,9 @@ if ($texts.Count -eq 0) { exit 1 }
             .map_err(|err| Error::Selection(format!("failed to allocate clipboard text: {err}")))?;
         let ptr = unsafe { GlobalLock(handle) } as *mut u16;
         if ptr.is_null() {
+            unsafe {
+                let _ = GlobalFree(Some(handle));
+            }
             return Err(Error::Selection(
                 "failed to lock clipboard text allocation".to_owned(),
             ));
@@ -915,9 +970,32 @@ if ($texts.Count -eq 0) { exit 1 }
             let _ = GlobalUnlock(handle);
         }
 
+        let clipboard = match ClipboardGuard::open() {
+            Ok(clipboard) => clipboard,
+            Err(err) => {
+                unsafe {
+                    let _ = GlobalFree(Some(handle));
+                }
+                return Err(err);
+            }
+        };
+        if let Err(err) = unsafe { EmptyClipboard() } {
+            drop(clipboard);
+            unsafe {
+                let _ = GlobalFree(Some(handle));
+            }
+            return Err(Error::Selection(format!(
+                "failed to clear clipboard: {err}"
+            )));
+        }
+
         let set_result =
             unsafe { SetClipboardData(CLIPBOARD_UNICODE_TEXT_FORMAT, Some(HANDLE(handle.0))) };
         if set_result.is_err() {
+            drop(clipboard);
+            unsafe {
+                let _ = GlobalFree(Some(handle));
+            }
             return Err(Error::Selection(
                 "failed to write clipboard text".to_owned(),
             ));
@@ -925,23 +1003,54 @@ if ($texts.Count -eq 0) { exit 1 }
         Ok(())
     }
 
-    fn restore_clipboard(previous: &str) {
-        if let Err(err) = write_clipboard_text(previous) {
-            tracing::warn!(error = %err, "failed to restore clipboard after Windows selection fallback");
+    #[derive(Debug)]
+    enum ClipboardSnapshot {
+        Text(String),
+        Empty,
+    }
+
+    struct ClipboardRestoreGuard {
+        /// Clipboard state captured before the Ctrl+C fallback wrote its marker.
+        snapshot: ClipboardSnapshot,
+    }
+
+    impl ClipboardRestoreGuard {
+        /// Arms a guard that restores the original clipboard state on scope exit.
+        fn new(snapshot: ClipboardSnapshot) -> Self {
+            Self { snapshot }
         }
     }
 
-    fn read_wide_null_terminated(ptr: *const u16) -> String {
-        let mut len = 0;
-        loop {
-            let value = unsafe { *ptr.add(len) };
-            if value == 0 {
-                break;
+    impl Drop for ClipboardRestoreGuard {
+        fn drop(&mut self) {
+            let result = match &self.snapshot {
+                ClipboardSnapshot::Text(text) => write_clipboard_text(text),
+                ClipboardSnapshot::Empty => clear_clipboard(),
+            };
+            if let Err(err) = result {
+                tracing::warn!(error = %err, "failed to restore clipboard after Windows selection fallback");
             }
-            len += 1;
         }
+    }
 
-        String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(ptr, len) })
+    /// Clears an empty clipboard snapshot without leaving the temporary marker behind.
+    fn clear_clipboard() -> Result<()> {
+        let _clipboard = ClipboardGuard::open()?;
+        unsafe {
+            EmptyClipboard()
+                .map_err(|err| Error::Selection(format!("failed to clear clipboard: {err}")))?;
+        }
+        Ok(())
+    }
+
+    /// Reads at most the allocated number of UTF-16 units from clipboard memory.
+    fn read_wide_null_terminated(ptr: *const u16, max_units: usize) -> String {
+        let values = unsafe { std::slice::from_raw_parts(ptr, max_units) };
+        let len = values
+            .iter()
+            .position(|value| *value == 0)
+            .unwrap_or(values.len());
+        String::from_utf16_lossy(&values[..len])
     }
 
     struct ClipboardGuard;
@@ -976,6 +1085,18 @@ mod tests {
 
         assert_eq!(event.text, "hello");
         assert_eq!(event.app_bundle_id.as_deref(), Some("com.example.app"));
+    }
+
+    /// Confirms that the destructive Windows copy fallback excludes rich and binary clipboard data.
+    #[test]
+    fn windows_clipboard_fallback_accepts_only_plain_text_formats() {
+        assert!(is_restorable_windows_clipboard_format(WINDOWS_CF_TEXT));
+        assert!(is_restorable_windows_clipboard_format(
+            WINDOWS_CF_UNICODETEXT
+        ));
+        assert!(is_restorable_windows_clipboard_format(WINDOWS_CF_LOCALE));
+        assert!(!is_restorable_windows_clipboard_format(2)); // CF_BITMAP
+        assert!(!is_restorable_windows_clipboard_format(13_337)); // Registered/custom format.
     }
 
     #[test]

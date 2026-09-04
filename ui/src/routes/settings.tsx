@@ -68,6 +68,7 @@ export function SettingsPage() {
   const programmaticScrollRef = useRef<SettingsTab | null>(null);
   const programmaticScrollTimerRef = useRef<number | null>(null);
   const speechEnabled = draft?.speech.enabled ?? false;
+  const showMacOsDiagnostics = detectShortcutPlatform() === "macos";
   const labels = labelsForLanguage(
     draft?.ui.language ?? configQuery.data?.ui.language,
   );
@@ -105,7 +106,9 @@ export function SettingsPage() {
     () => visibleProvider(draft?.translator.provider),
     [draft],
   );
-  const sectionOrder: SettingsTab[] = ["interface", "hotkeys", "provider", "speech", "diagnostics"];
+  const sectionOrder: SettingsTab[] = showMacOsDiagnostics
+    ? ["interface", "hotkeys", "provider", "speech", "diagnostics"]
+    : ["interface", "hotkeys", "provider", "speech"];
 
   if (!draft) {
     return (
@@ -277,12 +280,14 @@ export function SettingsPage() {
             label={labels.speech}
             onClick={() => scrollToSettingsSection("speech")}
           />
-          <SettingsTabButton
-            active={activeTab === "diagnostics"}
-            icon={<Stethoscope size={16} />}
-            label={labels.diagnostics}
-            onClick={() => scrollToSettingsSection("diagnostics")}
-          />
+          {showMacOsDiagnostics ? (
+            <SettingsTabButton
+              active={activeTab === "diagnostics"}
+              icon={<Stethoscope size={16} />}
+              label={labels.diagnostics}
+              onClick={() => scrollToSettingsSection("diagnostics")}
+            />
+          ) : null}
         </nav>
 
         <div className="settings-tab-panel" ref={scrollPanelRef} onScroll={handleSettingsScroll}>
@@ -557,38 +562,40 @@ export function SettingsPage() {
           </div>
           </section>
 
-          <section
-            className="settings-block settings-diagnostics-block"
-            ref={(node) => {
-              sectionRefs.current.diagnostics = node;
-            }}
-          >
-            <div className="settings-section-heading">
-              <h2>{labels.diagnostics}</h2>
-            </div>
-            <div className="settings-diagnostics-grid">
-              <DiagnosticCard
-                icon={<ShieldCheck size={17} />}
-                label={labels.permissionStatus}
-              >
-                <PermissionSettingRow
-                  label={labels.diagnosticsScreenRecording}
-                  onOpen={() => void handleOpenSystemSettings("screen_recording")}
-                  openLabel={labels.openSystemSettings}
-                />
-                <PermissionSettingRow
-                  label={labels.diagnosticsAccessibility}
-                  onOpen={() => void handleOpenSystemSettings("accessibility")}
-                  openLabel={labels.openSystemSettings}
-                />
-                <PermissionSettingRow
-                  label={labels.diagnosticsMicrophone}
-                  onOpen={() => void handleOpenSystemSettings("microphone")}
-                  openLabel={labels.openSystemSettings}
-                />
-              </DiagnosticCard>
-            </div>
-          </section>
+          {showMacOsDiagnostics ? (
+            <section
+              className="settings-block settings-diagnostics-block"
+              ref={(node) => {
+                sectionRefs.current.diagnostics = node;
+              }}
+            >
+              <div className="settings-section-heading">
+                <h2>{labels.diagnostics}</h2>
+              </div>
+              <div className="settings-diagnostics-grid">
+                <DiagnosticCard
+                  icon={<ShieldCheck size={17} />}
+                  label={labels.permissionStatus}
+                >
+                  <PermissionSettingRow
+                    label={labels.diagnosticsScreenRecording}
+                    onOpen={() => void handleOpenSystemSettings("screen_recording")}
+                    openLabel={labels.openSystemSettings}
+                  />
+                  <PermissionSettingRow
+                    label={labels.diagnosticsAccessibility}
+                    onOpen={() => void handleOpenSystemSettings("accessibility")}
+                    openLabel={labels.openSystemSettings}
+                  />
+                  <PermissionSettingRow
+                    label={labels.diagnosticsMicrophone}
+                    onOpen={() => void handleOpenSystemSettings("microphone")}
+                    openLabel={labels.openSystemSettings}
+                  />
+                </DiagnosticCard>
+              </div>
+            </section>
+          ) : null}
         </div>
       </CardContent>
       <ProviderDialog

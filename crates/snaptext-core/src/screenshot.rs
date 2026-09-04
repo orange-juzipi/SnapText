@@ -20,7 +20,17 @@ impl Screencap {
     }
 
     pub async fn capture_full_screen(&self) -> Result<RgbaImage> {
-        let monitor = primary_monitor()?;
+        self.capture_full_screen_at(None).await
+    }
+
+    /// Captures the monitor containing the supplied virtual-desktop point.
+    pub async fn capture_full_screen_at(&self, point: Option<(i32, i32)>) -> Result<RgbaImage> {
+        let monitor = match point {
+            Some((x, y)) => {
+                Monitor::from_point(x, y).map_err(|err| Error::Screenshot(err.to_string()))?
+            }
+            None => primary_monitor()?,
+        };
         monitor
             .capture_image()
             .map_err(|err| Error::Screenshot(err.to_string()))
