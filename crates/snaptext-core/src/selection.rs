@@ -27,6 +27,34 @@ fn is_restorable_windows_clipboard_format(format: u32) -> bool {
     )
 }
 
+/// Selects how the Windows Ctrl+C fallback can observe clipboard changes safely.
+#[cfg(any(target_os = "windows", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WindowsClipboardProbeStrategy {
+    /// Clears the temporary marker after probing an initially empty clipboard.
+    RestoreEmpty,
+    /// Restores the original Unicode text after the selection probe completes.
+    RestorePlainText,
+    /// Watches for a normal Ctrl+C update without pre-clearing opaque formats.
+    ObserveSequence,
+}
+
+/// Uses marker-and-restore only when every current clipboard format is reproducible.
+#[cfg(any(target_os = "windows", test))]
+fn windows_clipboard_probe_strategy(formats: &[u32]) -> WindowsClipboardProbeStrategy {
+    if formats.is_empty() {
+        return WindowsClipboardProbeStrategy::RestoreEmpty;
+    }
+    if formats.contains(&WINDOWS_CF_UNICODETEXT)
+        && formats
+            .iter()
+            .all(|format| is_restorable_windows_clipboard_format(*format))
+    {
+        return WindowsClipboardProbeStrategy::RestorePlainText;
+    }
+    WindowsClipboardProbeStrategy::ObserveSequence
+}
+
 impl SelectionWatcher {
     pub fn new() -> Result<Self> {
         Ok(Self)
@@ -662,7 +690,8 @@ mod windows {
     };
 
     use super::{
-        SelectionEvent, is_restorable_windows_clipboard_format, selection_event_from_text,
+        SelectionEvent, WindowsClipboardProbeStrategy, selection_event_from_text,
+        windows_clipboard_probe_strategy,
     };
     use crate::{Error, Result};
     use windows::Win32::{
@@ -672,7 +701,8 @@ mod windows {
         System::{
             DataExchange::{
                 CloseClipboard, EmptyClipboard, EnumClipboardFormats, GetClipboardData,
-                IsClipboardFormatAvailable, OpenClipboard, SetClipboardData,
+                GetClipboardSequenceNumber, IsClipboardFormatAvailable, OpenClipboard,
+                SetClipboardData,
             },
             Memory::{GHND, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock},
             Ole::CF_UNICODETEXT,
@@ -717,8 +747,12 @@ if ($texts.Count -eq 0) { exit 1 }
 [Console]::Write(($texts -join "`n"))
 "#;
 
+    /// Reads the foreground selection through UI Automation, then falls back to Ctrl+C.
     pub fn current_selection() -> Result<Option<SelectionEvent>> {
         let foreground_window = unsafe { GetForegroundWindow() };
+        // The global-hotkey crate reports Released after the main key is up, while Alt/Ctrl
+        // can still be physically held. Wait before starting either Windows selection path.
+        wait_for_hotkey_modifiers_to_release();
         if let Some(event) = current_uia_selection()? {
             return Ok(Some(event));
         }
@@ -770,12 +804,19 @@ if ($texts.Count -eq 0) { exit 1 }
         )))
     }
 
+    /// Uses a reversible marker for plain text, or sequence tracking for rich clipboard data.
     fn current_clipboard_selection(foreground_window: HWND) -> Result<Option<SelectionEvent>> {
-        let Some(previous_clipboard) = snapshot_clipboard()? else {
-            // Do not replace images, rich text, files, or custom clipboard data
-            // merely to probe whether the foreground app supports Ctrl+C.
-            return Ok(None);
+        let previous_clipboard = match snapshot_clipboard()? {
+            ClipboardSnapshot::Opaque { sequence_number } => {
+                // Rich and custom formats cannot be reconstructed safely. Avoid writing a
+                // marker first; if there is no selection, the clipboard sequence stays intact.
+                let selected_text =
+                    copy_selection_after_sequence(foreground_window, sequence_number)?;
+                return Ok(selected_text.and_then(|text| selection_event_from_text(text, None)));
+            }
+            restorable => restorable,
         };
+
         let marker = format!("snaptext-selection-marker-{}", uuid::Uuid::new_v4());
         let _restore = ClipboardRestoreGuard::new(previous_clipboard);
 
@@ -788,11 +829,12 @@ if ($texts.Count -eq 0) { exit 1 }
         Ok(selection_event_from_text(selected_text, None))
     }
 
-    /// Captures only clipboard states that can be restored without losing data.
-    fn snapshot_clipboard() -> Result<Option<ClipboardSnapshot>> {
+    /// Captures restorable text state or records the sequence of an opaque clipboard state.
+    fn snapshot_clipboard() -> Result<ClipboardSnapshot> {
+        let sequence_number = unsafe { GetClipboardSequenceNumber() };
         let _clipboard = ClipboardGuard::open()?;
         let mut format = 0;
-        let mut has_format = false;
+        let mut formats = Vec::new();
         loop {
             unsafe {
                 SetLastError(ERROR_SUCCESS);
@@ -808,20 +850,51 @@ if ($texts.Count -eq 0) { exit 1 }
                 }
                 break;
             }
-            has_format = true;
-            if !is_restorable_windows_clipboard_format(format) {
-                return Ok(None);
+            formats.push(format);
+        }
+
+        match windows_clipboard_probe_strategy(&formats) {
+            WindowsClipboardProbeStrategy::RestoreEmpty => Ok(ClipboardSnapshot::Empty),
+            WindowsClipboardProbeStrategy::RestorePlainText => {
+                read_clipboard_text_locked().map(ClipboardSnapshot::Text)
+            }
+            WindowsClipboardProbeStrategy::ObserveSequence => {
+                Ok(ClipboardSnapshot::Opaque { sequence_number })
+            }
+        }
+    }
+
+    /// Copies a selection without first replacing rich clipboard data with a marker.
+    fn copy_selection_after_sequence(
+        foreground_window: HWND,
+        previous_sequence: u32,
+    ) -> Result<Option<String>> {
+        let mut last_read_error = None;
+        for round in 0..CLIPBOARD_COPY_ROUNDS {
+            copy_frontmost_selection(foreground_window)?;
+            for _ in 0..CLIPBOARD_COPY_ATTEMPTS {
+                thread::sleep(Duration::from_millis(CLIPBOARD_COPY_SETTLE_MS));
+                if unsafe { GetClipboardSequenceNumber() } == previous_sequence {
+                    continue;
+                }
+                match read_clipboard_text() {
+                    Ok(text) if !text.is_empty() => return Ok(Some(text)),
+                    Ok(_) => last_read_error = None,
+                    Err(err) => last_read_error = Some(err),
+                }
+            }
+
+            if round + 1 < CLIPBOARD_COPY_ROUNDS {
+                thread::sleep(Duration::from_millis(CLIPBOARD_COPY_SETTLE_MS));
             }
         }
 
-        if !has_format {
-            return Ok(Some(ClipboardSnapshot::Empty));
+        if unsafe { GetClipboardSequenceNumber() } != previous_sequence
+            && let Some(err) = last_read_error
+        {
+            return Err(err);
         }
-        if unsafe { IsClipboardFormatAvailable(CLIPBOARD_UNICODE_TEXT_FORMAT) }.is_err() {
-            return Ok(None);
-        }
-
-        read_clipboard_text_locked().map(|text| Some(ClipboardSnapshot::Text(text)))
+        Ok(None)
     }
 
     fn copy_frontmost_selection_to_clipboard(
@@ -1007,6 +1080,10 @@ if ($texts.Count -eq 0) { exit 1 }
     enum ClipboardSnapshot {
         Text(String),
         Empty,
+        Opaque {
+            /// Clipboard sequence observed before sending the synthetic Ctrl+C.
+            sequence_number: u32,
+        },
     }
 
     struct ClipboardRestoreGuard {
@@ -1026,6 +1103,7 @@ if ($texts.Count -eq 0) { exit 1 }
             let result = match &self.snapshot {
                 ClipboardSnapshot::Text(text) => write_clipboard_text(text),
                 ClipboardSnapshot::Empty => clear_clipboard(),
+                ClipboardSnapshot::Opaque { .. } => Ok(()),
             };
             if let Err(err) = result {
                 tracing::warn!(error = %err, "failed to restore clipboard after Windows selection fallback");
@@ -1087,9 +1165,9 @@ mod tests {
         assert_eq!(event.app_bundle_id.as_deref(), Some("com.example.app"));
     }
 
-    /// Confirms that the destructive Windows copy fallback excludes rich and binary clipboard data.
+    /// Confirms that rich clipboard formats use sequence observation instead of marker replacement.
     #[test]
-    fn windows_clipboard_fallback_accepts_only_plain_text_formats() {
+    fn windows_clipboard_probe_strategy_preserves_rich_data_until_copy() {
         assert!(is_restorable_windows_clipboard_format(WINDOWS_CF_TEXT));
         assert!(is_restorable_windows_clipboard_format(
             WINDOWS_CF_UNICODETEXT
@@ -1097,6 +1175,26 @@ mod tests {
         assert!(is_restorable_windows_clipboard_format(WINDOWS_CF_LOCALE));
         assert!(!is_restorable_windows_clipboard_format(2)); // CF_BITMAP
         assert!(!is_restorable_windows_clipboard_format(13_337)); // Registered/custom format.
+        assert_eq!(
+            windows_clipboard_probe_strategy(&[]),
+            WindowsClipboardProbeStrategy::RestoreEmpty
+        );
+        assert_eq!(
+            windows_clipboard_probe_strategy(&[
+                WINDOWS_CF_TEXT,
+                WINDOWS_CF_UNICODETEXT,
+                WINDOWS_CF_LOCALE,
+            ]),
+            WindowsClipboardProbeStrategy::RestorePlainText
+        );
+        assert_eq!(
+            windows_clipboard_probe_strategy(&[WINDOWS_CF_UNICODETEXT, 13_337]),
+            WindowsClipboardProbeStrategy::ObserveSequence
+        );
+        assert_eq!(
+            windows_clipboard_probe_strategy(&[WINDOWS_CF_TEXT]),
+            WindowsClipboardProbeStrategy::ObserveSequence
+        );
     }
 
     #[test]
