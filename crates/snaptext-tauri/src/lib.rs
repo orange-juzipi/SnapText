@@ -75,8 +75,8 @@ use window::show_main_window;
 #[cfg(not(target_os = "macos"))]
 use window::show_overlay_window;
 use window::{
-    hide_main_window, hide_overlay_window, hide_result_window, main_window_is_visible,
-    restore_main_window_if_needed, show_result_window,
+    clear_main_window_foreground_pulse, hide_main_window, hide_overlay_window, hide_result_window,
+    main_window_is_visible, restore_main_window_if_needed, show_result_window,
 };
 
 const MAIN_WINDOW_LABEL: &str = "main";
@@ -844,6 +844,7 @@ fn unpin_result_window(app: AppHandle) -> Result<()> {
             .result_window_pinned
             .store(false, std::sync::atomic::Ordering::Release);
     }
+    clear_main_window_foreground_pulse(&app)?;
     hide_result_window(&app)?;
     emit_result_window_state(&app, false)?;
     Ok(())

@@ -559,3 +559,25 @@ fn pulse_main_window_to_front(app: &AppHandle, window: &tauri::WebviewWindow) ->
 
     Ok(())
 }
+
+/// Clears a temporary Windows foreground pulse when a pinned result is closed.
+#[cfg(all(not(test), target_os = "windows"))]
+pub(crate) fn clear_main_window_foreground_pulse(app: &AppHandle) -> Result<()> {
+    if let Some(state) = app.try_state::<crate::AppState>() {
+        state
+            .main_window_foreground_generation
+            .fetch_add(1, Ordering::AcqRel);
+    }
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        window
+            .set_always_on_top(false)
+            .map_err(|err| Error::Config(err.to_string()))?;
+    }
+    Ok(())
+}
+
+/// No-op foreground-pulse cleanup on platforms without the Windows workaround.
+#[cfg(any(test, not(target_os = "windows")))]
+pub(crate) fn clear_main_window_foreground_pulse(_app: &AppHandle) -> Result<()> {
+    Ok(())
+}

@@ -684,9 +684,9 @@ mod linux {
 mod windows {
     use std::{
         io,
-        process::{Command, Output},
+        process::{Child, Command, Output, Stdio},
         ptr, thread,
-        time::Duration,
+        time::{Duration, Instant},
     };
 
     use super::{
@@ -698,6 +698,7 @@ mod windows {
         Foundation::{
             ERROR_SUCCESS, GetLastError, GlobalFree, HANDLE, HGLOBAL, HWND, SetLastError,
         },
+        Globalization::{CP_ACP, MultiByteToWideChar},
         System::{
             DataExchange::{
                 CloseClipboard, EmptyClipboard, EnumClipboardFormats, GetClipboardData,
@@ -710,8 +711,8 @@ mod windows {
         UI::{
             Input::KeyboardAndMouse::{
                 GetAsyncKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
-                SendInput, VIRTUAL_KEY, VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_RCONTROL,
-                VK_RMENU, VK_RSHIFT,
+                SendInput, VIRTUAL_KEY, VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN,
+                VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN,
             },
             WindowsAndMessaging::{GetForegroundWindow, SetForegroundWindow},
         },
@@ -722,8 +723,13 @@ mod windows {
     const CLIPBOARD_COPY_ROUNDS: usize = 2;
     const HOTKEY_MODIFIER_RELEASE_ATTEMPTS: usize = 20;
     const HOTKEY_MODIFIER_RELEASE_SETTLE_MS: u64 = 25;
+    const CLIPBOARD_OPEN_ATTEMPTS: usize = 8;
+    const CLIPBOARD_OPEN_RETRY_MS: u64 = 25;
+    const CLIPBOARD_ANSI_TEXT_FORMAT: u32 = 1;
     const CLIPBOARD_UNICODE_TEXT_FORMAT: u32 = CF_UNICODETEXT.0 as u32;
     const KEY_CODE_C: u16 = b'C' as u16;
+    const UIA_TIMEOUT_MS: u64 = 800;
+    const UIA_POLL_MS: u64 = 20;
 
     const UIA_SELECTION_SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
@@ -753,25 +759,22 @@ if ($texts.Count -eq 0) { exit 1 }
         // The global-hotkey crate reports Released after the main key is up, while Alt/Ctrl
         // can still be physically held. Wait before starting either Windows selection path.
         wait_for_hotkey_modifiers_to_release();
-        if let Some(event) = current_uia_selection()? {
-            return Ok(Some(event));
+        match current_uia_selection() {
+            Ok(Some(event)) => return Ok(Some(event)),
+            Ok(None) => {}
+            Err(err) => {
+                // UI Automation is only a fast path. Restricted PowerShell policies and
+                // applications without a TextPattern must still reach the Ctrl+C fallback.
+                tracing::debug!(error = %err, "Windows UI Automation selection read failed; trying clipboard fallback");
+            }
         }
 
         current_clipboard_selection(foreground_window)
     }
 
+    /// Reads the focused text selection through the PowerShell UI Automation bridge.
     fn current_uia_selection() -> Result<Option<SelectionEvent>> {
-        let output = match Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                UIA_SELECTION_SCRIPT,
-            ])
-            .output()
-        {
+        let output = match run_uia_powershell() {
             Ok(output) => output,
             Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(err) => {
@@ -782,6 +785,42 @@ if ($texts.Count -eq 0) { exit 1 }
         };
 
         parse_powershell_selection_output(output)
+    }
+
+    /// Runs the UI Automation PowerShell probe with a bounded lifetime.
+    fn run_uia_powershell() -> io::Result<Output> {
+        let child = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                UIA_SELECTION_SCRIPT,
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        wait_for_process_output(child, Duration::from_millis(UIA_TIMEOUT_MS))
+    }
+
+    /// Waits for a child process without allowing a stuck UIA provider to block hotkeys.
+    fn wait_for_process_output(mut child: Child, timeout: Duration) -> io::Result<Output> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if child.try_wait()?.is_some() {
+                return child.wait_with_output();
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "PowerShell UI Automation probe timed out",
+                ));
+            }
+            thread::sleep(Duration::from_millis(UIA_POLL_MS));
+        }
     }
 
     fn parse_powershell_selection_output(output: Output) -> Result<Option<SelectionEvent>> {
@@ -978,6 +1017,8 @@ if ($texts.Count -eq 0) { exit 1 }
                 && !modifier_key_is_pressed(VK_RMENU)
                 && !modifier_key_is_pressed(VK_LSHIFT)
                 && !modifier_key_is_pressed(VK_RSHIFT)
+                && !modifier_key_is_pressed(VK_LWIN)
+                && !modifier_key_is_pressed(VK_RWIN)
             {
                 return;
             }
@@ -996,22 +1037,33 @@ if ($texts.Count -eq 0) { exit 1 }
         read_clipboard_text_locked()
     }
 
-    /// Reads Unicode clipboard text while the caller owns the open clipboard handle.
+    /// Reads text clipboard data while the caller owns the open clipboard handle.
     fn read_clipboard_text_locked() -> Result<String> {
-        if unsafe { IsClipboardFormatAvailable(CLIPBOARD_UNICODE_TEXT_FORMAT) }.is_err() {
+        if unsafe { IsClipboardFormatAvailable(CLIPBOARD_UNICODE_TEXT_FORMAT) }.is_ok()
+            && let Some(text) = read_clipboard_unicode_text_locked()?
+        {
+            return Ok(text);
+        }
+
+        if unsafe { IsClipboardFormatAvailable(CLIPBOARD_ANSI_TEXT_FORMAT) }.is_err() {
             return Ok(String::new());
         }
 
+        read_clipboard_ansi_text_locked()
+    }
+
+    /// Reads Unicode clipboard data while the caller owns the open clipboard handle.
+    fn read_clipboard_unicode_text_locked() -> Result<Option<String>> {
         let handle = unsafe { GetClipboardData(CLIPBOARD_UNICODE_TEXT_FORMAT) }
             .map_err(|err| Error::Selection(format!("failed to read clipboard text: {err}")))?;
         if handle.is_invalid() {
-            return Ok(String::new());
+            return Ok(None);
         }
 
         let clipboard_memory = HGLOBAL(handle.0);
         let ptr = unsafe { GlobalLock(clipboard_memory) } as *const u16;
         if ptr.is_null() {
-            return Ok(String::new());
+            return Ok(None);
         }
 
         let max_units = unsafe { GlobalSize(clipboard_memory) } / std::mem::size_of::<u16>();
@@ -1019,7 +1071,57 @@ if ($texts.Count -eq 0) { exit 1 }
         unsafe {
             let _ = GlobalUnlock(clipboard_memory);
         }
-        Ok(text)
+        Ok(Some(text))
+    }
+
+    /// Reads legacy ANSI clipboard data using the current Windows code page.
+    fn read_clipboard_ansi_text_locked() -> Result<String> {
+        let handle = unsafe { GetClipboardData(CLIPBOARD_ANSI_TEXT_FORMAT) }.map_err(|err| {
+            Error::Selection(format!("failed to read ANSI clipboard text: {err}"))
+        })?;
+        if handle.is_invalid() {
+            return Ok(String::new());
+        }
+
+        let clipboard_memory = HGLOBAL(handle.0);
+        let ptr = unsafe { GlobalLock(clipboard_memory) } as *const u8;
+        if ptr.is_null() {
+            return Ok(String::new());
+        }
+        let max_bytes = unsafe { GlobalSize(clipboard_memory) };
+        let values = unsafe { std::slice::from_raw_parts(ptr, max_bytes) };
+        let len = values
+            .iter()
+            .position(|value| *value == 0)
+            .unwrap_or(values.len());
+        let text = ansi_bytes_to_string(&values[..len]);
+        unsafe {
+            let _ = GlobalUnlock(clipboard_memory);
+        }
+        text
+    }
+
+    /// Converts bytes from CF_TEXT using the active Windows ANSI code page.
+    fn ansi_bytes_to_string(bytes: &[u8]) -> Result<String> {
+        if bytes.is_empty() {
+            return Ok(String::new());
+        }
+        let required = unsafe { MultiByteToWideChar(CP_ACP, Default::default(), bytes, None) };
+        if required <= 0 {
+            return Err(Error::Selection(
+                "failed to decode ANSI clipboard text".to_owned(),
+            ));
+        }
+        let mut wide = vec![0_u16; required as usize];
+        let written =
+            unsafe { MultiByteToWideChar(CP_ACP, Default::default(), bytes, Some(&mut wide)) };
+        if written <= 0 {
+            return Err(Error::Selection(
+                "failed to decode ANSI clipboard text".to_owned(),
+            ));
+        }
+        wide.truncate(written as usize);
+        Ok(String::from_utf16_lossy(&wide))
     }
 
     fn write_clipboard_text(text: &str) -> Result<()> {
@@ -1134,10 +1236,26 @@ if ($texts.Count -eq 0) { exit 1 }
     struct ClipboardGuard;
 
     impl ClipboardGuard {
+        /// Opens the Windows clipboard, retrying while another process temporarily owns it.
         fn open() -> Result<Self> {
-            unsafe { OpenClipboard(None) }
-                .map_err(|err| Error::Selection(format!("failed to open clipboard: {err}")))?;
-            Ok(Self)
+            let mut last_error = None;
+            for attempt in 0..CLIPBOARD_OPEN_ATTEMPTS {
+                match unsafe { OpenClipboard(None) } {
+                    Ok(()) => return Ok(Self),
+                    Err(err) => {
+                        last_error = Some(err);
+                        if attempt + 1 < CLIPBOARD_OPEN_ATTEMPTS {
+                            thread::sleep(Duration::from_millis(CLIPBOARD_OPEN_RETRY_MS));
+                        }
+                    }
+                }
+            }
+            Err(Error::Selection(format!(
+                "failed to open clipboard after retries: {}",
+                last_error
+                    .map(|err| err.to_string())
+                    .unwrap_or_else(|| "unknown Windows error".to_owned())
+            )))
         }
     }
 
