@@ -1,4 +1,4 @@
-#[cfg(not(test))]
+#[cfg(any(not(test), all(test, not(target_os = "macos"))))]
 use snaptext_core::Error;
 #[cfg(not(test))]
 use snaptext_core::config::CloseBehavior;
@@ -6,14 +6,16 @@ use snaptext_core::{Result, config::ResultPanelDock};
 #[cfg(not(test))]
 use std::sync::atomic::Ordering;
 use tauri::AppHandle;
-#[cfg(not(test))]
+#[cfg(any(not(test), all(test, not(target_os = "macos"))))]
 use tauri::Manager;
+#[cfg(any(not(test), all(test, not(target_os = "macos"))))]
+use tauri::PhysicalPosition;
 #[cfg(not(test))]
 use tauri::WebviewUrl;
 #[cfg(not(test))]
-use tauri::webview::WebviewWindowBuilder;
+use tauri::WindowEvent;
 #[cfg(not(test))]
-use tauri::{PhysicalPosition, WindowEvent};
+use tauri::webview::WebviewWindowBuilder;
 
 #[cfg(not(test))]
 use crate::MAIN_WINDOW_LABEL;
