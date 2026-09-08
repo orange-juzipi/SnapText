@@ -153,7 +153,22 @@ export function ProviderDialog({
               </div>
             </div>
 
-            {selectedProvider === "snaptext_cloud" ? null : (
+            {selectedProvider === "snaptext_cloud" ? (
+              <div className="settings-provider-form">
+                <label className="settings-provider-privacy-toggle">
+                  <input
+                    type="checkbox"
+                    checked={localConfig.translator.snaptext_cloud.privacy_sensitive}
+                    onChange={(event) =>
+                      updateLocal((next) => {
+                        next.translator.snaptext_cloud.privacy_sensitive = event.target.checked;
+                      })
+                    }
+                  />
+                  <span>隐私模式：请求不进入云端翻译缓存</span>
+                </label>
+              </div>
+            ) : (
               <div className="settings-provider-form">
                 <Field>
                   <FieldLabel>{selectedMeta.name} Base URL</FieldLabel>

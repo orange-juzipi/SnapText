@@ -159,6 +159,9 @@ pub enum TranslatorProvider {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SnapTextCloudConfig {
+    /// 云翻译隐私模式，启用后请求不会进入服务端翻译缓存。
+    #[serde(default)]
+    pub privacy_sensitive: bool,
     pub endpoint: Url,
     pub device_id: String,
     pub enabled: bool,
@@ -167,6 +170,7 @@ pub struct SnapTextCloudConfig {
 impl Default for SnapTextCloudConfig {
     fn default() -> Self {
         Self {
+            privacy_sensitive: false,
             endpoint: default_snaptext_cloud_endpoint(),
             device_id: default_snaptext_cloud_device_id(),
             enabled: true,
@@ -255,6 +259,7 @@ impl Default for AppConfig {
             translator: TranslatorConfig {
                 provider: TranslatorProvider::SnapTextCloud,
                 snaptext_cloud: SnapTextCloudConfig {
+                    privacy_sensitive: false,
                     endpoint: default_snaptext_cloud_endpoint(),
                     device_id: default_snaptext_cloud_device_id(),
                     enabled: true,

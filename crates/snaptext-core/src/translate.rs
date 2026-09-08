@@ -218,7 +218,8 @@ impl Translator for SnapTextCloudTranslator {
         // The cloud API is intentionally single-text; keep the desktop batch contract by
         // issuing ordered per-item requests and returning the same number of translations.
         for text in &req.texts {
-            let payload = snaptext_cloud_payload(&req, text, identity.device_id());
+            let mut payload = snaptext_cloud_payload(&req, text, identity.device_id());
+            payload["privacy_sensitive"] = json!(self.config.privacy_sensitive);
             let body =
                 serde_json::to_vec(&payload).map_err(|err| Error::Translate(err.to_string()))?;
             let response = send_signed_snaptext_cloud_translate(
@@ -978,6 +979,7 @@ mod tests {
             r#"{"translated_text":"Bonjour"}"#,
         ]);
         let config = SnapTextCloudConfig {
+            privacy_sensitive: false,
             endpoint: server.url.clone(),
             device_id: "test-device".to_owned(),
             enabled: true,
@@ -1056,6 +1058,7 @@ mod tests {
             r#"{"translated_text":"profound","dictionary_entries":[{"headword":"profound","phonetic":"prəˈfaʊnd","part_of_speech":"形容词","translations":["高深"],"definitions":["深刻","深奥"],"source":"snaptext_cloud"}]}"#,
         ]);
         let config = SnapTextCloudConfig {
+            privacy_sensitive: false,
             endpoint: server.url.clone(),
             device_id: "test-device".to_owned(),
             enabled: true,

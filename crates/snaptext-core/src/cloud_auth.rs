@@ -335,6 +335,7 @@ mod tests {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let path = tempdir.path().join("cloud-device.yaml");
         let config = SnapTextCloudConfig {
+            privacy_sensitive: false,
             endpoint: Url::parse("http://127.0.0.1:8080").expect("url"),
             device_id: "snaptext-client-test".to_owned(),
             enabled: true,
