@@ -13,6 +13,7 @@ image.workspace = true
 snaptext-core = { path = "../snaptext-core", version = "0.1.2" }
 serde.workspace = true
 serde_json.workspace = true
+reqwest.workspace = true
 tauri.workspace = true
 tauri-plugin-global-shortcut.workspace = true
 tempfile = "3.27.0"

@@ -16,6 +16,7 @@ import { Link } from "@tanstack/react-router";
 import { labelsForLanguage } from "@/lib/labels";
 import {
   useConfigQuery,
+  useCloudHealthQuery,
   useUpdateConfigMutation,
 } from "@/lib/queries";
 import type { AppConfig, HotkeyConfig } from "@/lib/types";
@@ -53,6 +54,7 @@ const DEFAULT_HOTKEYS: HotkeyConfig = {
 
 export function SettingsPage() {
   const configQuery = useConfigQuery();
+  const cloudHealth = useCloudHealthQuery(Boolean(configQuery.data?.translator.snaptext_cloud.enabled));
   const updateConfig = useUpdateConfigMutation();
   const workspace = useWorkspaceState();
   const [draft, setDraft] = useState<AppConfig | null>(null);
@@ -437,7 +439,7 @@ export function SettingsPage() {
           <div className="settings-section-heading">
             <h2>{labels.provider}</h2>
           </div>
-          <ProviderSummary
+              <ProviderSummary
             config={draft}
             labels={labels}
             provider={providerConfig}
@@ -470,6 +472,10 @@ export function SettingsPage() {
                   )
                 }
               />
+              <div className="settings-cloud-health" aria-live="polite">
+                <div><strong>{labels.snaptextCloudProvider}</strong><span>{cloudHealth.isPending ? '检查中' : cloudHealth.isError ? '暂时无法连接' : cloudHealth.data?.status === 'ok' ? '服务正常' : '状态未知'}</span></div>
+                <small>{cloudHealth.isError ? '可继续使用本地翻译源，稍后会自动重试。' : '每 30 秒自动刷新一次服务状态。'}</small>
+              </div>
               {labels.speechEnabled}
             </label>
             <Field>

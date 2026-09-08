@@ -32,6 +32,11 @@ export function getConfig() {
   return tauriInvoke<AppConfig>("get_config");
 }
 
+/** 查询云翻译公开健康状态。 */
+export function getCloudHealth() {
+  return tauriInvoke<Record<string, unknown>>("get_cloud_health");
+}
+
 export function updateConfig(config: AppConfig) {
   return tauriInvoke<AppConfig>("update_config", { config });
 }

@@ -614,6 +614,20 @@ textarea {
   box-shadow: var(--shadow-xs);
 }
 
+/* 云服务状态采用窄信息带，避免把运行状态埋在配置弹窗里。 */
+.settings-cloud-health {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 0.75rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--border-subtle, rgba(100, 116, 139, 0.25));
+  border-radius: 0.7rem;
+  background: color-mix(in srgb, var(--surface, #fff) 88%, #0f766e 12%);
+}
+.settings-cloud-health > div { display: flex; justify-content: space-between; gap: 1rem; }
+.settings-cloud-health span { color: #0f766e; font-weight: 600; }
+.settings-cloud-health small { color: var(--text-muted, #64748b); }
+
 .settings-provider-summary-main {
   display: flex;
   min-width: 0;

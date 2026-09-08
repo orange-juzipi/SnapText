@@ -3,6 +3,7 @@ import {
   clearHistory,
   deleteHistory,
   getConfig,
+  getCloudHealth,
   getHistory,
   searchHistory,
   pinResultWindow,
@@ -15,6 +16,7 @@ import type { ImagePreprocessOptions, Region } from "@/lib/types";
 
 export const queryKeys = {
   config: ["config"] as const,
+  cloudHealth: ["cloud-health"] as const,
   history: (limit = 50) => ["history", limit] as const,
   historySearch: (query = "", source = "", from = "", to = "", limit = 50) =>
     ["history", "search", query, source, from, to, limit] as const,
@@ -24,6 +26,17 @@ export function useConfigQuery() {
   return useQuery({
     queryKey: queryKeys.config,
     queryFn: getConfig,
+  });
+}
+
+/** 周期性读取云服务公开健康状态。 */
+export function useCloudHealthQuery(enabled = true) {
+  return useQuery({
+    enabled,
+    queryKey: queryKeys.cloudHealth,
+    queryFn: getCloudHealth,
+    refetchInterval: 30_000,
+    retry: 1,
   });
 }
 

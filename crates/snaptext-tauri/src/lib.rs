@@ -174,6 +174,7 @@ pub fn run_tauri(config: AppConfig, history: HistoryStore) -> Result<()> {
             delete_history,
             clear_history,
             get_config,
+            get_cloud_health,
             get_result_snapshot,
             get_overlay_screenshot,
             clear_overlay_screenshot,
@@ -347,6 +348,30 @@ async fn stop_voice_input(state: State<'_, AppState>) -> Result<VoiceInputResult
 #[allow(dead_code)]
 fn get_config(state: State<'_, AppState>) -> Result<AppConfig> {
     get_config_inner(state.inner())
+}
+
+/// 查询云翻译公开健康状态，供桌面端设置页展示当前可用性。
+#[tauri::command]
+#[allow(dead_code)]
+async fn get_cloud_health(state: State<'_, AppState>) -> Result<serde_json::Value> {
+    let config = get_config_inner(state.inner())?;
+    let endpoint = config
+        .translator
+        .snaptext_cloud
+        .endpoint
+        .join("v1/health")
+        .map_err(|err| Error::Config(err.to_string()))?;
+    reqwest::Client::new()
+        .get(endpoint)
+        .timeout(Duration::from_secs(8))
+        .send()
+        .await
+        .map_err(|err| Error::Translate(format!("云服务健康检查失败：{err}")))?
+        .error_for_status()
+        .map_err(|err| Error::Translate(format!("云服务健康检查失败：{err}")))?
+        .json()
+        .await
+        .map_err(|err| Error::Translate(format!("云服务健康响应无效：{err}")))
 }
 
 #[tauri::command]
