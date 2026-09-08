@@ -414,10 +414,16 @@ fn open_system_settings_inner(section: &str) -> Result<()> {
 
 #[cfg(not(target_os = "macos"))]
 /// Reports that privacy-pane deep links are unavailable on non-macOS platforms.
-fn open_system_settings_inner(_section: &str) -> Result<()> {
-    Err(Error::Config(
-        "system settings links are only available on macOS".to_owned(),
-    ))
+fn open_system_settings_inner(section: &str) -> Result<()> {
+    // Keep input validation consistent across platforms before reporting platform support.
+    match section {
+        "screen_recording" | "accessibility" | "microphone" => Err(Error::Config(
+            "system settings links are only available on macOS".to_owned(),
+        )),
+        _ => Err(Error::Config(
+            "unsupported system settings section".to_owned(),
+        )),
+    }
 }
 
 /// Returns the latest translation so a newly opened result window can hydrate immediately.
