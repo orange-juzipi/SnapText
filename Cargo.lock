@@ -4620,6 +4620,7 @@ dependencies = [
  "objc2-core-audio-types",
  "objc2-foundation",
  "objc2-speech",
+ "reqwest",
  "serde",
  "serde_json",
  "snaptext-core",
