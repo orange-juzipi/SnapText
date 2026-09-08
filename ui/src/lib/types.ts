@@ -32,6 +32,8 @@ export type TranslatorConfig = {
 };
 
 export type SnapTextCloudConfig = {
+  /** 云翻译隐私模式；启用后服务端不会缓存该请求。 */
+  privacy_sensitive: boolean;
   endpoint: string;
   device_id: string;
   enabled: boolean;

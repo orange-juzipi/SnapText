@@ -140,6 +140,7 @@ const zhCN = {
   providerDialogTitle: "选择翻译服务",
   providerDialogDescription: "选择服务并填写必要配置，点击保存后才会启用。",
   snaptextCloudDescription: "官方服务，无需 API Key。",
+  snaptextCloudPrivacyMode: "隐私模式：请求不进入云端缓存",
   deeplProviderDescription: "需要 DeepL API Key。",
   googleProviderDescription: "需要 Google Cloud Translation API Key。",
   noApiKeyRequired: "无需 API Key",
@@ -455,6 +456,7 @@ const en: Labels = {
   providerDialogDescription:
     "Choose a service and fill in the required settings. It is enabled only after saving.",
   snaptextCloudDescription: "Official service, no API key required.",
+  snaptextCloudPrivacyMode: "Privacy mode: do not cache requests in the cloud",
   deeplProviderDescription: "Requires a DeepL API key.",
   googleProviderDescription: "Requires a Google Cloud Translation API key.",
   noApiKeyRequired: "No API key required",

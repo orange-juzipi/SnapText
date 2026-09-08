@@ -165,7 +165,7 @@ export function ProviderDialog({
                       })
                     }
                   />
-                  <span>隐私模式：请求不进入云端翻译缓存</span>
+                  <span>{labels.snaptextCloudPrivacyMode}</span>
                 </label>
               </div>
             ) : (

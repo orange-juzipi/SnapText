@@ -831,7 +831,12 @@ function ProviderDialog({
             </div>
 
             {selectedProvider === "snaptext_cloud" ? (
-              null
+              <div className="settings-provider-form">
+                <label className="settings-provider-privacy-toggle">
+                  <input type="checkbox" checked={localConfig.translator.snaptext_cloud.privacy_sensitive} onChange={(event) => updateLocal((next) => { next.translator.snaptext_cloud.privacy_sensitive = event.target.checked; })} />
+                  <span>{labels.snaptextCloudPrivacyMode}</span>
+                </label>
+              </div>
             ) : (
               <div className="settings-provider-form">
                 <Field>
