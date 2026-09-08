@@ -3,6 +3,7 @@ use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::process::Command;
+use std::time::Duration;
 
 use crate::{
     Error, Result,
@@ -522,30 +523,43 @@ async fn send_signed_snaptext_cloud_translate(
     identity: &CloudDeviceIdentity,
     body: Vec<u8>,
 ) -> Result<std::result::Result<SnapTextCloudTranslateResponse, SnapTextCloudErrorBody>> {
-    let signed = identity.sign_json_request("POST", endpoint, &body)?;
-    let response = client
-        .post(endpoint.clone())
-        .header("content-type", "application/json")
-        .header("X-SnapText-Device", identity.device_id())
-        .header("X-SnapText-Timestamp", signed.timestamp_ms)
-        .header("X-SnapText-Nonce", signed.nonce)
-        .header("X-SnapText-Body-SHA256", signed.body_sha256)
-        .header("X-SnapText-Signature", signed.signature)
-        .header("X-SnapText-Version", env!("CARGO_PKG_VERSION"))
-        .header("X-SnapText-Platform", std::env::consts::OS)
-        .header("X-SnapText-System-Version", system_version())
-        .body(body)
-        .send()
-        .await?;
-    let status = response.status();
-    let text = response.text().await?;
-    if !status.is_success() {
-        return Ok(Err(parse_snaptext_cloud_error(status, &text)));
+    // 签名包含 nonce，重试必须为每次发送重新生成签名，避免服务端拒绝重放。
+    for attempt in 0..2 {
+        let signed = identity.sign_json_request("POST", endpoint, &body)?;
+        let response = client
+            .post(endpoint.clone())
+            .header("content-type", "application/json")
+            .header("X-SnapText-Device", identity.device_id())
+            .header("X-SnapText-Timestamp", signed.timestamp_ms)
+            .header("X-SnapText-Nonce", signed.nonce)
+            .header("X-SnapText-Body-SHA256", signed.body_sha256)
+            .header("X-SnapText-Signature", signed.signature)
+            .header("X-SnapText-Version", env!("CARGO_PKG_VERSION"))
+            .header("X-SnapText-Platform", std::env::consts::OS)
+            .header("X-SnapText-System-Version", system_version())
+            .body(body.clone())
+            .send()
+            .await;
+        let response = match response {
+            Ok(response) => response,
+            Err(error) if attempt == 0 && (error.is_timeout() || error.is_connect()) => {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let status = response.status();
+        let text = response.text().await?;
+        if !status.is_success() {
+            return Ok(Err(parse_snaptext_cloud_error(status, &text)));
+        }
+        return serde_json::from_str(&text)
+            .map(Ok)
+            .map_err(|err| Error::Translate(err.to_string()));
     }
-
-    serde_json::from_str(&text)
-        .map(Ok)
-        .map_err(|err| Error::Translate(err.to_string()))
+    Err(Error::Translate(
+        "cloud request failed after retry".to_owned(),
+    ))
 }
 
 fn parse_snaptext_cloud_error(status: StatusCode, body: &str) -> SnapTextCloudErrorBody {
