@@ -26,7 +26,7 @@ export function formatUserError(message: string) {
 
   if (
     raw.includes("error sending request for url") &&
-    (raw.includes("snaptext.uuidcx.com") || raw.includes("translate.snaptext.app"))
+    raw.includes("snaptext.uuidcx.com")
   ) {
     return "无法连接 SnapText 官方源，请检查网络后重试。";
   }
