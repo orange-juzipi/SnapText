@@ -6,6 +6,7 @@ use snaptext_core::Result;
 
 use crate::{AppState, ScreenshotPayload};
 
+#[cfg(target_os = "macos")]
 pub(crate) async fn screenshot_full_inner(state: &AppState) -> Result<ScreenshotPayload> {
     let image = state.screencap.capture_full_screen().await?;
     ScreenshotPayload::from_image(image)
