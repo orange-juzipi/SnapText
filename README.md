@@ -86,13 +86,13 @@ python3 scripts/verify_ocr_models.py --require-sha256 models
 make dev
 ```
 
-`make dev` 会启动 Tauri 调试进程和 Vite 开发服务器。默认的 SnapText Cloud 地址是 `https://snaptext.uuidcx.com`。需要调试本地云端服务时，可临时使用：
+`make dev` 会启动 Tauri 调试进程和 Vite 开发服务器，并连接线上 SnapText Cloud：`https://snaptext.uuidcx.com`。调试前需自行在本机启动 Cloud 服务（默认 `127.0.0.1:8080`），然后运行：
 
 ```bash
-SNAPTEXT_CLOUD_ENV=local make dev
+make dev-local
 ```
 
-该变量只在开发运行时覆盖 translator，不会写入 `config.yaml`，设置页也不会展示本地调试入口；生产构建不会读取这个本地覆盖变量。
+`dev-local` 只在当前开发进程中将 Cloud 地址覆盖为 `http://127.0.0.1:8080`，不会写入 `config.yaml`；生产构建不读取该覆盖设置。
 
 ## 隐私与数据流
 
@@ -224,3 +224,7 @@ scripts/                   # 构建、模型安装、打包和发布检查脚本
 - 贡献前请阅读 [`CONTRIBUTING.md`](CONTRIBUTING.md)，其中包含开发约定、测试要求和 Pull Request 检查项。
 - Bug 和功能建议请使用仓库中的 GitHub issue 模板；提交日志或配置片段前请先脱敏。
 - SnapText 仅使用 [`LICENSE-MIT`](LICENSE-MIT) 许可证发布。
+
+### AI 朗读
+
+设置中的朗读来源支持系统朗读与 SnapText Cloud AI 流式朗读。首期接入小米 MiMo，中英文音色由 cloud 提供，密钥仅保存在服务端。系统朗读默认开启，AI 需主动选择；词典真人音频仍优先。使用说明、隐私边界与实机验收见 [AI 朗读文档](docs/ai-speech.md)。

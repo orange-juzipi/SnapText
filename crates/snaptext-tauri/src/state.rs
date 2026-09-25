@@ -24,6 +24,8 @@ use crate::voice_input::VoiceInputSession;
 use crate::{ScreenshotPayload, model::resolve_model_dir, translator_registry_for_config};
 
 pub struct AppState {
+    /// 跨窗口朗读所有权和网络取消控制。
+    pub(crate) speech_playback: crate::speech::SpeechPlayback,
     pub(crate) config_path: Option<PathBuf>,
     pub(crate) resource_dir: Option<PathBuf>,
     pub(crate) config: RwLock<AppConfig>,
@@ -96,6 +98,7 @@ impl AppState {
         let ocr = OcrEngine::new(resolve_model_dir(&config, resource_dir.as_deref()))?;
         let translator = translator_registry_for_config(&config)?;
         Ok(Self {
+            speech_playback: crate::speech::SpeechPlayback::default(),
             config_path,
             resource_dir,
             config: RwLock::new(config),

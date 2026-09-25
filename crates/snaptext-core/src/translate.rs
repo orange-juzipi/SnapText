@@ -486,7 +486,8 @@ fn snaptext_cloud_translate_endpoint(config: &SnapTextCloudConfig) -> Result<Url
     cloud_translate_endpoint(config)
 }
 
-async fn ensure_snaptext_cloud_registered(
+/// 与云端语音共用设备注册，避免创建重复设备身份。
+pub(crate) async fn ensure_snaptext_cloud_registered(
     config: &SnapTextCloudConfig,
     client: &Client,
     identity: &CloudDeviceIdentity,
@@ -572,7 +573,8 @@ fn parse_snaptext_cloud_error(status: StatusCode, body: &str) -> SnapTextCloudEr
         })
 }
 
-fn system_version() -> String {
+/// 返回签名云请求使用的平台版本元数据。
+pub(crate) fn system_version() -> String {
     let version = platform_system_version().unwrap_or_else(|| std::env::consts::OS.to_owned());
     format!("{} {}", std::env::consts::OS, version.trim())
         .trim()

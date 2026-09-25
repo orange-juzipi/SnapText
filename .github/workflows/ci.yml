@@ -79,6 +79,10 @@ jobs:
         shell: bash
         run: python scripts/build_frontend.py
 
+      - name: Test streaming speech frontend
+        working-directory: ui
+        run: bun test
+
       - name: Run tests
         shell: bash
         run: |

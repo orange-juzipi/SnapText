@@ -41,7 +41,7 @@ import {
   resolveTargetLang,
 } from "@/lib/language";
 import { errorMessage } from "@/lib/errors";
-import { isSpeechSupported, speakAudioUrl, speakText, stopSpeech } from "@/lib/speech";
+import { isSpeechSupported, speakText, stopSpeech } from "@/lib/speech";
 import {
   useConfigQuery,
   usePinResultMutation,
@@ -281,6 +281,13 @@ export function WorkspacePage() {
     stopSpeech();
     setActiveSpeechKey(null);
   }, [activeSpeechKey, speechReady]);
+
+  // 输入、译文或记录切换会废弃旧音频；离开主页面时同样清理。
+  useEffect(() => {
+    stopSpeech();
+    setActiveSpeechKey(null);
+    return () => stopSpeech();
+  }, [workspace.textInput, workspace.snapshot.sourceText, workspace.snapshot.result]);
 
   useEffect(() => {
     if (workspace.ocrLoading) {
@@ -698,6 +705,7 @@ export function WorkspacePage() {
     }
   }
 
+  /** 所有原文、译文和词典发音共用可取消的朗读链路。 */
   async function handleSpeak(
     text: string,
     lang: string,
@@ -730,20 +738,14 @@ export function WorkspacePage() {
         config: configQuery.data?.speech,
         englishAccent: accent,
         onEnd: () => setActiveSpeechKey((current) => (current === key ? null : current)),
-        onError: () => setActiveSpeechKey((current) => (current === key ? null : current)),
+        onNotice: (message: string) => workspace.setStatus(message),
+        onError: (message?: string) => {
+          setActiveSpeechKey((current) => (current === key ? null : current));
+          if (message) workspace.setStatus(message);
+        },
       };
-      try {
-        // 词典 API 有真实发音时优先播放音频，失败后回退到系统 TTS。
-        if (audioUrl) {
-          await speakAudioUrl(audioUrl, speechInput.onEnd, speechInput.onError);
-        } else {
-          await speakText(speechInput);
-        }
-      } catch (audioError) {
-        if (!audioUrl) throw audioError;
-        await speakText(speechInput);
-      }
       workspace.setStatus(labels.speechStarted);
+      await speakText({ ...speechInput, audioUrl: audioUrl ?? undefined });
     } catch (error) {
       setActiveSpeechKey((current) => (current === key ? null : current));
       workspace.showError(errorMessage(error));

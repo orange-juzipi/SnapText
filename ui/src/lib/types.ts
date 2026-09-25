@@ -64,11 +64,44 @@ export type OcrConfig = {
   use_gpu: boolean;
 };
 
+/** 用户本机 OpenAI-compatible TTS 服务配置。 */
+export type LocalSpeechConfig = {
+  /** 完整的 `/v1/audio/speech` HTTP(S) 地址。 */
+  endpoint: string;
+  /** 可选的本地服务 Bearer token。 */
+  api_key?: string | null;
+  /** TTS 模型标识。 */
+  model: string;
+  /** 服务端音色标识。 */
+  voice: string;
+  /** OpenAI-compatible 音频响应格式。 */
+  response_format: "wav" | "mp3";
+};
+
+/** Tauri 原生层返回的完整本地音频。 */
+export type LocalSpeechAudio = {
+  /** Base64 编码的音频响应。 */
+  audio_base64: string;
+  /** 与请求格式对应的 MIME 类型。 */
+  content_type: string;
+};
+
 export type SpeechConfig = {
+  /** 是否启用朗读。 */
   enabled: boolean;
+  /** 系统、SnapText Cloud 或自定义 OpenAI-compatible 朗读来源。 */
+  engine: "system" | "snaptext_cloud" | "local_openai_compatible";
+  /** 按语言保存的音色标识；不含密钥。 */
+  cloud_voice_by_lang: Record<string, string>;
+  /** 用户自行配置的 OpenAI-compatible 语音服务。 */
+  local_ai: LocalSpeechConfig;
+  /** 默认英文口音。 */
   english_accent: string;
+  /** 朗读按钮显示的英文口音。 */
   english_accents: string[];
+  /** 系统语速或 AI 合成参考语速。 */
   rate: number;
+  /** 本地音量，不传给供应商。 */
   volume: number;
 };
 

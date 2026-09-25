@@ -478,6 +478,47 @@ textarea {
   align-items: start;
 }
 
+/* The dot carries the live speech capability state without repeating status text. */
+.settings-cloud-status-label {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.settings-cloud-status-light {
+  width: 0.6rem;
+  height: 0.6rem;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 16%, transparent);
+}
+
+.settings-cloud-status-light[data-status="available"] {
+  color: #0f766e;
+}
+
+.settings-cloud-status-light[data-status="checking"] {
+  color: #b45309;
+}
+
+.settings-cloud-status-light[data-status="unavailable"] {
+  color: var(--color-destructive);
+}
+
+.settings-cloud-status-light[data-status="off"] {
+  color: var(--color-muted-foreground);
+}
+
+:root[data-theme="dark"] .settings-cloud-status-light[data-status="available"] {
+  color: #4ade80;
+}
+
+:root[data-theme="dark"] .settings-cloud-status-light[data-status="checking"] {
+  color: #fbbf24;
+}
+
 .settings-toggle-row,
 .settings-switch-row {
   display: inline-flex;
@@ -613,20 +654,6 @@ textarea {
   padding: 0.85rem;
   box-shadow: var(--shadow-xs);
 }
-
-/* 云服务状态采用窄信息带，避免把运行状态埋在配置弹窗里。 */
-.settings-cloud-health {
-  display: grid;
-  gap: 0.35rem;
-  margin-top: 0.75rem;
-  padding: 0.7rem 0.85rem;
-  border: 1px solid var(--border-subtle, rgba(100, 116, 139, 0.25));
-  border-radius: 0.7rem;
-  background: color-mix(in srgb, var(--surface, #fff) 88%, #0f766e 12%);
-}
-.settings-cloud-health > div { display: flex; justify-content: space-between; gap: 1rem; }
-.settings-cloud-health span { color: #0f766e; font-weight: 600; }
-.settings-cloud-health small { color: var(--text-muted, #64748b); }
 
 .settings-provider-summary-main {
   display: flex;
@@ -839,6 +866,33 @@ textarea {
   display: grid;
   min-width: 0;
   gap: 0.8rem;
+}
+
+.settings-provider-privacy-toggle {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 0.65rem;
+  color: var(--color-foreground);
+  font-size: 0.95rem;
+  line-height: 1.45;
+  cursor: pointer;
+}
+
+.settings-provider-form .settings-provider-privacy-toggle input[type="checkbox"] {
+  min-height: 1rem;
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 1rem;
+  margin: 0.22em 0 0;
+  accent-color: var(--color-primary);
+}
+
+.settings-provider-privacy-toggle span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .settings-secret-input-row {
@@ -4603,10 +4657,7 @@ textarea:focus {
   height: 20px;
 }
 
-.peer[role="switch"][data-state="checked"] > span {
-  transform: translateX(18px);
-}
-
+/* Thumb travel is already defined by the switch primitive's state classes. */
 button[role="checkbox"] {
   width: 20px;
   height: 20px;

@@ -194,6 +194,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-stream"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b5a71a6f37880a80d1d7f19efd781e4b5de42c88f0722cc13bcb6cc2cfe8476"
+dependencies = [
+ "async-stream-impl",
+ "futures-core",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "async-stream-impl"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7c24de15d275a1ecfd47a380fb4d5ec9bfe0933f309ed5e705b775596a3574d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "async-task"
 version = "4.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4576,12 +4598,14 @@ name = "snaptext-core"
 version = "0.1.2"
 dependencies = [
  "ab_glyph",
+ "async-stream",
  "async-trait",
  "base64 0.23.1",
  "core-foundation",
  "core-foundation-sys",
  "directories",
  "ed25519-dalek",
+ "futures-util",
  "getrandom 0.4.3",
  "hex",
  "image",
@@ -4613,6 +4637,7 @@ version = "0.1.2"
 dependencies = [
  "base64 0.23.1",
  "block2",
+ "futures-util",
  "image",
  "objc2",
  "objc2-app-kit",
@@ -4631,6 +4656,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "url",
  "windows 0.62.2",
 ]
 

@@ -8,6 +8,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+futures-util.workspace = true
 base64.workspace = true
 image.workspace = true
 snaptext-core = { path = "../snaptext-core", version = "0.1.2" }
@@ -20,6 +21,7 @@ tempfile = "3.27.0"
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+url.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2.workspace = true

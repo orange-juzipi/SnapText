@@ -6,7 +6,7 @@ import { events, getConfig, getResultSnapshot, unpinResultWindow } from "@/lib/a
 import { sourceLabel, targetLangLabel } from "@/lib/format";
 import { labelsForLanguage } from "@/lib/labels";
 import { resolveSourceSpeechLang } from "@/lib/language";
-import { isSpeechSupported, speakAudioUrl, speakText, stopSpeech } from "@/lib/speech";
+import { isSpeechSupported, speakText, stopSpeech } from "@/lib/speech";
 import { copyText, tauriListen } from "@/lib/tauri";
 import type { AppConfig, DictionaryEntry, HistoryRecord, PinnedResultPayload, TranslationResult } from "@/lib/types";
 import { DictionaryPanel } from "@/components/dictionary-panel";
@@ -25,6 +25,7 @@ const RESULT_WINDOW_MIN_HEIGHT = 320;
 const RESULT_WINDOW_MAX_WIDTH = 1600;
 const RESULT_WINDOW_MAX_HEIGHT = 1800;
 
+/** 独立结果窗口与主窗口共享朗读配置和全局播放权。 */
 export function ResultWindowApp() {
   const [sourceKind, setSourceKind] = useState("");
   const [sourceText, setSourceText] = useState("");
@@ -36,6 +37,16 @@ export function ResultWindowApp() {
   const labels = labelsForLanguage(config?.ui.language);
   const [status, setStatus] = useState(labels.pinnedResultWindow);
   const speechReady = Boolean(config) && isSpeechSupported(config?.speech);
+
+  useEffect(() => {
+    let disposed = false;
+    let cleanup: (() => void) | undefined;
+    void tauriListen<AppConfig["speech"]>("snaptext://speech-config-changed", (event) => {
+      stopSpeech();
+      setConfig((current) => current ? { ...current, speech: event.payload } : current);
+    }).then((unlisten) => { if (disposed) unlisten(); else cleanup = unlisten; });
+    return () => { disposed = true; cleanup?.(); stopSpeech(); };
+  }, []);
 
   useEffect(() => {
     const nativeWindow = getCurrentWindow();
@@ -112,7 +123,10 @@ export function ResultWindowApp() {
     setActiveSpeechKey(null);
   }, [activeSpeechKey, speechReady]);
 
+  /** 替换结果前停止旧文本朗读。 */
   function applySnapshot(snapshot: PinnedResultPayload) {
+    stopSpeech();
+    setActiveSpeechKey(null);
     setSourceKind(snapshot.source);
     setSourceText(snapshot.source_text);
     setResult(snapshot.translated_text);
@@ -120,7 +134,10 @@ export function ResultWindowApp() {
     setDictionaryEntries(snapshot.dictionary_entries ?? []);
   }
 
+  /** 接收新译文时废弃旧会话。 */
   function applyTranslation(output: TranslationResult) {
+    stopSpeech();
+    setActiveSpeechKey(null);
     setSourceKind(output.source);
     setSourceText(output.source_text);
     setResult(output.translated_text);
@@ -128,7 +145,10 @@ export function ResultWindowApp() {
     setDictionaryEntries(output.dictionary_entries ?? []);
   }
 
+  /** 切换历史记录时停止先前播放。 */
   function applyHistory(record: HistoryRecord) {
+    stopSpeech();
+    setActiveSpeechKey(null);
     setSourceKind(record.source);
     setSourceText(record.source_text);
     setResult(record.translated_text);
@@ -149,6 +169,7 @@ export function ResultWindowApp() {
     }
   }
 
+  /** 所有原文、译文和词典发音共用可取消的朗读链路。 */
   async function handleSpeak(
     text: string,
     lang: string,
@@ -177,20 +198,14 @@ export function ResultWindowApp() {
         config: config?.speech,
         englishAccent: accent,
         onEnd: () => setActiveSpeechKey((current) => (current === key ? null : current)),
-        onError: () => setActiveSpeechKey((current) => (current === key ? null : current)),
+        onNotice: (message: string) => setStatus(message),
+        onError: (message?: string) => {
+          setActiveSpeechKey((current) => (current === key ? null : current));
+          if (message) setStatus(message);
+        },
       };
-      try {
-        // 词典音频更接近真人发音；不可用时继续使用系统朗读。
-        if (audioUrl) {
-          await speakAudioUrl(audioUrl, speechInput.onEnd, speechInput.onError);
-        } else {
-          await speakText(speechInput);
-        }
-      } catch (audioError) {
-        if (!audioUrl) throw audioError;
-        await speakText(speechInput);
-      }
       setStatus(labels.speechStarted);
+      await speakText({ ...speechInput, audioUrl: audioUrl ?? undefined });
     } catch (error) {
       setActiveSpeechKey((current) => (current === key ? null : current));
       setStatus(error instanceof Error ? error.message : String(error));

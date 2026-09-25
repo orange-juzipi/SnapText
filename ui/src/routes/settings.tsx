@@ -16,7 +16,6 @@ import { Link } from "@tanstack/react-router";
 import { labelsForLanguage } from "@/lib/labels";
 import {
   useConfigQuery,
-  useCloudHealthQuery,
   useUpdateConfigMutation,
 } from "@/lib/queries";
 import type { AppConfig, HotkeyConfig } from "@/lib/types";
@@ -40,6 +39,7 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
+import { SpeechSettingsFields } from "@/components/speech-settings";
 
 type SettingsTab = "interface" | "hotkeys" | "speech" | "provider" | "diagnostics";
 type QueuedSave = {
@@ -54,7 +54,6 @@ const DEFAULT_HOTKEYS: HotkeyConfig = {
 
 export function SettingsPage() {
   const configQuery = useConfigQuery();
-  const cloudHealth = useCloudHealthQuery(Boolean(configQuery.data?.translator.snaptext_cloud.enabled));
   const updateConfig = useUpdateConfigMutation();
   const workspace = useWorkspaceState();
   const [draft, setDraft] = useState<AppConfig | null>(null);
@@ -472,13 +471,15 @@ export function SettingsPage() {
                   )
                 }
               />
-              <div className="settings-cloud-health" aria-live="polite">
-                <div><strong>{labels.snaptextCloudProvider}</strong><span>{cloudHealth.isPending ? '检查中' : cloudHealth.isError ? '暂时无法连接' : cloudHealth.data?.status === 'ok' ? '服务正常' : '状态未知'}</span></div>
-                <small>{cloudHealth.isError ? '可继续使用本地翻译源，稍后会自动重试。' : '每 30 秒自动刷新一次服务状态。'}</small>
-              </div>
               {labels.speechEnabled}
             </label>
-            <Field>
+            <SpeechSettingsFields
+              config={draft.speech}
+              onChange={(change) => updateDraft(setDraft, userEditedRef, editVersionRef, (next) => {
+                next.speech = { ...next.speech, ...change };
+              })}
+            />
+            {draft.speech.engine !== "local_openai_compatible" && <Field>
               <FieldLabel>{labels.speechAccents}</FieldLabel>
               <div className="settings-checkbox-stack">
                 <label className="settings-checkbox-row">
@@ -530,7 +531,7 @@ export function SettingsPage() {
                   <span>{labels.englishAccentBritish}</span>
                 </label>
               </div>
-            </Field>
+            </Field>}
             <SpeechSliderField
               disabled={!speechEnabled}
               label={labels.speechRate}
@@ -1476,9 +1477,13 @@ function ensureSpeechDefaults(config: AppConfig): AppConfig {
   return next;
 }
 
-function defaultSpeechConfig() {
+/** 为旧版配置补齐系统默认来源与中英文音色。 */
+function defaultSpeechConfig(): AppConfig["speech"] {
   return {
     enabled: true,
+    engine: "system",
+    cloud_voice_by_lang: { zh_cn: "冰糖", en: "Mia" },
+    local_ai: { endpoint: "", api_key: null, model: "", voice: "", response_format: "wav" },
     english_accent: "american",
     english_accents: ["american", "british"],
     rate: 1,

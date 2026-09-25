@@ -25,6 +25,7 @@ mod hotkeys;
 mod model;
 mod payload;
 mod screenshots;
+mod speech;
 mod state;
 mod tray;
 mod voice_input;
@@ -169,6 +170,13 @@ pub fn run_tauri(config: AppConfig, history: HistoryStore) -> Result<()> {
                 .build(),
         )
         .invoke_handler(tauri::generate_handler![
+            speech::claim_speech,
+            speech::cancel_speech,
+            speech::acknowledge_speech,
+            speech::get_speech_capabilities,
+            speech::get_speech_quota,
+            speech::start_local_speech,
+            speech::start_cloud_speech,
             get_history,
             search_history,
             delete_history,
@@ -201,6 +209,15 @@ pub fn run_tauri(config: AppConfig, history: HistoryStore) -> Result<()> {
             translate_selection,
             retranslate_result_text
         ])
+        .on_window_event(|window, event| {
+            if matches!(
+                event,
+                tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
+            ) && let Some(state) = window.app_handle().try_state::<AppState>()
+            {
+                speech::stop_for_window(window.app_handle(), state.inner(), Some(window.label()));
+            }
+        })
         .setup(|app| {
             let resource_dir = app.handle().path().resource_dir().ok();
             let app_state = AppState::with_resource_dir(config, history, resource_dir.clone())?;
@@ -334,6 +351,7 @@ fn voice_input_supported() -> bool {
 #[tauri::command]
 #[allow(dead_code)]
 fn start_voice_input(app: AppHandle, state: State<'_, AppState>, locale: String) -> Result<()> {
+    speech::stop_for_window(&app, state.inner(), None);
     voice_input::start_voice_input(state.inner(), app, locale)
 }
 
@@ -387,7 +405,13 @@ fn update_config(
     candidate.validate()?;
     refresh_global_hotkeys(&app, &candidate, Some(&previous_config))?;
     match update_config_inner(state.inner(), candidate) {
-        Ok(config) => Ok(config),
+        Ok(config) => {
+            if !config.speech.enabled || config.speech != previous_config.speech {
+                speech::stop_for_window(&app, state.inner(), None);
+            }
+            let _ = app.emit("snaptext://speech-config-changed", &config.speech);
+            Ok(config)
+        }
         Err(err) => {
             // Runtime config rebuilds can fail after shortcuts are installed;
             // put the previous shortcut set back before returning the error.

@@ -12,6 +12,8 @@ pub mod ocr;
 pub mod pipeline;
 pub mod screenshot;
 pub mod selection;
+pub mod speech;
+mod speech_sse;
 pub mod translate;
 
 pub use error::{Error, Result};

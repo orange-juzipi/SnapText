@@ -185,7 +185,8 @@ pub fn cloud_translate_endpoint(config: &SnapTextCloudConfig) -> Result<Url> {
     join_cloud_url(&config.endpoint, "v1/translate")
 }
 
-fn join_cloud_url(base: &Url, path: &str) -> Result<Url> {
+/// 为独立云能力组合路径并保留部署前缀。
+pub(crate) fn join_cloud_url(base: &Url, path: &str) -> Result<Url> {
     let mut url = base.clone();
     let mut base_path = url.path().trim_end_matches('/').to_owned();
     if !path.is_empty() {

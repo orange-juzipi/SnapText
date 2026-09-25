@@ -10,7 +10,7 @@ CARGO_TAURI := $(abspath $(LOCAL_CARGO_TAURI))
 HOST_SYSTEM := $(shell uname -s 2>/dev/null || echo Windows)
 
 .DEFAULT_GOAL := help
-.PHONY: help init dev package
+.PHONY: help init dev dev-local package
 
 help: ## 显示项目命令。
 	@awk 'BEGIN {FS = ":.*##"; printf "SnapText 命令:\n"} /^[a-zA-Z0-9_.-]+:.*##/ {printf "  %-12s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -30,6 +30,10 @@ init: ## 安装前端依赖、预取 Rust 依赖并安装仓库内 Tauri CLI。
 dev: ## 启动 Tauri 调试模式和 Vite 前端服务。
 	@test -x "$(LOCAL_CARGO_TAURI)" || { echo "未初始化项目，请先运行 make init。"; exit 1; }
 	cd $(TAURI_DIR) && $(CARGO_TAURI) dev
+
+dev-local: ## 使用本机 SnapText Cloud（127.0.0.1:8080）启动调试模式。
+	@test -x "$(LOCAL_CARGO_TAURI)" || { echo "未初始化项目，请先运行 make init。"; exit 1; }
+	cd $(TAURI_DIR) && SNAPTEXT_CLOUD_ENV=local $(CARGO_TAURI) dev
 
 package: ## 生成当前平台的正式发布包并校验产物。
 ifeq ($(HOST_SYSTEM),Darwin)

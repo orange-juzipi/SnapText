@@ -4,6 +4,7 @@
   "version": "0.1.2",
   "type": "module",
   "scripts": {
+    "test": "bun test tests",
     "dev": "vite --host 127.0.0.1 --port 1420",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 1420"

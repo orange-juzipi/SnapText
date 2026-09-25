@@ -205,13 +205,66 @@ pub struct LocalHttpConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub struct SpeechConfig {
+    /// 是否允许任何朗读。
     pub enabled: bool,
+    /// 朗读来源；旧配置默认保留系统朗读。
+    #[serde(default)]
+    pub engine: SpeechEngine,
+    /// 按语言记忆云端音色，不保存厂商密钥。
+    #[serde(default = "default_cloud_voices")]
+    pub cloud_voice_by_lang: std::collections::BTreeMap<String, String>,
+    /// 用户自定义 OpenAI-compatible 语音服务配置。
+    #[serde(default)]
+    pub local_ai: LocalSpeechConfig,
     #[serde(default = "default_english_accent")]
+    /// 英文默认口音。
     pub english_accent: EnglishAccent,
     #[serde(default = "default_english_accents")]
+    /// 展示的英美发音按钮。
     pub english_accents: Vec<EnglishAccent>,
+    /// 系统语速或云端合成参考语速。
     pub rate: f32,
+    /// 本地播放音量。
     pub volume: f32,
+}
+
+/// 桌面端直接调用用户配置的 OpenAI-compatible TTS 服务。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct LocalSpeechConfig {
+    /// 完整的 `/v1/audio/speech` HTTP(S) 地址。
+    pub endpoint: String,
+    /// 可选的本地服务 Bearer token。
+    pub api_key: Option<String>,
+    /// TTS 模型标识。
+    pub model: String,
+    /// 服务端音色标识。
+    pub voice: String,
+    /// OpenAI-compatible 音频响应格式。
+    pub response_format: SpeechAudioFormat,
+}
+
+impl Default for LocalSpeechConfig {
+    /// 旧版和未配置本地语音的用户默认使用空配置。
+    fn default() -> Self {
+        Self {
+            endpoint: String::new(),
+            api_key: None,
+            model: String::new(),
+            voice: String::new(),
+            response_format: SpeechAudioFormat::Wav,
+        }
+    }
+}
+
+/// 可被桌面端 WebView 原生解码的本地 TTS 输出格式。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SpeechAudioFormat {
+    /// WAV 音频。
+    Wav,
+    /// MPEG Layer III 音频。
+    Mp3,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -221,10 +274,31 @@ pub enum EnglishAccent {
     British,
 }
 
+/// 可独立于翻译来源选择的朗读引擎。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SpeechEngine {
+    /// 保留设备系统朗读。
+    #[default]
+    System,
+    /// 通过 SnapText Cloud 合成语音。
+    SnaptextCloud,
+    /// 通过本地配置的 OpenAI-compatible TTS 服务合成语音。
+    #[serde(rename = "local_openai_compatible")]
+    LocalOpenAiCompatible,
+}
+/// 为旧版配置补齐中英文预置音色。
+fn default_cloud_voices() -> std::collections::BTreeMap<String, String> {
+    std::collections::BTreeMap::from([("zh_cn".into(), "冰糖".into()), ("en".into(), "Mia".into())])
+}
 impl Default for SpeechConfig {
+    /// 默认保留原系统朗读行为并附带可编辑的自定义 AI 空配置。
     fn default() -> Self {
         Self {
             enabled: true,
+            engine: SpeechEngine::System,
+            cloud_voice_by_lang: default_cloud_voices(),
+            local_ai: LocalSpeechConfig::default(),
             english_accent: EnglishAccent::American,
             english_accents: default_english_accents(),
             rate: 1.0,
@@ -668,6 +742,7 @@ fn normalize_model_dir(model_dir: ModelDir) -> ModelDir {
     }
 }
 
+/// 清理语音设置文本并限制可持久化的语速和音量范围。
 fn normalize_speech_config(mut config: SpeechConfig) -> SpeechConfig {
     let mut english_accents = Vec::new();
     for accent in config.english_accents {
@@ -676,6 +751,10 @@ fn normalize_speech_config(mut config: SpeechConfig) -> SpeechConfig {
         }
     }
     config.english_accents = english_accents;
+    config.local_ai.endpoint = config.local_ai.endpoint.trim().to_owned();
+    config.local_ai.model = config.local_ai.model.trim().to_owned();
+    config.local_ai.voice = config.local_ai.voice.trim().to_owned();
+    trim_optional_secret(&mut config.local_ai.api_key);
     config.rate = config.rate.clamp(0.1, 3.0);
     config.volume = config.volume.clamp(0.0, 1.0);
     config
@@ -718,6 +797,28 @@ fn ensure_http_url(label: &str, url: &Url) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 旧配置缺少云端字段时默认系统朗读，并保留用户原有偏好。
+    #[test]
+    fn legacy_speech_settings_default_to_system() {
+        let config: SpeechConfig = serde_yaml::from_str("enabled: true\nrate: 1.5\nvolume: 0.8\nenglish_accent: british\nenglish_accents: [british]\n").expect("legacy speech");
+        assert_eq!(config.engine, SpeechEngine::System);
+        assert_eq!(
+            config.cloud_voice_by_lang.get("zh_cn").map(String::as_str),
+            Some("冰糖")
+        );
+        assert_eq!(
+            config.cloud_voice_by_lang.get("en").map(String::as_str),
+            Some("Mia")
+        );
+        assert_eq!(config.rate, 1.5);
+        assert_eq!(config.english_accent, EnglishAccent::British);
+        let saved = serde_yaml::to_string(&config).expect("serialize");
+        assert_eq!(
+            serde_yaml::from_str::<SpeechConfig>(&saved).expect("roundtrip"),
+            config
+        );
+    }
 
     #[test]
     fn default_config_has_plan_hotkeys() {

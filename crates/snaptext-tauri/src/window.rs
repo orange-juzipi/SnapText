@@ -198,6 +198,11 @@ pub(crate) fn show_result_window(_app: &AppHandle, _dock: ResultPanelDock) -> Re
 /// Hides the independent result window without destroying its webview state.
 #[cfg(not(test))]
 pub(crate) fn hide_result_window(app: &AppHandle) -> Result<()> {
+    crate::speech::stop_for_window(
+        app,
+        app.state::<crate::state::AppState>().inner(),
+        Some(RESULT_WINDOW_LABEL),
+    );
     if let Some(window) = app.get_webview_window(RESULT_WINDOW_LABEL) {
         window
             .hide()
