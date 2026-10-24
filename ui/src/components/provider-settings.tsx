@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, Eye, EyeOff } from "lucide-react";
 import { labelsForLanguage } from "@/lib/labels";
 import { clientSnapTextCloudEndpoint } from "@/lib/snaptext-cloud";
@@ -56,6 +56,7 @@ export function ProviderSummary({
   );
 }
 
+/** Keeps unsaved provider credentials stable while background configuration updates complete. */
 export function ProviderDialog({
   config,
   error,
@@ -65,16 +66,24 @@ export function ProviderDialog({
   open,
   saving,
 }: {
+  /** Configuration copied when the dialog opens. */
   config: AppConfig;
+  /** Persistence failure displayed alongside the provider fields. */
   error: string;
+  /** Localized dialog labels. */
   labels: ReturnType<typeof labelsForLanguage>;
+  /** Changes the visibility after editing finishes. */
   onOpenChange: (open: boolean) => void;
+  /** Persists the provider draft before closing. */
   onSave: (config: AppConfig) => Promise<void>;
+  /** Whether the dialog is visible. */
   open: boolean;
+  /** Prevents edits while a save is pending. */
   saving: boolean;
 }) {
   const [localConfig, setLocalConfig] = useState<AppConfig>(() => structuredClone(config));
   const [showApiKey, setShowApiKey] = useState(false);
+  const wasOpenRef = useRef(false);
   const selectedProvider = visibleProvider(localConfig.translator.provider) as ProviderId;
   const selectedMeta = providerMeta(selectedProvider, labels);
   const requiresApiKey = selectedProvider === "deepl" || selectedProvider === "google";
@@ -86,11 +95,14 @@ export function ProviderDialog({
   const canSave = !saving && (!requiresApiKey || apiKey.trim().length > 0);
 
   useEffect(() => {
-    if (!open) return;
-    setLocalConfig(structuredClone(config));
-    setShowApiKey(false);
+    if (open && !wasOpenRef.current) {
+      setLocalConfig(structuredClone(config));
+      setShowApiKey(false);
+    }
+    wasOpenRef.current = open;
   }, [config, open]);
 
+  /** Updates an isolated provider draft without touching the cached settings. */
   function updateLocal(updater: (next: AppConfig) => void) {
     setLocalConfig((current) => {
       const next = structuredClone(current);
@@ -99,6 +111,7 @@ export function ProviderDialog({
     });
   }
 
+  /** Selects the active provider and synchronizes the official service flag. */
   function selectProvider(provider: ProviderId) {
     updateLocal((next) => {
       next.translator.provider = provider;
@@ -106,13 +119,14 @@ export function ProviderDialog({
     });
   }
 
+  /** Writes the selected provider field into the dialog draft. */
   function setProviderInput(path: ProviderInputPath, value: string) {
     updateLocal((next) => setProviderValue(next, path, value));
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="settings-provider-dialog">
+    <Dialog open={open} onOpenChange={(nextOpen) => { if (!saving) onOpenChange(nextOpen); }}>
+      <DialogContent className="settings-provider-dialog" aria-describedby={undefined}>
         <DialogHeader>
           <DialogTitle>{labels.providerDialogTitle}</DialogTitle>
         </DialogHeader>
@@ -129,6 +143,7 @@ export function ProviderDialog({
                   className={selected ? "settings-provider-card is-selected" : "settings-provider-card"}
                   role="radio"
                   aria-checked={selected}
+                  disabled={saving}
                   onClick={() => selectProvider(provider)}
                 >
                   <span className={`settings-provider-logo settings-provider-logo-${provider}`}>
@@ -173,6 +188,8 @@ export function ProviderDialog({
                 <Field>
                   <FieldLabel>{selectedMeta.name} Base URL</FieldLabel>
                   <Input
+                    disabled={saving}
+                    aria-label={`${selectedMeta.name} Base URL`}
                     value={
                       selectedProvider === "deepl"
                         ? localConfig.translator.deepl.base_url
@@ -191,6 +208,8 @@ export function ProviderDialog({
                   <FieldLabel>{selectedMeta.name} API Key</FieldLabel>
                   <div className="settings-secret-input-row">
                     <Input
+                      disabled={saving}
+                      aria-label={`${selectedMeta.name} API Key`}
                       value={apiKey}
                       type={showApiKey ? "text" : "password"}
                       placeholder={labels.providerApiKeyPlaceholder}
@@ -223,7 +242,7 @@ export function ProviderDialog({
         </div>
 
         <DialogFooter>
-          <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
+          <Button type="button" variant="ghost" disabled={saving} onClick={() => onOpenChange(false)}>
             {labels.cancel}
           </Button>
           <Button

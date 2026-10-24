@@ -51,7 +51,6 @@ import {
 } from "@/lib/queries";
 import { copyText, tauriListen } from "@/lib/tauri";
 import type {
-  HistoryRecord,
   ImagePreprocessOptions,
   Region,
   TextLine,
@@ -124,6 +123,7 @@ const DEFAULT_IMAGE_PREPROCESS: ImagePreprocessOptions = {
 const LOW_CONFIDENCE_THRESHOLD = 0.85;
 const AUTO_TRANSLATE_DEBOUNCE_MS = 500;
 
+/** Coordinates text, image, and speech interactions for the main translation workspace. */
 export function WorkspacePage() {
   const configQuery = useConfigQuery();
   const labels = labelsForLanguage(configQuery.data?.ui.language);
@@ -158,6 +158,7 @@ export function WorkspacePage() {
     targetLang: string;
   } | null>(null);
   const imageFileInputRef = useRef<HTMLInputElement | null>(null);
+  const imageLoadIdRef = useRef(0);
   const imageCropSelectionBeforeDragRef = useRef<ImageCropSelection | null>(null);
   const sourceTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const voiceInputActiveRef = useRef(false);
@@ -165,8 +166,17 @@ export function WorkspacePage() {
   const voiceInputDraftRef = useRef("");
   const textInputRef = useRef(workspace.textInput);
   const autoTranslatingRef = useRef(false);
+  const [autoRequestSettled, setAutoRequestSettled] = useState(0);
+  const mountedRef = useRef(false);
   const skipNextAutoTranslateRef = useRef(false);
-  const autoTranslatePendingRef = useRef<{ sourceText: string; sourceLang: string; targetLang: string } | null>(null);
+  const autoTranslatePendingRef = useRef<{
+    /** Source text waiting for an active request to settle. */
+    sourceText: string;
+    /** Resolved source language for the queued request. */
+    sourceLang: string;
+    /** Resolved target language for the queued request. */
+    targetLang: string;
+  } | null>(null);
   const lastAutoTranslatedKeyRef = useRef("");
   const translationRunIdRef = useRef(0);
   const detectedSourceLang = detectSourceLang(workspace.textInput);
@@ -219,16 +229,32 @@ export function WorkspacePage() {
   }, [workspace.textInput]);
 
   useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      autoTranslatePendingRef.current = null;
+      // 离开页面只取消本页拥有的请求，不能取消刚由原生事件发起的新任务。
+      if (translationRunIdRef.current > 0 && workspace.isTranslationCurrent(translationRunIdRef.current)) {
+        workspace.cancelTranslation();
+      }
+    };
+  }, [workspace.cancelTranslation, workspace.isTranslationCurrent]);
+
+  useEffect(() => {
     // A new OCR result starts with the review panel closed so it never obscures the fresh source text.
     setOcrReviewOpen(false);
   }, [workspace.snapshot.sourceText, workspace.snapshot.textLines.length]);
 
   useEffect(() => {
-    if (!failedTranslation || failedTranslation.sourceText === workspace.textInput.trim()) return;
-    // A new source invalidates the old retry action and its error message.
+    if (!failedTranslation) return;
+    const sourceText = workspace.textInput.trim();
+    const sourceLang = resolveSourceLang(sourceText, workspace.sourceLang) ?? AUTO_SOURCE_LANG;
+    const targetLang = resolveTargetLang(sourceText, workspace.targetLang);
+    if (autoTranslateKey(sourceText, sourceLang, targetLang) === autoTranslateKey(failedTranslation.sourceText, failedTranslation.sourceLang, failedTranslation.targetLang)) return;
+    // A new source or language pair invalidates the old retry action and its error message.
     setFailedTranslation(null);
     setTranslationError("");
-  }, [failedTranslation, workspace.textInput]);
+  }, [failedTranslation, workspace.textInput, workspace.sourceLang, workspace.targetLang]);
 
   useEffect(() => {
     let mounted = true;
@@ -291,9 +317,11 @@ export function WorkspacePage() {
 
   useEffect(() => {
     if (workspace.ocrLoading) {
+      autoTranslatePendingRef.current = null;
       return;
     }
     if (workspace.snapshot.requiresReview) {
+      autoTranslatePendingRef.current = null;
       // OCR-only flows deliberately wait for a user edit or an explicit translate action.
       return;
     }
@@ -303,6 +331,7 @@ export function WorkspacePage() {
       return;
     }
     if (!autoTranslateEnabled) {
+      autoTranslatePendingRef.current = null;
       if (!autoTranslateEnabled && workspace.snapshot.sourceText.trim() !== workspace.textInput.trim()) {
         workspace.clearTranslation();
       }
@@ -325,15 +354,7 @@ export function WorkspacePage() {
     }, AUTO_TRANSLATE_DEBOUNCE_MS);
 
     return () => window.clearTimeout(timeout);
-  }, [autoTranslateEnabled, workspace.ocrLoading, workspace.sourceLang, workspace.targetLang, workspace.textInput]);
-
-  useEffect(() => {
-    if (workspace.translating) return;
-    const pending = autoTranslatePendingRef.current;
-    if (!pending) return;
-    autoTranslatePendingRef.current = null;
-    void runAutoTranslate(pending.sourceText, pending.sourceLang, pending.targetLang);
-  }, [workspace.translating]);
+  }, [autoTranslateEnabled, workspace.ocrLoading, workspace.snapshot.requiresReview, workspace.sourceLang, workspace.targetLang, workspace.textInput]);
 
   useEffect(() => {
     const sourceText = workspace.snapshot.sourceText.trim();
@@ -348,31 +369,38 @@ export function WorkspacePage() {
     workspace.textInput,
   ]);
 
+  useEffect(() => {
+    if (workspace.translating || translateTextMutation.isPending || autoTranslatingRef.current) return;
+    const pending = autoTranslatePendingRef.current;
+    if (!pending) return;
+    autoTranslatePendingRef.current = null;
+    if (!autoTranslateEnabled || workspace.ocrLoading || workspace.snapshot.requiresReview) return;
+    const sourceText = workspace.textInput.trim();
+    const sourceLang = resolveSourceLang(sourceText, workspace.sourceLang) ?? AUTO_SOURCE_LANG;
+    const targetLang = resolveTargetLang(sourceText, workspace.targetLang);
+    if (autoTranslateKey(sourceText, sourceLang, targetLang) !== autoTranslateKey(pending.sourceText, pending.sourceLang, pending.targetLang)) return;
+    // 使用本次渲染的状态启动队列，避免旧 Promise 闭包永久保留 isPending=true。
+    void runAutoTranslate(pending.sourceText, pending.sourceLang, pending.targetLang);
+  }, [autoRequestSettled, autoTranslateEnabled, translateTextMutation.isPending, workspace.translating, workspace.ocrLoading, workspace.snapshot.requiresReview, workspace.textInput, workspace.sourceLang, workspace.targetLang]);
+
+  /** Applies a translation only while its input and language context are still current. */
   async function runTranslateText(sourceText: string, sourceLang: string, targetLang: string, mode: "manual" | "auto") {
-    const runId = translationRunIdRef.current + 1;
+    const runId = workspace.beginTranslation();
     translationRunIdRef.current = runId;
     setTranslationError("");
     setFailedTranslation(null);
     try {
-      workspace.setTranslating(true);
       const record = await translateTextMutation.mutateAsync({
         sourceText,
         sourceLang,
         targetLang,
       });
-      if (runId !== translationRunIdRef.current) return;
-      if (mode === "auto" && textInputRef.current.trim() !== sourceText) {
-        return;
-      }
+      if (!mountedRef.current || !workspace.isTranslationCurrent(runId)) return;
       lastAutoTranslatedKeyRef.current = autoTranslateKey(sourceText, sourceLang, targetLang);
-      if (mode === "auto") {
-        workspace.setTranslationResultOnly(record);
-      } else {
-        setTextResult(record);
-      }
+      workspace.setTranslationResultOnly(record);
       workspace.setStatus(labels.textTranslated);
     } catch (error) {
-      if (runId !== translationRunIdRef.current) return;
+      if (!mountedRef.current || !workspace.isTranslationCurrent(runId)) return;
       const message = errorMessage(error);
       setTranslationError(message);
       setFailedTranslation({ sourceText, sourceLang, targetLang });
@@ -382,10 +410,11 @@ export function WorkspacePage() {
         workspace.setStatus(message);
       }
     } finally {
-      if (runId === translationRunIdRef.current) workspace.setTranslating(false);
+      workspace.finishTranslation(runId);
     }
   }
 
+  /** Serializes automatic requests and keeps only the latest pending input. */
   async function runAutoTranslate(sourceText: string, sourceLang: string, targetLang: string) {
     const requestKey = autoTranslateKey(sourceText, sourceLang, targetLang);
     if (requestKey === lastAutoTranslatedKeyRef.current) return;
@@ -396,10 +425,16 @@ export function WorkspacePage() {
 
     autoTranslatingRef.current = true;
     autoTranslatePendingRef.current = null;
-    await runTranslateText(sourceText, sourceLang, targetLang, "auto");
-    autoTranslatingRef.current = false;
+    try {
+      await runTranslateText(sourceText, sourceLang, targetLang, "auto");
+    } finally {
+      autoTranslatingRef.current = false;
+      // 编辑输入可能提前结束可见 loading，仍需在原 IPC 完成后唤醒最新队列。
+      if (mountedRef.current) setAutoRequestSettled((version) => version + 1);
+    }
   }
 
+  /** Translates the currently selected source text and resolved language pair. */
   async function handleTranslateText() {
     const sourceText = workspace.textInput.trim();
     if (!sourceText) {
@@ -415,9 +450,8 @@ export function WorkspacePage() {
   /** Cancels the visible translation request and invalidates its eventual response. */
   function handleCancelTranslation() {
     if (!workspace.translating) return;
-    translationRunIdRef.current += 1;
     autoTranslatePendingRef.current = null;
-    workspace.setTranslating(false);
+    workspace.cancelTranslation();
     setTranslationError("");
     setFailedTranslation(null);
     workspace.setStatus(labels.translationCancelled);
@@ -436,6 +470,7 @@ export function WorkspacePage() {
 
   /** Reads an image file, validates its MIME type, and stores a preview payload. */
   async function loadImageFile(file: File, translateAfterLoad = false) {
+    if (imageProcessing) return;
     if (!file.type || !["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
       workspace.showError(labels.unsupportedImageType);
       return;
@@ -445,9 +480,11 @@ export function WorkspacePage() {
       return;
     }
 
+    const loadId = ++imageLoadIdRef.current;
     try {
       const dataUrl = await readFileAsDataUrl(file);
       const dimensions = await readImageDimensions(dataUrl);
+      if (loadId !== imageLoadIdRef.current) return;
       const nextImageInput: ImageInput = {
         dataUrl,
         width: dimensions.width,
@@ -466,6 +503,7 @@ export function WorkspacePage() {
         void handleImageProcess(true, nextImageInput, null);
       }
     } catch (error) {
+      if (loadId !== imageLoadIdRef.current) return;
       workspace.showError(errorMessage(error));
     }
   }
@@ -495,7 +533,7 @@ export function WorkspacePage() {
 
   /** Starts a bounded crop gesture on the imported image preview. */
   function handleImageCropPointerDown(event: React.PointerEvent<HTMLDivElement>) {
-    if (!imageInput || imageProcessing) return;
+    if (!imageInput || imageProcessing || event.button !== 0 || !event.isPrimary) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     const point = imagePreviewPoint(event);
     imageCropSelectionBeforeDragRef.current = imageCropSelection;
@@ -594,6 +632,7 @@ export function WorkspacePage() {
 
   /** Clears the selected image while retaining any text the user has already edited. */
   function handleRemoveImage() {
+    imageLoadIdRef.current += 1;
     setImageInput(null);
     setImageCrop(null);
     setImageCropSelection(null);
@@ -1038,6 +1077,7 @@ export function WorkspacePage() {
 
           <div className="workspace-textarea-shell" aria-busy={workspace.ocrLoading}>
             <Textarea
+              aria-label={labels.sourceText}
               className={
                 workspace.ocrLoading
                   ? "workspace-textarea workspace-source-textarea workspace-textarea-busy bg-control"
@@ -1189,6 +1229,7 @@ export function WorkspacePage() {
         <div className="workspace-result-scroll">
           <div className="workspace-textarea-shell" aria-busy={workspace.translating}>
             <Textarea
+              aria-label={labels.translationText}
               className={
                 workspace.translating
                   ? "workspace-textarea workspace-result-textarea workspace-textarea-busy bg-background text-[15px]"
@@ -1482,9 +1523,6 @@ export function WorkspacePage() {
     </>
   );
 
-  function setTextResult(record: HistoryRecord) {
-    workspace.setResultFromHistory(record);
-  }
 }
 
 /** Renders a speech control with a tonal active state instead of a primary-action fill. */

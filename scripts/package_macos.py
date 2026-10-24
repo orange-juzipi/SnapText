@@ -65,7 +65,12 @@ def read_tauri_config() -> dict:
     return config
 
 
-def verify_macos_artifacts(product_name: str, version: str, require_dmg: bool) -> None:
+def verify_macos_artifacts(
+    product_name: str,
+    version: str,
+    require_dmg: bool,
+    require_updater: bool = True,
+) -> None:
     """Verify the native macOS artifacts produced by Tauri."""
     verify_macos(
         product_name,
@@ -73,13 +78,15 @@ def verify_macos_artifacts(product_name: str, version: str, require_dmg: bool) -
         require_installers=require_dmg,
         release_dir=ROOT / "target" / "release",
         bundle_dir=ROOT / "target" / "release" / "bundle",
+        require_updater=require_updater,
     )
 
 
 def cargo_tauri() -> str:
     """Resolve the repository-local Tauri CLI before falling back to PATH."""
-    if LOCAL_CARGO_TAURI.is_file():
-        return str(LOCAL_CARGO_TAURI)
+    local_cli = LOCAL_CARGO_TAURI.with_suffix(".exe") if os.name == "nt" else LOCAL_CARGO_TAURI
+    if local_cli.is_file():
+        return str(local_cli)
     resolved = shutil.which("cargo-tauri")
     if resolved is not None:
         return resolved
@@ -240,7 +247,10 @@ def main(argv: list[str]) -> int:
     if args.dry_run:
         for command in commands:
             print(" ".join(command))
-        print(f"verify_macos_artifacts {product_name} {version} require_dmg={not args.skip_dmg}")
+        print(
+            f"verify_macos_artifacts {product_name} {version} require_dmg={not args.skip_dmg} "
+            f"require_updater={not (args.no_sign or args.ad_hoc_sign)}"
+        )
         if args.ad_hoc_sign:
             print(
                 "ad_hoc_sign_and_archive "
@@ -251,7 +261,12 @@ def main(argv: list[str]) -> int:
     for command in commands:
         cwd = TAURI_DIR if command[0] == tauri else ROOT
         run(command, cwd=cwd)
-    verify_macos_artifacts(product_name, version, require_dmg=not args.skip_dmg)
+    verify_macos_artifacts(
+        product_name,
+        version,
+        require_dmg=not args.skip_dmg,
+        require_updater=not (args.no_sign or args.ad_hoc_sign),
+    )
     if args.ad_hoc_sign:
         ad_hoc_sign_and_archive(product_name)
 

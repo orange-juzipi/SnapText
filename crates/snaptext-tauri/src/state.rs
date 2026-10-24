@@ -59,7 +59,9 @@ pub struct AppState {
 
 #[derive(Debug, Clone)]
 pub(crate) struct OverlaySession {
+    /// Screenshot and unique identity assigned when the capture was created.
     pub(crate) screenshot: ScreenshotPayload,
+    /// Whether completing or dismissing this overlay should reveal the main window.
     pub(crate) restore_main_window: bool,
 }
 

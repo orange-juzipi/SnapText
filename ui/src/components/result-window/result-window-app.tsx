@@ -1,7 +1,7 @@
 import type * as React from "react";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { Copy, Volume2, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { events, getConfig, getResultSnapshot, unpinResultWindow } from "@/lib/api";
 import { sourceLabel, targetLangLabel } from "@/lib/format";
 import { labelsForLanguage } from "@/lib/labels";
@@ -33,21 +33,30 @@ export function ResultWindowApp() {
   const [targetLang, setTargetLang] = useState("");
   const [dictionaryEntries, setDictionaryEntries] = useState<DictionaryEntry[]>([]);
   const [config, setConfig] = useState<AppConfig | null>(null);
+  const latestSpeechConfigRef = useRef<AppConfig["speech"] | null>(null);
   const [activeSpeechKey, setActiveSpeechKey] = useState<string | null>(null);
   const labels = labelsForLanguage(config?.ui.language);
+  const labelsRef = useRef(labels);
+  labelsRef.current = labels;
   const [status, setStatus] = useState(labels.pinnedResultWindow);
   const speechReady = Boolean(config) && isSpeechSupported(config?.speech);
 
+  /** 同步主窗口的朗读配置，并释放迟到的监听注册结果。 */
   useEffect(() => {
     let disposed = false;
     let cleanup: (() => void) | undefined;
     void tauriListen<AppConfig["speech"]>("snaptext://speech-config-changed", (event) => {
+      if (disposed) return;
       stopSpeech();
+      setActiveSpeechKey(null);
+      latestSpeechConfigRef.current = event.payload;
       setConfig((current) => current ? { ...current, speech: event.payload } : current);
-    }).then((unlisten) => { if (disposed) unlisten(); else cleanup = unlisten; });
+    }).then((unlisten) => { if (disposed) unlisten(); else cleanup = unlisten; })
+      .catch((error) => { if (!disposed) setStatus(error instanceof Error ? error.message : String(error)); });
     return () => { disposed = true; cleanup?.(); stopSpeech(); };
   }, []);
 
+  /** 恢复逻辑窗口尺寸，并在缩放换算后保存用户的新尺寸。 */
   useEffect(() => {
     const nativeWindow = getCurrentWindow();
     let disposed = false;
@@ -88,34 +97,70 @@ export function ResultWindowApp() {
     };
   }, []);
 
+  /** 注册结果事件后再读取初始快照，防止覆盖更新的原生事件。 */
   useEffect(() => {
     const unlisteners: Array<() => void> = [];
-    tauriListen<PinnedResultPayload>(events.resultSnapshot, (event) => {
-      applySnapshot(event.payload);
-      setStatus(labels.pinnedResultWindow);
-    }).then((unlisten) => unlisteners.push(unlisten));
-    tauriListen<TranslationResult>(events.resultTranslation, (event) => {
-      applyTranslation(event.payload);
-      setStatus(labels.regionTranslated);
-    }).then((unlisten) => unlisteners.push(unlisten));
-    tauriListen<HistoryRecord>(events.resultSelection, (event) => {
-      applyHistory(event.payload);
-      setStatus(labels.textTranslated);
-    }).then((unlisten) => unlisteners.push(unlisten));
-    return () => unlisteners.forEach((unlisten) => unlisten());
-  }, [labels]);
+    let disposed = false;
+    let eventVersion = 0;
 
-  useEffect(() => {
-    // Hydrate both the speech settings and the last result while the native window is opening.
-    void Promise.all([getConfig(), getResultSnapshot()])
-      .then(([nextConfig, snapshot]) => {
-        setConfig(nextConfig);
-        setStatus(labelsForLanguage(nextConfig.ui.language).pinnedResultWindow);
-        if (snapshot) applySnapshot(snapshot);
-      })
-      .catch((error) => setStatus(error instanceof Error ? error.message : String(error)));
+    /** 即使 StrictMode 已清理 effect，也释放随后注册成功的原生监听器。 */
+    async function register(listener: Promise<() => void>) {
+      const cleanup = await listener;
+      if (disposed) cleanup();
+      else unlisteners.push(cleanup);
+    }
+
+    /** 先监听再取快照，且新事件始终优先于较早开始读取的快照。 */
+    async function initializeResultSync() {
+      try {
+        await Promise.all([
+          register(tauriListen<PinnedResultPayload>(events.resultSnapshot, (event) => {
+            if (disposed) return;
+            eventVersion += 1;
+            applySnapshot(event.payload);
+            setStatus(labelsRef.current.pinnedResultWindow);
+          })),
+          register(tauriListen<TranslationResult>(events.resultTranslation, (event) => {
+            if (disposed) return;
+            eventVersion += 1;
+            applyTranslation(event.payload);
+            setStatus(labelsRef.current.regionTranslated);
+          })),
+          register(tauriListen<HistoryRecord>(events.resultSelection, (event) => {
+            if (disposed) return;
+            eventVersion += 1;
+            applyHistory(event.payload);
+            setStatus(labelsRef.current.textTranslated);
+          })),
+        ]);
+        if (disposed) return;
+        const versionBeforeLoad = eventVersion;
+        const snapshot = await getResultSnapshot();
+        if (!disposed && versionBeforeLoad === eventVersion && snapshot) {
+          applySnapshot(snapshot);
+          setStatus(labelsRef.current.pinnedResultWindow);
+        }
+      } catch (error) {
+        if (!disposed) setStatus(error instanceof Error ? error.message : String(error));
+      }
+    }
+    void initializeResultSync();
+    return () => { disposed = true; unlisteners.forEach((unlisten) => unlisten()); };
   }, []);
 
+  /** 独立加载界面配置，并优先使用加载期间收到的新朗读设置。 */
+  useEffect(() => {
+    let disposed = false;
+    // 配置读取失败不能阻止结果快照显示，也不能回写已卸载的 StrictMode 实例。
+    void getConfig()
+      .then((nextConfig) => {
+        if (!disposed) setConfig({ ...nextConfig, speech: latestSpeechConfigRef.current ?? nextConfig.speech });
+      })
+      .catch((error) => { if (!disposed) setStatus(error instanceof Error ? error.message : String(error)); });
+    return () => { disposed = true; };
+  }, []);
+
+  /** 朗读不可用时终止旧播放并清除按钮激活状态。 */
   useEffect(() => {
     if (speechReady || !activeSpeechKey) return;
     // 固钉窗口可能独立存在，配置关闭后也要停止已开始的朗读。
@@ -156,6 +201,7 @@ export function ResultWindowApp() {
     setDictionaryEntries(record.dictionary_entries ?? []);
   }
 
+  /** 将当前译文复制到系统剪贴板并展示执行结果。 */
   async function handleCopy() {
     if (!result.trim()) {
       setStatus(labels.noResultToCopy);
@@ -212,6 +258,7 @@ export function ResultWindowApp() {
     }
   }
 
+  /** 按语言和已启用口音展示对应的朗读操作。 */
   function renderSpeechButtons(text: string, lang: string, scope: "source" | "translation", label: string) {
     if (!speechReady || !text.trim()) return null;
     const disabled = !speechReady || !text.trim();
@@ -259,6 +306,7 @@ export function ResultWindowApp() {
     );
   }
 
+  /** 通过原生取消固钉操作关闭窗口。 */
   async function handleClose() {
     try {
       await unpinResultWindow();
@@ -329,11 +377,17 @@ function SpeechButton({
   onClick,
   tooltipLabel,
 }: {
+  /** 当前按钮是否正在朗读。 */
   active: boolean;
+  /** 英语口音的可选短标签。 */
   accentLabel?: string;
+  /** 提供给辅助技术的操作名称。 */
   ariaLabel: string;
+  /** 是否禁止触发朗读。 */
   disabled: boolean;
+  /** 点击后执行的朗读操作。 */
   onClick: () => void;
+  /** 可选的禁用原因或补充提示。 */
   tooltipLabel?: string;
 }) {
   return (
@@ -363,14 +417,21 @@ function IconTooltipButton({
   size = "icon",
   variant = "secondary",
 }: {
+  /** 按钮内部的图标和可选文字。 */
   children: React.ReactNode;
+  /** 补充按钮样式。 */
   className?: string;
+  /** 是否禁止触发按钮操作。 */
   disabled?: boolean;
+  /** 辅助技术名称与悬浮提示文案。 */
   label: string;
+  /** 点击按钮时执行的操作。 */
   onClick: () => void;
   /** Announces the current toggle state to assistive technology. */
   pressed?: boolean;
+  /** 按钮尺寸。 */
   size?: React.ComponentProps<typeof Button>["size"];
+  /** 按钮的视觉状态。 */
   variant?: React.ComponentProps<typeof Button>["variant"];
 }) {
   const button = (
@@ -397,17 +458,28 @@ function IconTooltipButton({
   );
 }
 
+/** 过滤受支持的英语口音，未配置时保留美式和英式。 */
 function visibleEnglishAccents(accents?: string[]): SpeechAccent[] {
   if (!accents) return ["american", "british"];
   return accents.filter((accent): accent is SpeechAccent => accent === "american" || accent === "british");
 }
 
 /** Reads and validates the user's last result-window logical size. */
-function readStoredResultWindowSize(): { width: number; height: number } | null {
+function readStoredResultWindowSize(): {
+  /** 经校验的逻辑窗口宽度。 */
+  width: number;
+  /** 经校验的逻辑窗口高度。 */
+  height: number;
+} | null {
   try {
     const raw = window.localStorage.getItem(RESULT_WINDOW_SIZE_STORAGE_KEY);
     if (!raw) return null;
-    const value = JSON.parse(raw) as { width?: unknown; height?: unknown };
+    const value = JSON.parse(raw) as {
+      /** 尚未校验的缓存宽度。 */
+      width?: unknown;
+      /** 尚未校验的缓存高度。 */
+      height?: unknown;
+    };
     if (typeof value.width !== "number" || typeof value.height !== "number") return null;
     if (!Number.isFinite(value.width) || !Number.isFinite(value.height)) return null;
     return {

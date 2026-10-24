@@ -69,3 +69,5 @@ goal
 !.env.example
 *.log
 .playwright-cli
+# Local browser review fixtures, screenshots, and reports.
+output/playwright/

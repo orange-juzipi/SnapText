@@ -92,8 +92,9 @@ export function clearOverlayScreenshot() {
   return tauriInvoke<void>("clear_overlay_screenshot");
 }
 
-export function closeOverlay() {
-  return tauriInvoke<void>("close_overlay");
+/** 只关闭发起操作的截图会话，避免迟到响应取消较新的截图。 */
+export function closeOverlay(sessionId?: string) {
+  return tauriInvoke<void>("close_overlay", { sessionId });
 }
 
 export function screenshotRegion(bbox: Region) {
@@ -133,8 +134,9 @@ export function ocrScreenshotRegion(bbox: Region) {
   return tauriInvoke<OcrTextResult>("ocr_screenshot_region", { bbox });
 }
 
-export function ocrOverlaySelection(bbox: Region, translateAfterOcr = true) {
-  return tauriInvoke<OcrTextResult>("ocr_overlay_selection", { bbox, translateAfterOcr });
+/** 在指定截图会话内识别选区，后端会拒绝已失效的截图。 */
+export function ocrOverlaySelection(bbox: Region, translateAfterOcr = true, sessionId?: string) {
+  return tauriInvoke<OcrTextResult>("ocr_overlay_selection", { bbox, translateAfterOcr, sessionId });
 }
 
 export function translateOverlaySelection(bbox: Region) {

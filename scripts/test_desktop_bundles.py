@@ -76,6 +76,7 @@ def create_installer_artifacts(bundle_dir: Path) -> None:
 
 
 def main() -> int:
+    """Exercise signed release checks and explicitly unsigned local DMG builds."""
     with tempfile.TemporaryDirectory(prefix="snaptext-desktop-bundles-") as temp:
         root = Path(temp)
         release_dir = root / "release"
@@ -175,6 +176,31 @@ def main() -> int:
             str(bundle_dir),
         )
         assert_failure_contains(empty_linux_artifact, "Generated file is empty")
+
+    with tempfile.TemporaryDirectory(prefix="snaptext-desktop-bundles-unsigned-") as temp:
+        release_dir = Path(temp) / "release"
+        bundle_dir = release_dir / "bundle"
+        write_file(release_dir / "snaptext-tauri", b"unix binary")
+        dmg = bundle_dir / "dmg" / "SnapText_0.1.0_aarch64.dmg"
+        write_file(dmg, b"unsigned dmg")
+        common_args = ["--release-dir", str(release_dir), "--bundle-dir", str(bundle_dir)]
+
+        # A local unsigned DMG deliberately has no updater or signature. The
+        # default signed release gate must still reject the same fixture.
+        assert_success(run_bundles("--platform", "macos", "--skip-updater", *common_args))
+        assert_failure_contains(
+            run_bundles("--platform", "macos", *common_args),
+            "Missing bundle artifacts matching",
+        )
+        assert_failure_contains(
+            run_bundles("--platform", "all", "--skip-updater", *common_args),
+            "--skip-updater cannot be used with --platform all",
+        )
+        dmg.write_bytes(b"")
+        assert_failure_contains(
+            run_bundles("--platform", "macos", "--skip-updater", *common_args),
+            "Generated file is empty",
+        )
 
     print("Desktop bundle verifier self-test passed.")
     return 0

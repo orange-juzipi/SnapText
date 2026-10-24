@@ -6,6 +6,9 @@ CARGO ?= cargo
 
 TAURI_DIR := crates/snaptext-tauri
 LOCAL_CARGO_TAURI := .tools/bin/cargo-tauri
+ifeq ($(OS),Windows_NT)
+LOCAL_CARGO_TAURI := $(LOCAL_CARGO_TAURI).exe
+endif
 CARGO_TAURI := $(abspath $(LOCAL_CARGO_TAURI))
 HOST_SYSTEM := $(shell uname -s 2>/dev/null || echo Windows)
 

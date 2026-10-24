@@ -98,6 +98,10 @@ async function ensureStopListener(): Promise<void> {
     if (active?.id === event.payload.session_id) finish(active);
   }).then(() => {
     window.addEventListener("beforeunload", stopSpeech);
+  }).catch((error: unknown) => {
+    // 窗口启动时 IPC 可能暂时不可用，下一次点击应能重新注册而非永久复用拒绝结果。
+    stopListener = undefined;
+    throw error;
   });
   await stopListener;
 }

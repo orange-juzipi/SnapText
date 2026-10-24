@@ -142,6 +142,8 @@ export type SelectionTextPayload = {
 };
 
 export type ScreenshotPayload = {
+  /** 本次截图的原生会话标识；旧版本或预览数据可能没有此字段。 */
+  session_id?: string;
   meta: ScreenshotMeta;
   base64_png: string;
 };

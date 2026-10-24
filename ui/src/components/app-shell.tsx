@@ -25,6 +25,7 @@ import type {
   TranslationResult,
 } from "@/lib/types";
 
+/** 协调页面导航和原生 OCR、划词事件，保持异步翻译的唯一所有权。 */
 export function AppShell() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -34,7 +35,8 @@ export function AppShell() {
   const updateConfig = useUpdateConfigMutation();
   const labels = labelsForLanguage(configQuery.data?.ui.language);
   const workspace = useWorkspaceState();
-  const directTranslationRunIdRef = useRef(0);
+  const liveContextRef = useRef({ pathname, labels, sourceLang: workspace.sourceLang, targetLang: workspace.targetLang });
+  liveContextRef.current = { pathname, labels, sourceLang: workspace.sourceLang, targetLang: workspace.targetLang };
   const {
     setOcrTextInput,
     setPinned,
@@ -44,18 +46,20 @@ export function AppShell() {
     setOcrLoading,
     setStatus,
     setTranslating,
+    beginTranslation,
+    isTranslationCurrent,
+    finishTranslation,
+    cancelTranslation,
     showError,
-    clearResult,
-    sourceLang,
-    targetLang,
   } = workspace;
 
+  /** 原生流程跳回首页时不重建监听器，也不使刚发出的翻译失效。 */
   const ensureWorkspaceRoute = useCallback(() => {
     // Capture and selection flows update the workspace panels, so surface them immediately.
-    if (pathname !== "/") {
+    if (liveContextRef.current.pathname !== "/") {
       void navigate({ to: "/" });
     }
-  }, [navigate, pathname]);
+  }, [navigate]);
 
   useEffect(() => {
     const config = configQuery.data;
@@ -84,7 +88,8 @@ export function AppShell() {
     const unlisteners: Array<() => void> = [];
     let disposed = false;
 
-    const register = <T,>(listener: Promise<() => void>) => {
+    /** 异步注册成功时若已卸载，立即释放迟到的监听器。 */
+    const register = (listener: Promise<() => void>) => {
       listener
         .then((unlisten) => {
           // Tauri listener registration is async. If React has already cleaned
@@ -103,60 +108,66 @@ export function AppShell() {
 
     register(tauriListen<TranslationResult>(events.resultTranslation, (event) => {
       // A native image/overlay result supersedes any direct selection request still in flight.
-      directTranslationRunIdRef.current += 1;
+      if (disposed) return;
       setResultFromTranslation(event.payload);
-      setStatus(labels.regionTranslated);
+      setStatus(liveContextRef.current.labels.regionTranslated);
     }));
     register(tauriListen<HistoryRecord>(events.resultSelection, (event) => {
-      directTranslationRunIdRef.current += 1;
+      if (disposed) return;
       ensureWorkspaceRoute();
       setResultFromHistory(event.payload);
-      setStatus(labels.textTranslated);
+      setStatus(liveContextRef.current.labels.textTranslated);
     }));
     register(tauriListen<SelectionTextPayload>(events.selectionText, (event) => {
       const sourceText = event.payload.text;
-      const runId = directTranslationRunIdRef.current + 1;
-      directTranslationRunIdRef.current = runId;
+      if (disposed) return;
       ensureWorkspaceRoute();
       setOcrLoading(false);
       setOcrTextInput(sourceText, "selection");
-      setStatus(labels.selectionTextExtracted);
-      setTranslating(true);
+      setStatus(liveContextRef.current.labels.selectionTextExtracted);
+      const { sourceLang, targetLang } = liveContextRef.current;
+      const runId = beginTranslation();
       translateText(sourceText, resolveTargetLang(sourceText, targetLang), resolveSourceLang(sourceText, sourceLang) ?? AUTO_SOURCE_LANG)
         .then((record) => {
-          if (runId !== directTranslationRunIdRef.current) return;
+          if (disposed || !isTranslationCurrent(runId)) return;
           setResultSnapshot({ ...record, source: "selection" });
-          setStatus(labels.textTranslated);
+          setStatus(liveContextRef.current.labels.textTranslated);
           void queryClient.invalidateQueries({ queryKey: queryKeys.history(), exact: false });
         })
         .catch((error) => {
-          if (runId !== directTranslationRunIdRef.current) return;
+          if (disposed || !isTranslationCurrent(runId)) return;
           showError(errorMessage(error));
         })
         .finally(() => {
-          if (runId === directTranslationRunIdRef.current) setTranslating(false);
+          if (!disposed) finishTranslation(runId);
         });
     }));
     register(tauriListen<SelectionFailurePayload>(events.resultSelectionFailed, (event) => {
-      directTranslationRunIdRef.current += 1;
+      if (disposed) return;
+      cancelTranslation();
       ensureWorkspaceRoute();
       setTranslating(false);
       setOcrLoading(false);
       showError(errorMessage(event.payload.message));
     }));
     register(tauriListen(events.overlayOcrStarted, () => {
-      directTranslationRunIdRef.current += 1;
+      if (disposed) return;
+      cancelTranslation();
       ensureWorkspaceRoute();
       setOcrLoading(true);
       setTranslating(false);
-      setStatus(labels.ocrSelectedRegion);
+      setStatus(liveContextRef.current.labels.ocrSelectedRegion);
     }));
-    register(tauriListen(events.overlayOcrFailed, () => {
-      directTranslationRunIdRef.current += 1;
+    register(tauriListen<Partial<SelectionFailurePayload>>(events.overlayOcrFailed, (event) => {
+      if (disposed) return;
+      cancelTranslation();
       setOcrLoading(false);
       setTranslating(false);
+      // OCR 期间选区窗口已隐藏，错误必须由用户仍能看见的主窗口展示。
+      if (event.payload?.message) showError(errorMessage(event.payload.message));
     }));
     register(tauriListen<OverlayOcrPayload>(events.overlayOcr, (event) => {
+      if (disposed) return;
       const sourceText = event.payload.result.source_text;
       setOcrLoading(false);
       setOcrTextInput(
@@ -165,47 +176,43 @@ export function AppShell() {
         event.payload.result.text_lines,
         event.payload.translate_after_ocr === false,
       );
-      setStatus(labels.ocrTextExtracted);
+      setStatus(liveContextRef.current.labels.ocrTextExtracted);
       // Overlay mode can intentionally stop after OCR so the user can correct text first.
       if (event.payload.translate_after_ocr === false) {
-        directTranslationRunIdRef.current += 1;
         setTranslating(false);
         return;
       }
-      const runId = directTranslationRunIdRef.current + 1;
-      directTranslationRunIdRef.current = runId;
-      setTranslating(true);
+      const { sourceLang, targetLang } = liveContextRef.current;
+      const runId = beginTranslation();
       translateText(sourceText, resolveTargetLang(sourceText, targetLang), resolveSourceLang(sourceText, sourceLang) ?? AUTO_SOURCE_LANG)
         .then((record) => {
-          if (runId !== directTranslationRunIdRef.current) return;
+          if (disposed || !isTranslationCurrent(runId)) return;
           setResultSnapshot({ ...record, source: "screenshot" });
-          setStatus(labels.regionTranslated);
+          setStatus(liveContextRef.current.labels.regionTranslated);
           void queryClient.invalidateQueries({ queryKey: queryKeys.history(), exact: false });
         })
         .catch((error) => {
-          if (runId !== directTranslationRunIdRef.current) return;
+          if (disposed || !isTranslationCurrent(runId)) return;
           showError(errorMessage(error));
         })
         .finally(() => {
-          if (runId === directTranslationRunIdRef.current) setTranslating(false);
+          if (!disposed) finishTranslation(runId);
         });
     }));
     register(tauriListen<boolean>(events.resultWindowState, (event) => {
+      if (disposed) return;
       setPinned(Boolean(event.payload));
     }));
     return () => {
-      // In-flight native events belong to this listener generation; invalidate them before detaching.
-      directTranslationRunIdRef.current += 1;
+      // Disposed guards reject work from this listener generation without cancelling another owner's request.
       disposed = true;
       unlisteners.forEach((unlisten) => unlisten());
     };
   }, [
-    labels.regionTranslated,
-    labels.textTranslated,
-    labels.selectionTextExtracted,
-    labels.ocrSelectedRegion,
-    labels.ocrTextExtracted,
-    clearResult,
+    beginTranslation,
+    isTranslationCurrent,
+    finishTranslation,
+    cancelTranslation,
     ensureWorkspaceRoute,
     queryClient,
     setPinned,
@@ -217,8 +224,6 @@ export function AppShell() {
     setStatus,
     setTranslating,
     showError,
-    sourceLang,
-    targetLang,
   ]);
 
   return (
@@ -260,6 +265,7 @@ export function AppShell() {
   );
 }
 
+/** 只将已经移除的服务商配置迁移到默认提供商。 */
 function isVisibleProvider(provider?: string) {
   return provider === "snaptext_cloud" || provider === "deepl" || provider === "google";
 }

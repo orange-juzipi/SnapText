@@ -13,6 +13,7 @@ import {
   updateConfig,
 } from "@/lib/api";
 import type { ImagePreprocessOptions, Region } from "@/lib/types";
+import { createConfigMutationOptions } from "@/lib/config-mutation";
 
 export const queryKeys = {
   config: ["config"] as const,
@@ -64,14 +65,10 @@ export function useSearchHistoryQuery(
   });
 }
 
+/** 设置页、快捷设置和配置迁移共享串行保存与最新草稿缓存。 */
 export function useUpdateConfigMutation() {
   const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: updateConfig,
-    onSuccess: (config) => {
-      queryClient.setQueryData(queryKeys.config, config);
-    },
-  });
+  return useMutation(createConfigMutationOptions(queryClient, updateConfig));
 }
 
 export function useTranslateTextMutation() {

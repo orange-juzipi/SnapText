@@ -8,6 +8,8 @@ const commands: Array<{ command: string; args: any }> = [];
 const utterances: any[] = [];
 /** 跨窗口停止订阅。 */
 let stopHandler: (event: any) => void;
+/** 首次窗口启动时模拟一次临时监听注册失败。 */
+let failNextListen = false;
 /** 当前模拟流。 */
 let stream: { sessionId: string; channel: TestChannel; resolve: () => void } | undefined;
 /** 能力接口的可控异步结果。 */
@@ -19,7 +21,11 @@ async function invoke(command: string, args: any = {}) {
   if (command === 'start_cloud_speech') return new Promise<void>((resolve) => { stream = { ...args, resolve }; });
 }
 mock.module('@tauri-apps/api/core', () => ({ isTauri: () => true, Channel: TestChannel }));
-mock.module('@tauri-apps/api/event', () => ({ listen: async (_name: string, handler: any) => { stopHandler = handler; return () => {}; } }));
+mock.module('@tauri-apps/api/event', () => ({ listen: async (_name: string, handler: any) => {
+  if (failNextListen) { failNextListen = false; throw new Error('listener unavailable'); }
+  stopHandler = handler;
+  return () => {};
+} }));
 mock.module('@/lib/tauri', () => ({ tauriInvoke: invoke }));
 /** 保存系统发音参数，不产生实际声音。 */
 class Utterance { /** 待朗读文本。 */ text: string; /** 创建可检查对象。 */ constructor(text: string) { this.text = text; } }
@@ -59,6 +65,14 @@ async function begin(options: Record<string, unknown> = {}) {
   await settle();
   return { ready };
 }
+/** 一次临时 IPC 注册失败不能使此窗口后续所有朗读永久失败。 */
+test('retries stop listener registration after a temporary startup failure', async () => {
+  failNextListen = true;
+  await expect(speakText({ text: 'first', lang: 'en', config })).rejects.toThrow('listener unavailable');
+  await speakText({ text: 'retry', lang: 'en', config: { ...config, engine: 'system' } });
+  expect(utterances.length).toBe(1);
+  expect(typeof stopHandler).toBe('function');
+});
 /** 首段触发播放和 ACK，done 仍需等待本地队列结束。 */
 test('first audio starts and done waits for playback', async () => {
   let ended = 0;

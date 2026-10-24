@@ -57,8 +57,10 @@ def run(cmd: list[str], cwd: Path = ROOT) -> None:
 
 
 def cargo_tauri() -> str:
-    if LOCAL_CARGO_TAURI.is_file():
-        return str(LOCAL_CARGO_TAURI)
+    """Resolve the locally installed CLI, including Windows executable suffixes."""
+    local_cli = LOCAL_CARGO_TAURI.with_suffix(".exe") if os.name == "nt" else LOCAL_CARGO_TAURI
+    if local_cli.is_file():
+        return str(local_cli)
     resolved = shutil.which("cargo-tauri")
     if resolved is not None:
         return resolved
@@ -149,6 +151,7 @@ def packaging_commands(args: argparse.Namespace, tauri: str, current_platform: s
 
 
 def main(argv: list[str]) -> int:
+    """Build platform artifacts and verify the enabled installer/signing modes."""
     args = parse_args(argv)
     tauri = "cargo-tauri" if args.dry_run else cargo_tauri()
     current_platform = detect_platform()
@@ -163,8 +166,17 @@ def main(argv: list[str]) -> int:
             run(command, cwd=cwd)
 
     verify_args = ["--platform", "current"]
-    if args.skip_installers:
+    # An explicit app-only build creates no DMG; validate its executable and
+    # Info.plist using the existing app bundle gate instead of requiring a disk image.
+    app_only = current_platform == "macos" and args.bundles is not None and {
+        bundle.strip() for bundle in args.bundles.split(",")
+    } == {"app"}
+    if args.skip_installers or app_only:
         verify_args.append("--skip-installers")
+    if current_platform == "macos" and args.no_sign:
+        # --no-sign disables updater output; requiring its signature would make
+        # an otherwise successful unsigned DMG build fail verification.
+        verify_args.append("--skip-updater")
     if args.dry_run:
         print("verify_desktop_bundles.py " + " ".join(verify_args))
         return 0

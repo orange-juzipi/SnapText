@@ -64,9 +64,7 @@ use screenshots::screenshot_full_inner_at;
 use screenshots::screenshot_region_inner;
 #[cfg(target_os = "macos")]
 use screenshots::{capture_macos_interactive_screenshot, payload_to_full_region};
-use state::AppState;
-#[cfg(not(target_os = "macos"))]
-use state::OverlaySession;
+use state::{AppState, OverlaySession};
 #[cfg(not(test))]
 use tray::setup_tray;
 #[cfg(not(test))]
@@ -373,8 +371,10 @@ fn get_config(state: State<'_, AppState>) -> Result<AppConfig> {
 #[allow(dead_code)]
 async fn get_cloud_health(state: State<'_, AppState>) -> Result<serde_json::Value> {
     let config = get_config_inner(state.inner())?;
-    let endpoint = config
-        .translator
+    let mut translator = config.translator;
+    // Health checks must use the same local-development endpoint as translation and speech.
+    apply_snaptext_cloud_runtime_override(&mut translator)?;
+    let endpoint = translator
         .snaptext_cloud
         .endpoint
         .join("v1/health")
@@ -789,6 +789,7 @@ async fn ocr_screenshot_region(
     ocr_screenshot_region_inner(state.inner(), bbox).await
 }
 
+/// Recognizes the selected screenshot only while its overlay session remains current.
 #[tauri::command]
 #[allow(dead_code)]
 async fn ocr_overlay_selection(
@@ -796,18 +797,21 @@ async fn ocr_overlay_selection(
     state: State<'_, AppState>,
     bbox: snaptext_core::ocr::BBox,
     translate_after_ocr: Option<bool>,
+    session_id: Option<String>,
 ) -> Result<OcrTextResult> {
-    let restore_main_window = overlay_restore_main_window(state.inner())?;
+    let session = overlay_session_for_request(state.inner(), session_id.as_deref())?;
     hide_overlay_window(&app)?;
-    restore_main_window_if_needed(&app, restore_main_window)?;
+    restore_main_window_if_needed(&app, session.restore_main_window)?;
 
-    let result = ocr_overlay_selection_inner(state.inner(), bbox).await?;
-    emit_overlay_ocr(
-        &app,
-        result.clone(),
-        bbox,
-        translate_after_ocr.unwrap_or(true),
-    );
+    let result = ocr_overlay_selection_inner(state.inner(), &session.screenshot, bbox).await?;
+    if overlay_session_is_current(state.inner(), &session.screenshot.session_id)? {
+        emit_overlay_ocr(
+            &app,
+            result.clone(),
+            bbox,
+            translate_after_ocr.unwrap_or(true),
+        );
+    }
     Ok(result)
 }
 
@@ -834,20 +838,17 @@ async fn translate_overlay_selection(
     Ok(result)
 }
 
+/// Closes the requesting overlay without clearing a newer screenshot that replaced it.
 #[tauri::command]
 #[allow(dead_code)]
-fn close_overlay(app: AppHandle, state: State<'_, AppState>) -> Result<()> {
-    let restore_main_window = {
-        let mut pending = state
-            .pending_overlay
-            .lock()
-            .map_err(|err| Error::Config(err.to_string()))?;
-        let restore_main_window = pending
-            .as_ref()
-            .map(|session| session.restore_main_window)
-            .unwrap_or(false);
-        *pending = None;
-        restore_main_window
+fn close_overlay(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    session_id: Option<String>,
+) -> Result<()> {
+    let Some(restore_main_window) = finish_overlay_session(state.inner(), session_id.as_deref())?
+    else {
+        return Ok(());
     };
     hide_overlay_window(&app)?;
     restore_main_window_if_needed(&app, restore_main_window)
@@ -1161,35 +1162,64 @@ async fn translate_overlay_selection_inner(
     translate_dynamic_image_inner(state, cropped, HistorySource::Screenshot).await
 }
 
-fn overlay_restore_main_window(state: &AppState) -> Result<bool> {
+/// Resolves the exact screenshot requested by a WebView before starting asynchronous work.
+fn overlay_session_for_request(
+    state: &AppState,
+    session_id: Option<&str>,
+) -> Result<OverlaySession> {
+    let pending = state
+        .pending_overlay
+        .lock()
+        .map_err(|err| Error::Config(err.to_string()))?;
+    let session = pending
+        .as_ref()
+        .ok_or_else(|| Error::Image("no active screenshot overlay is available".to_owned()))?;
+    if session_id.is_some_and(|id| id != session.screenshot.session_id) {
+        return Err(Error::Image(
+            "screenshot overlay session was replaced".to_owned(),
+        ));
+    }
+    Ok(session.clone())
+}
+
+/// Checks ownership again after OCR so an older result cannot overwrite a newer capture.
+fn overlay_session_is_current(state: &AppState, session_id: &str) -> Result<bool> {
     let pending = state
         .pending_overlay
         .lock()
         .map_err(|err| Error::Config(err.to_string()))?;
     Ok(pending
         .as_ref()
-        .map(|session| session.restore_main_window)
-        .unwrap_or(false))
+        .is_some_and(|session| session.screenshot.session_id == session_id))
 }
 
+/// Removes only the matching session and returns its main-window restoration policy.
+fn finish_overlay_session(state: &AppState, session_id: Option<&str>) -> Result<Option<bool>> {
+    let mut pending = state
+        .pending_overlay
+        .lock()
+        .map_err(|err| Error::Config(err.to_string()))?;
+    if let Some(expected) = session_id
+        && !pending
+            .as_ref()
+            .is_some_and(|session| session.screenshot.session_id == expected)
+    {
+        return Ok(None);
+    }
+    Ok(Some(
+        pending
+            .take()
+            .is_some_and(|session| session.restore_main_window),
+    ))
+}
+
+/// Runs OCR against the captured snapshot rather than reading a potentially replaced session.
 async fn ocr_overlay_selection_inner(
     state: &AppState,
+    screenshot: &ScreenshotPayload,
     bbox: snaptext_core::ocr::BBox,
 ) -> Result<OcrTextResult> {
-    let pending = {
-        state
-            .pending_overlay
-            .lock()
-            .map_err(|err| Error::Config(err.to_string()))?
-            .clone()
-    };
-    let Some(session) = pending else {
-        return Err(Error::Image(
-            "no active screenshot overlay is available".to_owned(),
-        ));
-    };
-
-    let image = png_payload_to_image(&session.screenshot.base64_png)?;
+    let image = png_payload_to_image(&screenshot.base64_png)?;
     let cropped = crop_image(&image, bbox)?;
     ocr_dynamic_image_inner(state, cropped).await
 }

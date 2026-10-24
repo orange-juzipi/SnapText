@@ -85,8 +85,14 @@ pub struct TranslatorRegistry {
 }
 
 impl TranslatorRegistry {
+    /// Bounds connection and response waits so an unavailable provider cannot leave the UI busy forever.
     pub fn new(config: TranslatorConfig) -> Self {
-        Self::with_client(config, Client::new())
+        let client = Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(120))
+            .build()
+            .expect("translation HTTP client initialization failed");
+        Self::with_client(config, client)
     }
 
     pub fn with_client(config: TranslatorConfig, client: Client) -> Self {
@@ -688,26 +694,55 @@ fn openai_payload(config: &OpenAiCompatibleConfig, req: &TranslateRequest) -> Va
     })
 }
 
+/// Converts app language identifiers into DeepL's source and target language codes.
+fn deepl_language_code(language: &str, is_source: bool) -> String {
+    let normalized = language.trim().replace('_', "-").to_ascii_uppercase();
+    match normalized.as_str() {
+        "ZH" | "ZH-CN" | "ZH-SG" | "ZH-HANS" if is_source => "ZH".to_owned(),
+        "ZH-TW" | "ZH-HK" | "ZH-MO" | "ZH-HANT" if is_source => "ZH".to_owned(),
+        "ZH" | "ZH-CN" | "ZH-SG" | "ZH-HANS" => "ZH-HANS".to_owned(),
+        "ZH-TW" | "ZH-HK" | "ZH-MO" | "ZH-HANT" => "ZH-HANT".to_owned(),
+        "NO" => "NB".to_owned(),
+        _ => normalized,
+    }
+}
+
+/// Converts Chinese app identifiers into the codes accepted by Google Translate v2.
+fn google_language_code(language: &str) -> String {
+    let normalized = language.trim().replace('_', "-");
+    match normalized.to_ascii_lowercase().as_str() {
+        "zh-cn" | "zh-sg" | "zh-hans" => "zh-CN".to_owned(),
+        "zh-tw" | "zh-hk" | "zh-mo" | "zh-hant" => "zh-TW".to_owned(),
+        _ => normalized,
+    }
+}
+
+/// Serializes a DeepL request with provider-specific language codes and automatic detection.
 fn deepl_payload(req: &TranslateRequest) -> Value {
     let mut payload = json!({
         "text": req.texts,
-        "target_lang": req.target.0.to_uppercase(),
+        "target_lang": deepl_language_code(&req.target.0, false),
     });
-    if let Some(source) = req.source.as_ref() {
-        payload["source_lang"] = Value::String(source.0.to_uppercase());
+    if let Some(source) = req.source.as_ref()
+        && !source.0.trim().eq_ignore_ascii_case("auto")
+    {
+        payload["source_lang"] = Value::String(deepl_language_code(&source.0, true));
     }
     payload
 }
 
+/// Serializes a Google request while preserving Simplified versus Traditional Chinese.
 fn google_payload(req: &TranslateRequest, api_key: &str) -> Value {
     let mut payload = json!({
         "q": req.texts,
-        "target": req.target.0,
+        "target": google_language_code(&req.target.0),
         "format": "text",
         "key": api_key,
     });
-    if let Some(source) = req.source.as_ref() {
-        payload["source"] = Value::String(source.0.clone());
+    if let Some(source) = req.source.as_ref()
+        && !source.0.trim().eq_ignore_ascii_case("auto")
+    {
+        payload["source"] = Value::String(google_language_code(&source.0));
     }
     payload
 }
@@ -956,6 +991,47 @@ mod tests {
         assert_eq!(payload["target"], "fr");
         assert_eq!(payload["format"], "text");
         assert_eq!(payload["key"], "key-123");
+    }
+
+    /// Ensures language choices emitted by the UI work for both external translation APIs.
+    #[test]
+    fn provider_payloads_map_app_chinese_and_norwegian_language_codes() {
+        for (language, deepl_target, google_code) in [
+            ("zh_cn", "ZH-HANS", "zh-CN"),
+            ("zh_tw", "ZH-HANT", "zh-TW"),
+            ("zh-Hans", "ZH-HANS", "zh-CN"),
+            ("zh-Hant", "ZH-HANT", "zh-TW"),
+        ] {
+            let request = TranslateRequest {
+                texts: vec!["Hello".to_owned()],
+                source: Some(Lang(language.to_owned())),
+                target: Lang(language.to_owned()),
+            };
+            let deepl = deepl_payload(&request);
+            assert_eq!(deepl["source_lang"], "ZH");
+            assert_eq!(deepl["target_lang"], deepl_target);
+            let google = google_payload(&request, "test-key");
+            assert_eq!(google["source"], google_code);
+            assert_eq!(google["target"], google_code);
+        }
+        assert_eq!(deepl_language_code("no", false), "NB");
+        assert_eq!(deepl_language_code("no", true), "NB");
+    }
+
+    /// Keeps automatic source detection enabled instead of sending an invalid AUTO language.
+    #[test]
+    fn provider_payloads_omit_automatic_source_language() {
+        let request = TranslateRequest {
+            texts: vec!["Hello".to_owned()],
+            source: Some(Lang("auto".to_owned())),
+            target: resolve_auto_target_lang("Hello", Lang("auto".to_owned())),
+        };
+        let deepl = deepl_payload(&request);
+        assert!(deepl.get("source_lang").is_none());
+        assert_eq!(deepl["target_lang"], "ZH-HANS");
+        let google = google_payload(&request, "test-key");
+        assert!(google.get("source").is_none());
+        assert_eq!(google["target"], "zh-CN");
     }
 
     #[test]

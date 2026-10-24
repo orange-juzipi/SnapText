@@ -1,4 +1,5 @@
 use std::io::Cursor;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::{DynamicImage, ImageFormat, RgbaImage};
@@ -6,6 +7,8 @@ use snaptext_core::{Error, Result, screenshot::ImageMeta};
 
 const MAX_IMAGE_PAYLOAD_BYTES: usize = 25 * 1024 * 1024;
 const MAX_IMAGE_PIXELS: u64 = 24_000_000;
+/// Monotonic identifier prevents overlapping screenshots from sharing overlay ownership.
+static SCREENSHOT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Describes the bounded image transformations exposed by the image workspace.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -59,11 +62,16 @@ impl ImagePreprocessOptions {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct ScreenshotPayload {
+    /// Screenshot dimensions and optional file path.
     pub meta: ImageMeta,
+    /// PNG bytes encoded for transfer into a WebView.
     pub base64_png: String,
+    /// Process-local screenshot identity serialized as text to avoid JavaScript precision loss.
+    pub session_id: String,
 }
 
 impl ScreenshotPayload {
+    /// Encodes a screenshot and assigns a distinct identity for asynchronous overlay work.
     pub(crate) fn from_image(image: RgbaImage) -> Result<Self> {
         let width = image.width();
         let height = image.height();
@@ -77,6 +85,9 @@ impl ScreenshotPayload {
                 path: None,
             },
             base64_png: STANDARD.encode(png),
+            session_id: SCREENSHOT_SESSION_ID
+                .fetch_add(1, Ordering::Relaxed)
+                .to_string(),
         })
     }
 }

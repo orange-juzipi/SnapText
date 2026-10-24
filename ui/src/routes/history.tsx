@@ -35,6 +35,7 @@ import type { HistoryRecord } from "@/lib/types";
 const HISTORY_LIMIT = 50;
 const HISTORY_SOURCES = ["", "text", "screenshot", "selection", "image"] as const;
 
+/** Displays local history with explicit loading, filter, and failure states. */
 export function HistoryPage() {
   const configQuery = useConfigQuery();
   const labels = labelsForLanguage(configQuery.data?.ui.language);
@@ -246,12 +247,17 @@ export function HistoryPage() {
         {historyQuery.isError ? (
           <div className="history-empty-state" role="alert">
             <FileText className="mx-auto mb-3 text-destructive" size={28} />
-            <strong className="text-sm">{labels.historyLoading}</strong>
+            <strong className="text-sm">{labels.operationFailed}</strong>
             <p className="mt-1 text-sm text-muted-foreground">
               {historyQuery.error instanceof Error ? historyQuery.error.message : String(historyQuery.error)}
             </p>
           </div>
-        ) : items.length === 0 ? (
+        ) : historyQuery.isPending && historyQuery.isFetching ? (
+          <div className="history-empty-state" role="status" aria-live="polite">
+            <RefreshCw className="mx-auto mb-3 history-refresh-spinning text-muted-foreground" size={28} />
+            <strong className="text-sm">{labels.historyLoading}</strong>
+          </div>
+        ) : !dateFilterError && items.length === 0 ? (
           <div className="history-empty-state">
             <FileText className="mx-auto mb-3 text-muted-foreground" size={28} />
             <strong className="text-sm">{isFiltered ? labels.historySearchEmpty : labels.noHistoryTitle}</strong>
@@ -259,7 +265,7 @@ export function HistoryPage() {
               {isFiltered ? labels.historySearchEmpty : labels.noHistoryDescription}
             </p>
           </div>
-        ) : (
+        ) : items.length > 0 ? (
           <ol className="history-record-list">
             {items.map((item) => (
               <li key={item.id} className="history-record">
@@ -323,7 +329,7 @@ export function HistoryPage() {
               </li>
             ))}
           </ol>
-        )}
+        ) : null}
       </CardContent>
     </Card>
   );

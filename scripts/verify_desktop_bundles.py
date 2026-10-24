@@ -90,7 +90,9 @@ def verify_macos(
     require_installers: bool,
     release_dir: Path,
     bundle_dir: Path,
+    require_updater: bool = True,
 ) -> None:
+    """Verify macOS binaries and the artifacts enabled for the signing mode."""
     binary = release_dir / "snaptext-tauri"
     app_bundle = bundle_dir / "macos" / f"{product_name}.app"
     app_executable = app_bundle / "Contents" / "MacOS" / "snaptext-tauri"
@@ -98,7 +100,7 @@ def verify_macos(
 
     require_nonempty_file(binary, "Run cargo-tauri build on macOS first.")
     if require_installers:
-        verify_macos_installers(product_name, version, bundle_dir)
+        verify_macos_installers(product_name, version, bundle_dir, require_updater=require_updater)
     else:
         # Tauri's dmg bundler can remove the intermediate .app after creating
         # the disk image. Only require the app bundle in no-installer checks.
@@ -107,7 +109,13 @@ def verify_macos(
         require_nonempty_file(app_info, "The .app bundle is missing Info.plist.")
 
 
-def verify_macos_installers(product_name: str, version: str, bundle_dir: Path) -> None:
+def verify_macos_installers(
+    product_name: str,
+    version: str,
+    bundle_dir: Path,
+    require_updater: bool = True,
+) -> None:
+    """Require a DMG and, for signed releases, its signed updater artifacts."""
     dmg_patterns = [f"dmg/{product_name}_{version}_*.dmg"]
     updater_patterns = [f"macos/{product_name}*.tar.gz"]
     updater_signature_patterns = [f"macos/{product_name}*.tar.gz.sig"]
@@ -122,6 +130,8 @@ def verify_macos_installers(product_name: str, version: str, bundle_dir: Path) -
         dmg_patterns,
         "Run cargo-tauri build --bundles dmg on macOS.",
     )
+    if not require_updater:
+        return
     require_any_nonempty(
         bundle_dir,
         updater_patterns,
@@ -227,6 +237,7 @@ def detect_platform() -> str:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse the target platform and enabled artifact checks."""
     parser = argparse.ArgumentParser(
         description="Verify Tauri desktop bundle artifacts for SnapText."
     )
@@ -242,6 +253,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Only verify release binaries and app bundle directories, not installer files.",
     )
     parser.add_argument(
+        "--skip-updater",
+        action="store_true",
+        help="Skip macOS signed updater checks for builds with createUpdaterArtifacts disabled.",
+    )
+    parser.add_argument(
         "--release-dir",
         default=str(RELEASE_DIR),
         help="Directory containing platform release binaries.",
@@ -255,7 +271,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Verify the selected local build or the complete signed release set."""
     args = parse_args(argv)
+    if args.platform == "all" and args.skip_updater:
+        raise SystemExit("--skip-updater cannot be used with --platform all release checks")
     config = read_tauri_config()
     product_name = config.get("productName", "SnapText")
     version = config.get("version", "0.1.0")
@@ -270,7 +289,10 @@ def main(argv: list[str] | None = None) -> int:
         platforms = [detect_platform()] if args.platform == "current" else [args.platform]
         for target in platforms:
             if target == "macos":
-                verify_macos(product_name, version, require_installers, release_dir, bundle_dir)
+                verify_macos(
+                    product_name, version, require_installers, release_dir, bundle_dir,
+                    require_updater=not args.skip_updater,
+                )
             elif target == "windows":
                 verify_windows(product_name, version, require_installers, release_dir, bundle_dir)
             elif target == "linux":

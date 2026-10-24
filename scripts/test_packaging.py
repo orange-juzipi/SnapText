@@ -6,7 +6,13 @@ from __future__ import annotations
 import os
 import sys
 import subprocess
+import tempfile
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import package_desktop
+import package_macos
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,6 +48,8 @@ def assert_not_contains(output: str, unexpected: str) -> None:
 
 
 def main() -> int:
+    """Verify packaging modes, tag metadata, and local CLI lookup on both OS families."""
+    verify_local_cli_resolution()
     desktop_model_check = "python3 scripts/verify_ocr_models.py models --require-sha256"
     if sys.platform == "darwin":
         desktop_model_check = (
@@ -60,6 +68,14 @@ def main() -> int:
     assert_contains(desktop_bundle.stdout, "cargo-tauri build --bundles msi")
     assert_contains(desktop_bundle.stdout, "--config {\"bundle\":{\"createUpdaterArtifacts\":false}} --no-sign")
     assert_contains(desktop_bundle.stdout, "verify_desktop_bundles.py --platform current")
+
+    if sys.platform == "darwin":
+        app_only = run_script("package_desktop.py", "--bundles", "app", "--no-sign")
+        assert_success(app_only)
+        assert_contains(
+            app_only.stdout,
+            "verify_desktop_bundles.py --platform current --skip-installers --skip-updater",
+        )
 
     skip_smoke_env = {"SNAPTEXT_SKIP_OCR_SMOKE_TEST": "1"}
     desktop_skip_smoke = run_script("package_desktop.py", "--bundles", "deb", env=skip_smoke_env)
@@ -90,6 +106,11 @@ def main() -> int:
     assert_success(macos_unsigned)
     assert_contains(macos_unsigned.stdout, "cargo-tauri build --bundles app")
     assert_contains(macos_unsigned.stdout, "--config {\"bundle\":{\"createUpdaterArtifacts\":false}} --no-sign")
+
+    macos_unsigned_dmg = run_script("package_macos.py", "--no-sign")
+    assert_success(macos_unsigned_dmg)
+    assert_contains(macos_unsigned_dmg.stdout, "cargo-tauri build --bundles dmg")
+    assert_contains(macos_unsigned_dmg.stdout, "require_dmg=True require_updater=False")
 
     macos_ad_hoc = run_script("package_macos.py", "--skip-dmg", "--ad-hoc-sign")
     assert_success(macos_ad_hoc)
@@ -146,6 +167,24 @@ def main() -> int:
 
     print("Packaging command self-test passed.")
     return 0
+
+
+def verify_local_cli_resolution() -> None:
+    """Use fixture executables to check local CLI lookup without a global install."""
+    with tempfile.TemporaryDirectory(prefix="snaptext-local-cli-") as temp:
+        base_path = Path(temp) / "cargo-tauri"
+        for module in (package_desktop, package_macos):
+            for os_name, executable in (("posix", base_path), ("nt", base_path.with_suffix(".exe"))):
+                executable.write_bytes(b"fixture cli")
+                with (
+                    patch.object(module, "LOCAL_CARGO_TAURI", base_path),
+                    patch.object(module, "os", SimpleNamespace(name=os_name)),
+                    patch.object(module.shutil, "which", return_value=None),
+                ):
+                    resolved = module.cargo_tauri()
+                if resolved != str(executable):
+                    raise SystemExit(f"Expected local {os_name} CLI {executable}, got {resolved}")
+                executable.unlink()
 
 
 if __name__ == "__main__":

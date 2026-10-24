@@ -5260,7 +5260,15 @@ input[type="range"]:disabled {
 }
 
 @media (min-width: 760px) and (max-width: 979px) {
+  /* Stacked panels exceed a desktop window's height; preserve access to the second panel. */
+  .app-content:has(.workspace-page) {
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
   .app-content .workspace-grid {
+    height: auto;
+    min-height: 100%;
     grid-template-rows: minmax(375px, auto) 44px minmax(375px, auto);
   }
 

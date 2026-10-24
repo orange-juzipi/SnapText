@@ -443,15 +443,16 @@ export function languageMatchesSearch(language: GoogleTranslateLanguage, query: 
   return searchText.split(" ").some((token) => token.startsWith(normalizedQuery));
 }
 
+/** 按文字系统和常见词推断语言；日语假名、韩文字母优先于共用汉字。 */
 export function detectSourceLang(text: string) {
   const sample = text.trim();
   if (!sample) return AUTO_SOURCE_LANG;
 
   // Script detection is deterministic and fast enough to run on every input change.
   const scriptChecks: Array<[string, RegExp]> = [
-    ["zh_cn", /[\u3400-\u9fff]/u],
     ["ja", /[\u3040-\u30ff]/u],
-    ["ko", /[\uac00-\ud7af]/u],
+    ["ko", /[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]/u],
+    ["zh_cn", /[\u3400-\u9fff]/u],
     ["ru", /[\u0400-\u04ff]/u],
     ["el", /[\u0370-\u03ff]/u],
     ["ar", /[\u0600-\u06ff]/u],
@@ -491,12 +492,11 @@ export function detectSourceLang(text: string) {
   return bestScore > 0 ? bestCode : "en";
 }
 
+/** 尊重用户明确选择的源语言，仅在自动模式下使用文字推断。 */
 export function resolveSourceLang(sourceText: string, sourceLang: string) {
   const normalized = normalizeLangCode(sourceLang);
-  const detected = detectSourceLang(sourceText);
-  // Script-based detection is reliable enough to override a stale manual picker value.
-  if (detected !== AUTO_SOURCE_LANG && detected !== DEFAULT_TARGET_LANG) return detected;
   if (normalized && normalized !== AUTO_SOURCE_LANG) return normalized;
+  const detected = detectSourceLang(sourceText);
   return detected === AUTO_SOURCE_LANG ? undefined : detected;
 }
 

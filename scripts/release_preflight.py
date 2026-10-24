@@ -7,6 +7,7 @@ that are verifiable in this repository:
 
 - cargo fmt / test / clippy / build
 - React/Vite frontend build
+- frontend behavior regression tests
 - Python helper script syntax checks
 - frontend asset build wiring
 - Tauri bundle icon and config wiring
@@ -30,9 +31,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def run(cmd: list[str]) -> None:
+def run(cmd: list[str], cwd: Path = ROOT) -> None:
+    """Run a preflight check in its workspace and stop immediately on failure."""
     print(f"$ {' '.join(cmd)}", flush=True)
-    subprocess.run(cmd, cwd=ROOT, check=True)
+    subprocess.run(cmd, cwd=cwd, check=True)
 
 
 def read_text(path: Path) -> str:
@@ -55,6 +57,7 @@ def check_nonempty_file(path: Path, message: str) -> None:
 
 
 def main() -> int:
+    """Run real build/test gates, then verify release wiring and documentation."""
     # Keep the command order aligned with the repository README so the output is
     # easy to compare with the documented local validation steps.
     run(
@@ -102,6 +105,10 @@ def main() -> int:
     run(["python3", "scripts/test_translator_providers.py"])
     run(["python3", "scripts/test_packaging.py"])
     run(["python3", "scripts/build_frontend.py", "--dry-run"])
+    # A dry run only checks command wiring. Compile and test the current UI so
+    # release preflight cannot pass with broken TypeScript or speech behavior.
+    run(["python3", "scripts/build_frontend.py"])
+    run(["bun", "test", "tests"], cwd=ROOT / "ui")
     run(["cargo", "test", "--workspace"])
     run(["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"])
     run(["cargo", "build", "--workspace"])

@@ -43,7 +43,9 @@ import { SpeechSettingsFields } from "@/components/speech-settings";
 
 type SettingsTab = "interface" | "hotkeys" | "speech" | "provider" | "diagnostics";
 type QueuedSave = {
+  /** Complete settings snapshot awaiting persistence. */
   draft: AppConfig;
+  /** User edit generation represented by this snapshot. */
   version: number;
 };
 
@@ -52,6 +54,7 @@ const DEFAULT_HOTKEYS: HotkeyConfig = {
   selection: "Alt+E",
 };
 
+/** Edits settings with serialized persistence and a final save when leaving the page. */
 export function SettingsPage() {
   const configQuery = useConfigQuery();
   const updateConfig = useUpdateConfigMutation();
@@ -61,8 +64,10 @@ export function SettingsPage() {
   const [providerDialogOpen, setProviderDialogOpen] = useState(false);
   const [providerSaveError, setProviderSaveError] = useState("");
   const userEditedRef = useRef(false);
-  const savingRef = useRef(false);
-  const queuedSaveRef = useRef<QueuedSave | null>(null);
+  const saveQueueRef = useRef<Promise<boolean>>(Promise.resolve(true));
+  const lastQueuedVersionRef = useRef(0);
+  const latestDraftRef = useRef<QueuedSave | null>(null);
+  const flushSaveRef = useRef<() => void>(() => {});
   const editVersionRef = useRef(0);
   const scrollPanelRef = useRef<HTMLDivElement | null>(null);
   const sectionRefs = useRef<Partial<Record<SettingsTab, HTMLElement | null>>>({});
@@ -73,6 +78,12 @@ export function SettingsPage() {
   const labels = labelsForLanguage(
     draft?.ui.language ?? configQuery.data?.ui.language,
   );
+  latestDraftRef.current = draft ? { draft, version: editVersionRef.current } : null;
+  // Keep unmount cleanup current without making it run for every draft change.
+  flushSaveRef.current = () => {
+    const latest = latestDraftRef.current;
+    if (userEditedRef.current && latest) void saveConfig(latest.draft, latest.version);
+  };
 
   useEffect(() => {
     if (!configQuery.data || userEditedRef.current) return;
@@ -85,11 +96,13 @@ export function SettingsPage() {
       void saveConfig(draft, editVersionRef.current);
     }, 600);
     return () => window.clearTimeout(timeout);
-  }, [configQuery.data, draft]);
+  // A failed optimistic save rolls the cache back; only a new draft should schedule another write.
+  }, [draft]);
 
-  /** Releases the temporary navigation lock when the settings view is unmounted. */
+  /** Flushes a pending debounce and releases the navigation lock when leaving settings. */
   useEffect(() => {
     return () => {
+      flushSaveRef.current();
       if (programmaticScrollTimerRef.current !== null) {
         window.clearTimeout(programmaticScrollTimerRef.current);
       }
@@ -114,54 +127,58 @@ export function SettingsPage() {
   if (!draft) {
     return (
       <Card>
-        <CardContent>{labels.loadingSettings}</CardContent>
+        <CardContent role={configQuery.isError ? "alert" : "status"}>
+          {configQuery.isError ? (
+            <div className="grid gap-3">
+              <p>{String(configQuery.error?.message ?? configQuery.error)}</p>
+              <Button onClick={() => void configQuery.refetch()}>{labels.refresh}</Button>
+            </div>
+          ) : labels.loadingSettings}
+        </CardContent>
       </Card>
     );
   }
 
-  async function saveConfig(nextDraft: AppConfig, version: number) {
-    if (savingRef.current) {
-      queuedSaveRef.current = { draft: nextDraft, version };
-      return;
-    }
-    savingRef.current = true;
-    try {
-      const saved = await updateConfig.mutateAsync(
-        sanitizeConfig(nextDraft),
-      );
-      if (!queuedSaveRef.current && editVersionRef.current === version) {
-        userEditedRef.current = false;
-        setDraft(ensureSpeechDefaults(saved));
+  /** Saves each edit generation once and preserves write order across autosave and dialogs. */
+  function saveConfig(nextDraft: AppConfig, version: number): Promise<boolean> {
+    if (version <= lastQueuedVersionRef.current) return saveQueueRef.current;
+    lastQueuedVersionRef.current = version;
+    // The shared mutation scope serializes writes; enqueue now so remounts see this draft.
+    const pendingSave = (async () => {
+      try {
+        const saved = await updateConfig.mutateAsync(sanitizeConfig(nextDraft));
+        if (editVersionRef.current === version) {
+          userEditedRef.current = false;
+          setDraft(ensureSpeechDefaults(saved));
+        }
+        return true;
+      } catch (error) {
+        if (editVersionRef.current === version) {
+          applyDocumentTheme(configQuery.data?.ui.theme);
+          // Leave the failed generation eligible for retry, including an unmount flush.
+          lastQueuedVersionRef.current = version - 1;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        setProviderSaveError(message);
+        workspace.showError(message);
+        return false;
       }
-    } catch (error) {
-      applyDocumentTheme(configQuery.data?.ui.theme);
-      workspace.showError(
-        error instanceof Error ? error.message : String(error),
-      );
-    } finally {
-      savingRef.current = false;
-      const queuedSave = queuedSaveRef.current;
-      queuedSaveRef.current = null;
-      if (queuedSave) {
-        await saveConfig(queuedSave.draft, queuedSave.version);
-      }
-    }
+    })();
+    saveQueueRef.current = pendingSave;
+    return pendingSave;
   }
 
+  /** Merges provider changes into the current draft and uses the same ordered save queue. */
   async function saveProviderConfig(nextDraft: AppConfig) {
     if (!draft) return;
-    try {
-      setProviderSaveError("");
-      const mergedDraft = mergeProviderConfig(draft, nextDraft);
-      const saved = await updateConfig.mutateAsync(sanitizeConfig(mergedDraft));
-      userEditedRef.current = false;
-      queuedSaveRef.current = null;
-      setDraft(ensureSpeechDefaults(saved));
+    setProviderSaveError("");
+    const mergedDraft = mergeProviderConfig(latestDraftRef.current?.draft ?? draft, nextDraft);
+    const version = ++editVersionRef.current;
+    userEditedRef.current = true;
+    latestDraftRef.current = { draft: mergedDraft, version };
+    setDraft(mergedDraft);
+    if (await saveConfig(mergedDraft, version)) {
       setProviderDialogOpen(false);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setProviderSaveError(message);
-      workspace.showError(message);
     }
   }
 
@@ -353,6 +370,7 @@ export function SettingsPage() {
             <Field>
               <FieldLabel>{labels.resultDock}</FieldLabel>
               <Select
+                aria-label={labels.resultDock}
                 value={draft.ui.result_panel_dock}
                 onChange={(event) =>
                   updateDraft(
@@ -370,6 +388,7 @@ export function SettingsPage() {
             <Field>
               <FieldLabel>{labels.closeBehavior}</FieldLabel>
               <Select
+                aria-label={labels.closeBehavior}
                 value={normalizeCloseBehavior(draft.ui.close_behavior)}
                 onChange={(event) =>
                   updateDraft(
@@ -740,6 +759,7 @@ function ProviderSummary({
   );
 }
 
+/** Keeps unsaved provider credentials stable while background configuration updates complete. */
 function ProviderDialog({
   config,
   error,
@@ -749,16 +769,24 @@ function ProviderDialog({
   open,
   saving,
 }: {
+  /** Configuration copied when the dialog opens. */
   config: AppConfig;
+  /** Persistence failure displayed alongside the provider fields. */
   error: string;
+  /** Localized dialog labels. */
   labels: ReturnType<typeof labelsForLanguage>;
+  /** Changes the visibility after editing finishes. */
   onOpenChange: (open: boolean) => void;
+  /** Persists the provider draft before closing. */
   onSave: (config: AppConfig) => Promise<void>;
+  /** Whether the dialog is visible. */
   open: boolean;
+  /** Prevents edits while a save is pending. */
   saving: boolean;
 }) {
   const [localConfig, setLocalConfig] = useState<AppConfig>(() => structuredClone(config));
   const [showApiKey, setShowApiKey] = useState(false);
+  const wasOpenRef = useRef(false);
   const selectedProvider = visibleProvider(localConfig.translator.provider) as ProviderId;
   const selectedMeta = providerMeta(selectedProvider, labels);
   const requiresApiKey = selectedProvider === "deepl" || selectedProvider === "google";
@@ -770,11 +798,14 @@ function ProviderDialog({
   const canSave = !saving && (!requiresApiKey || apiKey.trim().length > 0);
 
   useEffect(() => {
-    if (!open) return;
-    setLocalConfig(structuredClone(config));
-    setShowApiKey(false);
+    if (open && !wasOpenRef.current) {
+      setLocalConfig(structuredClone(config));
+      setShowApiKey(false);
+    }
+    wasOpenRef.current = open;
   }, [config, open]);
 
+  /** Updates an isolated provider draft without touching the cached settings. */
   function updateLocal(updater: (next: AppConfig) => void) {
     setLocalConfig((current) => {
       const next = structuredClone(current);
@@ -783,6 +814,7 @@ function ProviderDialog({
     });
   }
 
+  /** Selects the active provider and synchronizes the official service flag. */
   function selectProvider(provider: ProviderId) {
     updateLocal((next) => {
       next.translator.provider = provider;
@@ -790,13 +822,14 @@ function ProviderDialog({
     });
   }
 
+  /** Writes the selected provider field into the dialog draft. */
   function setProviderInput(path: ProviderInputPath, value: string) {
     updateLocal((next) => setProviderValue(next, path, value));
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="settings-provider-dialog">
+    <Dialog open={open} onOpenChange={(nextOpen) => { if (!saving) onOpenChange(nextOpen); }}>
+      <DialogContent className="settings-provider-dialog" aria-describedby={undefined}>
         <DialogHeader>
           <DialogTitle>{labels.providerDialogTitle}</DialogTitle>
         </DialogHeader>
@@ -813,6 +846,7 @@ function ProviderDialog({
                   className={selected ? "settings-provider-card is-selected" : "settings-provider-card"}
                   role="radio"
                   aria-checked={selected}
+                  disabled={saving}
                   onClick={() => selectProvider(provider)}
                 >
                   <span className={`settings-provider-logo settings-provider-logo-${provider}`}>
@@ -840,7 +874,7 @@ function ProviderDialog({
             {selectedProvider === "snaptext_cloud" ? (
               <div className="settings-provider-form">
                 <label className="settings-provider-privacy-toggle">
-                  <input type="checkbox" checked={localConfig.translator.snaptext_cloud.privacy_sensitive} onChange={(event) => updateLocal((next) => { next.translator.snaptext_cloud.privacy_sensitive = event.target.checked; })} />
+                  <input type="checkbox" disabled={saving} checked={localConfig.translator.snaptext_cloud.privacy_sensitive} onChange={(event) => updateLocal((next) => { next.translator.snaptext_cloud.privacy_sensitive = event.target.checked; })} />
                   <span>{labels.snaptextCloudPrivacyMode}</span>
                 </label>
               </div>
@@ -849,6 +883,8 @@ function ProviderDialog({
                 <Field>
                   <FieldLabel>{selectedMeta.name} Base URL</FieldLabel>
                   <Input
+                    disabled={saving}
+                    aria-label={`${selectedMeta.name} Base URL`}
                     value={
                       selectedProvider === "deepl"
                         ? localConfig.translator.deepl.base_url
@@ -867,6 +903,8 @@ function ProviderDialog({
                   <FieldLabel>{selectedMeta.name} API Key</FieldLabel>
                   <div className="settings-secret-input-row">
                     <Input
+                      disabled={saving}
+                      aria-label={`${selectedMeta.name} API Key`}
                       value={apiKey}
                       type={showApiKey ? "text" : "password"}
                       placeholder={labels.providerApiKeyPlaceholder}
@@ -899,7 +937,7 @@ function ProviderDialog({
         </div>
 
         <DialogFooter>
-          <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
+          <Button type="button" variant="ghost" disabled={saving} onClick={() => onOpenChange(false)}>
             {labels.cancel}
           </Button>
           <Button
@@ -916,6 +954,7 @@ function ProviderDialog({
   );
 }
 
+/** Presents a labeled speech slider with an accessible name and formatted value. */
 function SpeechSliderField({
   disabled,
   formatValue,
@@ -926,13 +965,21 @@ function SpeechSliderField({
   step,
   value,
 }: {
+  /** Whether the slider is unavailable. */
   disabled?: boolean;
+  /** Formats the current numeric value for display. */
   formatValue: (value: number) => string;
+  /** Visible label and accessible slider name. */
   label: string;
+  /** Maximum permitted value. */
   max: number;
+  /** Minimum permitted value. */
   min: number;
+  /** Receives the numeric selection. */
   onChange: (value: number) => void;
+  /** Distance between selectable values. */
   step: number;
+  /** Current numeric selection. */
   value: number;
 }) {
   return (
@@ -942,6 +989,7 @@ function SpeechSliderField({
         <span className="settings-slider-value">{formatValue(value)}</span>
       </div>
       <Input
+        aria-label={label}
         disabled={disabled}
         type="range"
         min={min}
@@ -954,17 +1002,21 @@ function SpeechSliderField({
   );
 }
 
+/** Selects the application display language using a labeled native control. */
 function LanguageChoiceGroup({
   labels,
   onChange,
   value,
 }: {
+  /** Localized language labels. */
   labels: ReturnType<typeof labelsForLanguage>;
+  /** Applies the chosen application language. */
   onChange: (value: string) => void;
+  /** Current application language code. */
   value: string;
 }) {
   return (
-    <Select value={value} onChange={(event) => onChange(event.target.value)}>
+    <Select aria-label={labels.interfaceLanguage} value={value} onChange={(event) => onChange(event.target.value)}>
       <option value="zh_cn">{labels.languageChinese}</option>
       <option value="en">{labels.languageEnglish}</option>
     </Select>
@@ -977,8 +1029,11 @@ function ThemeChoiceGroup({
   onChange,
   value,
 }: {
+  /** Localized theme labels. */
   labels: ReturnType<typeof labelsForLanguage>;
+  /** Applies the chosen appearance. */
   onChange: (value: string) => void;
+  /** Current system, light, or dark theme. */
   value: string;
 }) {
   return (
@@ -1008,7 +1063,10 @@ function ThemeChoiceGroup({
 }
 
 /** Draws a compact visual sample for a system, light, or dark theme. */
-function ThemePreview({ tone }: { tone: "system" | "light" | "dark" }) {
+function ThemePreview({ tone }: {
+  /** Appearance represented by the miniature preview. */
+  tone: "system" | "light" | "dark";
+}) {
   return (
     <span className={`settings-theme-preview settings-theme-preview-${tone}`}>
       <span />
@@ -1025,9 +1083,13 @@ function SettingsChoiceCard({
   onClick,
   preview,
 }: {
+  /** Whether the appearance is selected. */
   checked: boolean;
+  /** Accessible choice name. */
   label: string;
+  /** Selects this appearance. */
   onClick: () => void;
+  /** Miniature appearance preview. */
   preview: React.ReactNode;
 }) {
   return (
@@ -1421,6 +1483,7 @@ function mergeProviderConfig(current: AppConfig, providerDraft: AppConfig): AppC
   return next;
 }
 
+/** Normalizes editable values without replacing independent speech preferences. */
 function sanitizeConfig(config: AppConfig): AppConfig {
   const next = ensureSpeechDefaults(config);
   next.target_lang = next.target_lang.trim();
@@ -1450,7 +1513,10 @@ function sanitizeConfig(config: AppConfig): AppConfig {
   next.translator.local_http.endpoint =
     next.translator.local_http.endpoint.trim();
   next.speech.english_accents = normalizeSpeechAccents(next.speech.english_accents);
-  next.speech.english_accent = preferredSpeechAccent(next.speech.english_accents);
+  // The preferred accent is independent of the optional buttons shown in the workspace.
+  if (next.speech.english_accent !== "american" && next.speech.english_accent !== "british") {
+    next.speech.english_accent = preferredSpeechAccent(next.speech.english_accents);
+  }
   next.speech.rate = clampNumber(next.speech.rate, 0.1, 3);
   next.speech.volume = clampNumber(next.speech.volume, 0, 1);
   return next;
@@ -1466,6 +1532,7 @@ function optionalTrim(value: string | null | undefined) {
   return trimmed ? trimmed : null;
 }
 
+/** Fills missing speech fields while preserving a valid saved default accent. */
 function ensureSpeechDefaults(config: AppConfig): AppConfig {
   const next = structuredClone(config);
   next.speech = {
@@ -1473,7 +1540,10 @@ function ensureSpeechDefaults(config: AppConfig): AppConfig {
     ...(next.speech ?? {}),
   };
   next.speech.english_accents = normalizeSpeechAccents(next.speech.english_accents);
-  next.speech.english_accent = preferredSpeechAccent(next.speech.english_accents);
+  // The preferred accent is independent of the optional buttons shown in the workspace.
+  if (next.speech.english_accent !== "american" && next.speech.english_accent !== "british") {
+    next.speech.english_accent = preferredSpeechAccent(next.speech.english_accents);
+  }
   return next;
 }
 

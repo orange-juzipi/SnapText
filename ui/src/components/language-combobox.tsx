@@ -16,15 +16,23 @@ import {
 import { cn } from "@/lib/cn";
 
 type LanguageComboboxProps = {
+  /** Selected provider-independent language code. */
   value: string;
+  /** Localized strings used by the picker. */
   labels: Labels;
+  /** Locale used to display language names. */
   uiLanguage?: string;
+  /** Whether automatic language detection can be selected. */
   includeAuto?: boolean;
+  /** Optional trigger styling. */
   className?: string;
+  /** Accessible name for the language selector. */
   ariaLabel: string;
+  /** Receives the chosen language code. */
   onChange: (value: string) => void;
 };
 
+/** Presents searchable languages with keyboard navigation and an accessible search field. */
 export function LanguageCombobox({
   value,
   labels,
@@ -60,12 +68,14 @@ export function LanguageCombobox({
     return GOOGLE_TRANSLATE_LANGUAGES.filter((language) => languageMatchesSearch(language, normalizedQuery));
   }, [query]);
 
+  /** Commits the selection and resets the filter for the next visit. */
   function selectValue(nextValue: string) {
     onChange(nextValue);
     setOpen(false);
     setQuery("");
   }
 
+  /** Moves focus between filtered options while allowing Escape to dismiss the picker. */
   function handleListKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
     const buttons = Array.from(listRef.current?.querySelectorAll<HTMLButtonElement>("button[data-language-option]") ?? []);
     const active = document.activeElement;
@@ -75,7 +85,7 @@ export function LanguageCombobox({
       buttons[Math.min(currentIndex + 1, buttons.length - 1)]?.focus();
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
-      buttons[Math.max(currentIndex - 1, 0)]?.focus();
+      buttons[currentIndex < 0 ? buttons.length - 1 : Math.max(currentIndex - 1, 0)]?.focus();
     } else if (event.key === "Escape") {
       setOpen(false);
     }
@@ -113,6 +123,7 @@ export function LanguageCombobox({
           <div className="language-combobox-search">
             <Search size={15} aria-hidden="true" />
             <Input
+              aria-label={labels.searchLanguage}
               autoFocus
               className="language-combobox-search-input"
               value={query}
@@ -168,6 +179,7 @@ export function LanguageCombobox({
   );
 }
 
+/** Renders one selectable language with its selected state exposed to assistive technology. */
 function LanguageOption({
   active,
   code,
@@ -175,10 +187,15 @@ function LanguageOption({
   nativeName,
   onSelect,
 }: {
+  /** Whether this option is currently selected. */
   active: boolean;
+  /** Stable language identifier shown alongside the name. */
   code: string;
+  /** Localized display name. */
   label: string;
+  /** Native-language display name. */
   nativeName: string;
+  /** Commits this option. */
   onSelect: () => void;
 }) {
   return (

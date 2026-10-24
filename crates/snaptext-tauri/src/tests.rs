@@ -557,6 +557,7 @@ fn result_window_state_targets_include_main_window_only() {
     assert_eq!(result_window_state_targets(), [MAIN_WINDOW_LABEL]);
 }
 
+/// Verifies screenshot pixels, metadata, and distinct asynchronous session identities.
 #[test]
 fn screenshot_payload_encodes_png_metadata() {
     let image = RgbaImage::new(2, 3);
@@ -566,6 +567,43 @@ fn screenshot_payload_encodes_png_metadata() {
     assert_eq!(payload.meta.width, 2);
     assert_eq!(payload.meta.height, 3);
     assert!(!payload.base64_png.is_empty());
+    let next = ScreenshotPayload::from_image(RgbaImage::new(2, 3)).expect("next screenshot");
+    assert_ne!(payload.session_id, next.session_id);
+}
+
+/// Rejects obsolete overlay requests and keeps their completion from clearing a newer capture.
+#[test]
+fn overlay_session_rejects_stale_ocr_and_close_requests() {
+    let state = AppState::new(
+        AppConfig::default(),
+        HistoryStore::in_memory().expect("history store"),
+    )
+    .expect("app state");
+    let previous = ScreenshotPayload::from_image(RgbaImage::new(2, 3)).expect("old screenshot");
+    let current = ScreenshotPayload::from_image(RgbaImage::new(2, 3)).expect("new screenshot");
+    *state.pending_overlay.lock().expect("overlay lock") = Some(OverlaySession {
+        screenshot: current.clone(),
+        restore_main_window: true,
+    });
+
+    assert!(overlay_session_for_request(&state, Some(&previous.session_id)).is_err());
+    assert!(!overlay_session_is_current(&state, &previous.session_id).expect("old ownership"));
+    assert_eq!(
+        finish_overlay_session(&state, Some(&previous.session_id)).expect("stale close"),
+        None
+    );
+    assert_eq!(
+        overlay_session_for_request(&state, Some(&current.session_id))
+            .expect("current session")
+            .screenshot,
+        current
+    );
+    assert_eq!(
+        finish_overlay_session(&state, Some(&current.session_id)).expect("current close"),
+        Some(true)
+    );
+    assert!(!overlay_session_is_current(&state, &current.session_id).expect("closed ownership"));
+    assert!(overlay_session_for_request(&state, None).is_err());
 }
 
 /// Verifies that the image profile applies grayscale, contrast, rotation, scaling, and sharpening together.

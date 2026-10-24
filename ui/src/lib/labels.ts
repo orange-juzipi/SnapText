@@ -2,6 +2,7 @@ export type Labels = typeof zhCN;
 
 const zhCN = {
   ready: "就绪",
+  operationFailed: "操作失败",
   subtitle: "桌面 OCR 翻译工作台",
   home: "首页",
   history: "历史记录",
@@ -250,6 +251,7 @@ const zhCN = {
 const en: Labels = {
   ...zhCN,
   ready: "Ready",
+  operationFailed: "Operation failed",
   subtitle: "Desktop OCR translation workspace",
   home: "Home",
   history: "History",

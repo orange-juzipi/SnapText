@@ -112,6 +112,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo build --workspace
 python3 scripts/test_build_frontend.py
 python3 scripts/build_frontend.py
+(cd ui && bun test tests)
 ```
 
 前端也可以单独构建：
@@ -134,7 +135,9 @@ python3 scripts/verify_translator_providers.py
 python3 scripts/verify_desktop_bundles.py
 ```
 
-发布前静态检查会串联上述门禁：
+本地无签名 macOS DMG 可使用 `python3 scripts/package_macos.py --no-sign` 构建。该模式会校验 DMG，并跳过已禁用的 updater 产物；正式签名发布与 `--platform all` 汇总校验仍要求 updater 和签名文件。
+
+发布前检查会执行前端构建与测试、Rust 检查，并校验发布脚本和文档配置：
 
 ```bash
 python3 scripts/release_preflight.py
@@ -170,12 +173,13 @@ python3 scripts/verify_translator_providers.py
 python3 scripts/verify_desktop_bundles.py --platform all
 ```
 
-`--platform all` 只验证汇总安装包产物，要求 `dist/` 已经收集 macOS、Windows 和 Linux 的安装包。发布前不要在 `dist/` 中混入其他版本或未知命名的 `SnapText` 安装包。
+`--platform all` 只验证汇总安装包产物，默认从 `target/release/bundle/` 读取，要求按 `dmg/`、`macos/`、`msi/`、`nsis/`、`deb/`、`rpm/`、`appimage/` 子目录收集完整三平台发布产物；macOS 还需 updater 归档和签名。发布前不要在该目录混入其他版本或未知命名的 `SnapText` 安装包。此完整门禁比当前 tag 工作流发布的 macOS ZIP 与 Windows NSIS 产物集合更严格，不能仅用这两个产物通过。
 
-三平台产物汇总到 `dist/` 后，生成并复核 release manifest：
+三平台产物汇总后，使用与安装包一致的版本和当前提交生成 release manifest，输出到产物目录之外的 `dist/`：
 
 ```bash
-python3 scripts/generate_release_manifest.py --manifest dist/release-manifest.json --checksums dist/SHA256SUMS --require-platforms all --require-artifact-kinds all --write dist
+release_version="$(python3 -c 'import json; print(json.load(open("crates/snaptext-tauri/tauri.conf.json"))["version"])')"
+python3 scripts/generate_release_manifest.py --artifact-root target/release/bundle --manifest dist/release-manifest.json --checksums dist/SHA256SUMS --version "$release_version" --commit "$(git rev-parse HEAD)" --write
 python3 scripts/generate_release_manifest.py --manifest dist/release-manifest.json --checksums dist/SHA256SUMS --require-platforms all --require-artifact-kinds all
 ```
 
