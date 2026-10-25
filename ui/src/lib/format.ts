@@ -50,12 +50,16 @@ export function historyItemMeta(item: HistoryRecord, labels: Labels) {
   return item.target_lang.trim() ? `${source} -> ${languageDisplayName(item.target_lang)}` : source;
 }
 
-export function translatorProviderLabel(provider: string | undefined, labels: Labels) {
+/** 使用本地化名称区分 Google 官方 API、网页直连与云端服务。 */
+export function translatorProviderLabel(provider: string | undefined, labels: Labels): string {
   switch (provider?.trim()) {
     case "deepl":
       return "DeepL";
     case "google":
-      return "Google Translate";
+      return labels.googleApiProvider;
+    case "google_web":
+    case "google-web":
+      return labels.googleWebProvider;
     case "snaptext_cloud":
     case "openai_compatible":
     case "local_http":
@@ -63,7 +67,7 @@ export function translatorProviderLabel(provider: string | undefined, labels: La
     case "":
       return labels.snaptextCloudProvider;
     default:
-      return provider;
+      return provider ?? labels.snaptextCloudProvider;
   }
 }
 

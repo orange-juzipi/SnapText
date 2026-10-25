@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Eye, EyeOff } from "lucide-react";
 import { labelsForLanguage } from "@/lib/labels";
-import { clientSnapTextCloudEndpoint } from "@/lib/snaptext-cloud";
+import { translatorProviderLabel } from "@/lib/format";
+import { PROVIDER_IDS, providerRequiresApiKey, visibleProvider, type ProviderId } from "@/lib/translation-provider";
 import type { AppConfig } from "@/lib/types";
 import deeplProviderIcon from "@/assets/provider-icons/deepl.svg";
 import googleTranslateProviderIcon from "@/assets/provider-icons/google-translate.ico";
@@ -17,26 +18,26 @@ import {
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 
-export type ProviderId = "snaptext_cloud" | "deepl" | "google";
-
 type ProviderInputPath =
   | "deepl_base_url"
   | "deepl_api_key"
   | "google_base_url"
   | "google_api_key";
 
-const PROVIDER_IDS: ProviderId[] = ["snaptext_cloud", "deepl", "google"];
-
+/** 展示当前翻译服务，并提供与主页一致的配置入口。 */
 export function ProviderSummary({
   labels,
   onConfigure,
   provider,
 }: {
+  /** 当前界面语言的文案。 */
   labels: ReturnType<typeof labelsForLanguage>;
+  /** 打开服务草稿对话框。 */
   onConfigure: () => void;
+  /** 当前保存的服务标识。 */
   provider: string;
 }) {
-  const providerId = visibleProvider(provider) as ProviderId;
+  const providerId = visibleProvider(provider);
   const meta = providerMeta(providerId, labels);
   return (
     <div className="settings-provider-summary">
@@ -84,9 +85,9 @@ export function ProviderDialog({
   const [localConfig, setLocalConfig] = useState<AppConfig>(() => structuredClone(config));
   const [showApiKey, setShowApiKey] = useState(false);
   const wasOpenRef = useRef(false);
-  const selectedProvider = visibleProvider(localConfig.translator.provider) as ProviderId;
+  const selectedProvider = visibleProvider(localConfig.translator.provider);
   const selectedMeta = providerMeta(selectedProvider, labels);
-  const requiresApiKey = selectedProvider === "deepl" || selectedProvider === "google";
+  const requiresApiKey = providerRequiresApiKey(selectedProvider);
   const apiKey = selectedProvider === "deepl"
     ? localConfig.translator.deepl.api_key ?? ""
     : selectedProvider === "google"
@@ -94,6 +95,7 @@ export function ProviderDialog({
       : "";
   const canSave = !saving && (!requiresApiKey || apiKey.trim().length > 0);
 
+  /** 仅在打开瞬间克隆配置，后台保存不能覆盖正在编辑的草稿。 */
   useEffect(() => {
     if (open && !wasOpenRef.current) {
       setLocalConfig(structuredClone(config));
@@ -165,14 +167,21 @@ export function ProviderDialog({
               </span>
               <div>
                 <h3>{selectedMeta.name}</h3>
+                {selectedProvider !== "google_web" ? <p>{selectedMeta.description}</p> : null}
               </div>
             </div>
 
-            {selectedProvider === "snaptext_cloud" ? (
+            {selectedProvider === "google_web" ? (
+              <div className="settings-provider-empty-config">
+                <strong>{labels.noApiKeyRequired}</strong>
+                <span>{selectedMeta.description}</span>
+              </div>
+            ) : selectedProvider === "snaptext_cloud" ? (
               <div className="settings-provider-form">
                 <label className="settings-provider-privacy-toggle">
                   <input
                     type="checkbox"
+                    disabled={saving}
                     checked={localConfig.translator.snaptext_cloud.privacy_sensitive}
                     onChange={(event) =>
                       updateLocal((next) => {
@@ -225,6 +234,7 @@ export function ProviderDialog({
                       size="icon"
                       variant="ghost"
                       aria-label={showApiKey ? labels.hideApiKey : labels.showApiKey}
+                      disabled={saving}
                       onClick={() => setShowApiKey((current) => !current)}
                     >
                       {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -259,62 +269,31 @@ export function ProviderDialog({
   );
 }
 
-export function visibleProvider(provider?: string) {
-  return provider === "deepl" || provider === "google" || provider === "snaptext_cloud"
-    ? provider
-    : "snaptext_cloud";
-}
+type ProviderMetadata = {
+  /** 服务对应的本地图标。 */
+  icon: string;
+  /** 区分官方 API 与网页直连的本地化服务名称。 */
+  name: string;
+  /** 当前服务的密钥要求、连接方式和使用限制。 */
+  description: string;
+};
 
-export function mergeProviderConfig(current: AppConfig, providerDraft: AppConfig): AppConfig {
-  const next = structuredClone(current);
-  next.translator.provider = providerDraft.translator.provider;
-  next.translator.snaptext_cloud = structuredClone(providerDraft.translator.snaptext_cloud);
-  next.translator.deepl = structuredClone(providerDraft.translator.deepl);
-  next.translator.google = structuredClone(providerDraft.translator.google);
-  return next;
-}
-
-export function sanitizeProviderConfig(config: AppConfig): AppConfig {
-  const next = structuredClone(config);
-  next.translator.provider = visibleProvider(next.translator.provider.trim());
-  next.translator.snaptext_cloud.endpoint = clientSnapTextCloudEndpoint();
-  // 选择并保存某个翻译服务即表示启用该服务，UI 不再提供额外开关。
-  next.translator.snaptext_cloud.enabled =
-    next.translator.provider === "snaptext_cloud";
-  next.translator.snaptext_cloud.device_id =
-    next.translator.snaptext_cloud.device_id.trim();
-  next.translator.deepl.base_url = next.translator.deepl.base_url.trim();
-  next.translator.deepl.api_key = optionalTrim(next.translator.deepl.api_key);
-  next.translator.google.base_url = next.translator.google.base_url.trim();
-  next.translator.google.api_key = optionalTrim(next.translator.google.api_key);
-  return next;
-}
-
-export function providerMeta(provider: ProviderId, labels: ReturnType<typeof labelsForLanguage>) {
+/** 将服务标识转换为统一名称、说明与品牌图标。 */
+function providerMeta(provider: ProviderId, labels: ReturnType<typeof labelsForLanguage>): ProviderMetadata {
+  const name = translatorProviderLabel(provider, labels);
   switch (provider) {
     case "snaptext_cloud":
-      return {
-        icon: snaptextProviderIcon,
-        name: labels.snaptextCloudProvider,
-      };
+      return { icon: snaptextProviderIcon, name, description: labels.snaptextCloudDescription };
     case "deepl":
-      return {
-        icon: deeplProviderIcon,
-        name: "DeepL",
-      };
+      return { icon: deeplProviderIcon, name, description: labels.deeplProviderDescription };
     case "google":
-      return {
-        icon: googleTranslateProviderIcon,
-        name: "Google Translate",
-      };
+      return { icon: googleTranslateProviderIcon, name, description: labels.googleProviderDescription };
+    case "google_web":
+      return { icon: googleTranslateProviderIcon, name, description: labels.googleWebProviderDescription };
   }
 }
 
-function optionalTrim(value: string | null | undefined) {
-  const trimmed = value?.trim() ?? "";
-  return trimmed ? trimmed : null;
-}
-
+/** 将凭据或地址写入对应的官方 API 配置，网页直连不接收这些输入。 */
 function setProviderValue(
   config: AppConfig,
   path: ProviderInputPath,

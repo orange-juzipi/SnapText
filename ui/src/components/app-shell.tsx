@@ -11,6 +11,7 @@ import {
   resolveTargetLang,
 } from "@/lib/language";
 import { errorMessage } from "@/lib/errors";
+import { visibleProvider } from "@/lib/translation-provider";
 import { translateText } from "@/lib/api";
 import { TabsLink, TabsNav } from "@/components/ui/tabs";
 import { Toast, ToastClose, ToastDescription, ToastTitle, ToastViewport } from "@/components/ui/toast";
@@ -61,12 +62,14 @@ export function AppShell() {
     }
   }, [navigate]);
 
+  /** 配置迁移与服务选择共用名单，避免把新增直连服务误改为云端。 */
   useEffect(() => {
     const config = configQuery.data;
     if (!config || updateConfig.isPending) return;
 
     const shouldUpdateTargetLang = !config.target_lang?.trim();
-    const shouldUpdateProvider = !isVisibleProvider(config.translator.provider);
+    const provider = visibleProvider(config.translator.provider);
+    const shouldUpdateProvider = provider !== config.translator.provider;
     if (!shouldUpdateTargetLang && !shouldUpdateProvider) return;
 
     // Keep stale persisted desktop config aligned without changing explicit endpoint choices.
@@ -76,7 +79,7 @@ export function AppShell() {
         target_lang: shouldUpdateTargetLang ? AUTO_TARGET_LANG : config.target_lang,
         translator: {
           ...config.translator,
-          provider: shouldUpdateProvider ? "snaptext_cloud" : config.translator.provider,
+          provider,
         },
       })
       .catch((error) => {
@@ -263,9 +266,4 @@ export function AppShell() {
       </ToastViewport>
     </main>
   );
-}
-
-/** 只将已经移除的服务商配置迁移到默认提供商。 */
-function isVisibleProvider(provider?: string) {
-  return provider === "snaptext_cloud" || provider === "deepl" || provider === "google";
 }

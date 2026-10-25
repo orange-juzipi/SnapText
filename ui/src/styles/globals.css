@@ -720,7 +720,8 @@ textarea {
   color: #006494;
 }
 
-.settings-provider-logo-google {
+.settings-provider-logo-google,
+.settings-provider-logo-google_web {
   background: color-mix(in srgb, #34a853 14%, var(--color-control));
   color: #16833a;
 }
@@ -787,11 +788,9 @@ textarea {
 }
 
 .settings-provider-card-copy strong {
-  overflow: hidden;
   font-size: 0.9rem;
-  line-height: 1.15;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .settings-provider-card-copy span {
@@ -826,13 +825,11 @@ textarea {
 }
 
 .settings-provider-config-heading h3 {
-  overflow: hidden;
   margin: 0;
   color: var(--color-foreground);
   font-size: 1rem;
   line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .settings-provider-config-heading p {
@@ -4586,7 +4583,10 @@ textarea:focus {
     padding: 16px;
   }
 
-  .settings-provider-dialog {
+  /* Keep the full Google Web label readable in narrow settings windows. */
+  .snaptext-dialog-content.settings-provider-dialog {
+    width: calc(100vw - 20px);
+    max-width: calc(100vw - 20px);
     padding: 16px;
   }
 

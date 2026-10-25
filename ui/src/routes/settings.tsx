@@ -1,10 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
-  Check,
   ExternalLink,
-  Eye,
-  EyeOff,
   Keyboard,
   MonitorCog,
   ServerCog,
@@ -20,26 +17,17 @@ import {
 } from "@/lib/queries";
 import type { AppConfig, HotkeyConfig } from "@/lib/types";
 import { useWorkspaceState } from "@/app/workspace-state";
-import { clientSnapTextCloudEndpoint } from "@/lib/snaptext-cloud";
 import { openSystemSettings } from "@/lib/api";
-import deeplProviderIcon from "@/assets/provider-icons/deepl.svg";
-import googleTranslateProviderIcon from "@/assets/provider-icons/google-translate.ico";
-import snaptextProviderIcon from "@/assets/provider-icons/snaptext.svg";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Field, FieldHint, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
 import { SpeechSettingsFields } from "@/components/speech-settings";
+import { ProviderDialog, ProviderSummary } from "@/components/provider-settings";
+import { mergeProviderConfig, sanitizeProviderConfig, visibleProvider } from "@/lib/translation-provider";
 
 type SettingsTab = "interface" | "hotkeys" | "speech" | "provider" | "diagnostics";
 type QueuedSave = {
@@ -457,8 +445,7 @@ export function SettingsPage() {
           <div className="settings-section-heading">
             <h2>{labels.provider}</h2>
           </div>
-              <ProviderSummary
-            config={draft}
+          <ProviderSummary
             labels={labels}
             provider={providerConfig}
             onConfigure={() => {
@@ -726,234 +713,6 @@ function HotkeySettingField({
   );
 }
 
-type ProviderId = "snaptext_cloud" | "deepl" | "google";
-
-function ProviderSummary({
-  config,
-  labels,
-  onConfigure,
-  provider,
-}: {
-  config: AppConfig;
-  labels: ReturnType<typeof labelsForLanguage>;
-  onConfigure: () => void;
-  provider: string;
-}) {
-  const providerId = visibleProvider(provider) as ProviderId;
-  const meta = providerMeta(providerId, labels);
-  return (
-    <div className="settings-provider-summary">
-      <div className="settings-provider-summary-main">
-        <span className={`settings-provider-logo settings-provider-logo-${providerId}`}>
-          <img src={meta.icon} alt="" aria-hidden="true" />
-        </span>
-        <div className="settings-provider-summary-copy">
-          <span className="settings-provider-eyebrow">{labels.currentProvider}</span>
-          <strong>{meta.name}</strong>
-        </div>
-      </div>
-      <Button type="button" onClick={onConfigure}>
-        {labels.configureProvider}
-      </Button>
-    </div>
-  );
-}
-
-/** Keeps unsaved provider credentials stable while background configuration updates complete. */
-function ProviderDialog({
-  config,
-  error,
-  labels,
-  onOpenChange,
-  onSave,
-  open,
-  saving,
-}: {
-  /** Configuration copied when the dialog opens. */
-  config: AppConfig;
-  /** Persistence failure displayed alongside the provider fields. */
-  error: string;
-  /** Localized dialog labels. */
-  labels: ReturnType<typeof labelsForLanguage>;
-  /** Changes the visibility after editing finishes. */
-  onOpenChange: (open: boolean) => void;
-  /** Persists the provider draft before closing. */
-  onSave: (config: AppConfig) => Promise<void>;
-  /** Whether the dialog is visible. */
-  open: boolean;
-  /** Prevents edits while a save is pending. */
-  saving: boolean;
-}) {
-  const [localConfig, setLocalConfig] = useState<AppConfig>(() => structuredClone(config));
-  const [showApiKey, setShowApiKey] = useState(false);
-  const wasOpenRef = useRef(false);
-  const selectedProvider = visibleProvider(localConfig.translator.provider) as ProviderId;
-  const selectedMeta = providerMeta(selectedProvider, labels);
-  const requiresApiKey = selectedProvider === "deepl" || selectedProvider === "google";
-  const apiKey = selectedProvider === "deepl"
-    ? localConfig.translator.deepl.api_key ?? ""
-    : selectedProvider === "google"
-      ? localConfig.translator.google.api_key ?? ""
-      : "";
-  const canSave = !saving && (!requiresApiKey || apiKey.trim().length > 0);
-
-  useEffect(() => {
-    if (open && !wasOpenRef.current) {
-      setLocalConfig(structuredClone(config));
-      setShowApiKey(false);
-    }
-    wasOpenRef.current = open;
-  }, [config, open]);
-
-  /** Updates an isolated provider draft without touching the cached settings. */
-  function updateLocal(updater: (next: AppConfig) => void) {
-    setLocalConfig((current) => {
-      const next = structuredClone(current);
-      updater(next);
-      return next;
-    });
-  }
-
-  /** Selects the active provider and synchronizes the official service flag. */
-  function selectProvider(provider: ProviderId) {
-    updateLocal((next) => {
-      next.translator.provider = provider;
-      next.translator.snaptext_cloud.enabled = provider === "snaptext_cloud";
-    });
-  }
-
-  /** Writes the selected provider field into the dialog draft. */
-  function setProviderInput(path: ProviderInputPath, value: string) {
-    updateLocal((next) => setProviderValue(next, path, value));
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={(nextOpen) => { if (!saving) onOpenChange(nextOpen); }}>
-      <DialogContent className="settings-provider-dialog" aria-describedby={undefined}>
-        <DialogHeader>
-          <DialogTitle>{labels.providerDialogTitle}</DialogTitle>
-        </DialogHeader>
-
-        <div className="settings-provider-dialog-body">
-          <div className="settings-provider-list" role="radiogroup" aria-label={labels.provider}>
-            {PROVIDER_IDS.map((provider) => {
-              const meta = providerMeta(provider, labels);
-              const selected = provider === selectedProvider;
-              return (
-                <button
-                  key={provider}
-                  type="button"
-                  className={selected ? "settings-provider-card is-selected" : "settings-provider-card"}
-                  role="radio"
-                  aria-checked={selected}
-                  disabled={saving}
-                  onClick={() => selectProvider(provider)}
-                >
-                  <span className={`settings-provider-logo settings-provider-logo-${provider}`}>
-                    <img src={meta.icon} alt="" aria-hidden="true" />
-                  </span>
-                  <span className="settings-provider-card-copy">
-                    <strong>{meta.name}</strong>
-                  </span>
-                  {selected ? <Check size={16} aria-hidden="true" /> : null}
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="settings-provider-config-panel">
-            <div className="settings-provider-config-heading">
-              <span className={`settings-provider-logo settings-provider-logo-${selectedProvider}`}>
-                <img src={selectedMeta.icon} alt="" aria-hidden="true" />
-              </span>
-              <div>
-                <h3>{selectedMeta.name}</h3>
-              </div>
-            </div>
-
-            {selectedProvider === "snaptext_cloud" ? (
-              <div className="settings-provider-form">
-                <label className="settings-provider-privacy-toggle">
-                  <input type="checkbox" disabled={saving} checked={localConfig.translator.snaptext_cloud.privacy_sensitive} onChange={(event) => updateLocal((next) => { next.translator.snaptext_cloud.privacy_sensitive = event.target.checked; })} />
-                  <span>{labels.snaptextCloudPrivacyMode}</span>
-                </label>
-              </div>
-            ) : (
-              <div className="settings-provider-form">
-                <Field>
-                  <FieldLabel>{selectedMeta.name} Base URL</FieldLabel>
-                  <Input
-                    disabled={saving}
-                    aria-label={`${selectedMeta.name} Base URL`}
-                    value={
-                      selectedProvider === "deepl"
-                        ? localConfig.translator.deepl.base_url
-                        : localConfig.translator.google.base_url
-                    }
-                    onChange={(event) =>
-                      setProviderInput(
-                        selectedProvider === "deepl" ? "deepl_base_url" : "google_base_url",
-                        event.target.value,
-                      )
-                    }
-                  />
-                </Field>
-
-                <Field>
-                  <FieldLabel>{selectedMeta.name} API Key</FieldLabel>
-                  <div className="settings-secret-input-row">
-                    <Input
-                      disabled={saving}
-                      aria-label={`${selectedMeta.name} API Key`}
-                      value={apiKey}
-                      type={showApiKey ? "text" : "password"}
-                      placeholder={labels.providerApiKeyPlaceholder}
-                      onChange={(event) =>
-                        setProviderInput(
-                          selectedProvider === "deepl" ? "deepl_api_key" : "google_api_key",
-                          event.target.value,
-                        )
-                      }
-                    />
-                    <Button
-                      type="button"
-                      size="icon"
-                      variant="ghost"
-                      aria-label={showApiKey ? labels.hideApiKey : labels.showApiKey}
-                      onClick={() => setShowApiKey((current) => !current)}
-                    >
-                      {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
-                    </Button>
-                  </div>
-                </Field>
-              </div>
-            )}
-
-            {requiresApiKey && !apiKey.trim() ? (
-              <p className="settings-provider-error">{labels.providerApiKeyRequired}</p>
-            ) : null}
-            {error ? <p className="settings-provider-error">{error}</p> : null}
-          </div>
-        </div>
-
-        <DialogFooter>
-          <Button type="button" variant="ghost" disabled={saving} onClick={() => onOpenChange(false)}>
-            {labels.cancel}
-          </Button>
-          <Button
-            type="button"
-            variant="primary"
-            disabled={!canSave}
-            onClick={() => onSave(localConfig)}
-          >
-            {saving ? labels.saving : labels.saveAndEnableProvider}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 /** Presents a labeled speech slider with an accessible name and formatted value. */
 function SpeechSliderField({
   disabled,
@@ -1109,55 +868,6 @@ function SettingsChoiceCard({
       </span>
     </button>
   );
-}
-
-type ProviderInputPath =
-  | "deepl_base_url"
-  | "deepl_api_key"
-  | "google_base_url"
-  | "google_api_key";
-
-function setProviderValue(
-  config: AppConfig,
-  path: ProviderInputPath,
-  value: string,
-) {
-  switch (path) {
-    case "deepl_base_url":
-      config.translator.deepl.base_url = value;
-      break;
-    case "deepl_api_key":
-      config.translator.deepl.api_key = value;
-      break;
-    case "google_base_url":
-      config.translator.google.base_url = value;
-      break;
-    case "google_api_key":
-      config.translator.google.api_key = value;
-      break;
-  }
-}
-
-const PROVIDER_IDS: ProviderId[] = ["snaptext_cloud", "deepl", "google"];
-
-function providerMeta(provider: ProviderId, labels: ReturnType<typeof labelsForLanguage>) {
-  switch (provider) {
-    case "snaptext_cloud":
-      return {
-        icon: snaptextProviderIcon,
-        name: labels.snaptextCloudProvider,
-      };
-    case "deepl":
-      return {
-        icon: deeplProviderIcon,
-        name: "DeepL",
-      };
-    case "google":
-      return {
-        icon: googleTranslateProviderIcon,
-        name: "Google Translate",
-      };
-  }
 }
 
 function SettingsTabButton({
@@ -1448,12 +1158,6 @@ const SHORTCUT_CONFIG_TOKEN_NAMES: Record<string, string> = {
   windows: "Super",
 };
 
-function visibleProvider(provider?: string) {
-  return provider === "deepl" || provider === "google" || provider === "snaptext_cloud"
-    ? provider
-    : "snaptext_cloud";
-}
-
 function applyDocumentTheme(theme?: string) {
   document.documentElement.dataset.theme = theme?.trim() || "system";
 }
@@ -1474,31 +1178,15 @@ function updateDraft(
   });
 }
 
-function mergeProviderConfig(current: AppConfig, providerDraft: AppConfig): AppConfig {
-  const next = structuredClone(current);
-  next.translator.provider = providerDraft.translator.provider;
-  next.translator.snaptext_cloud = structuredClone(providerDraft.translator.snaptext_cloud);
-  next.translator.deepl = structuredClone(providerDraft.translator.deepl);
-  next.translator.google = structuredClone(providerDraft.translator.google);
-  return next;
-}
-
 /** Normalizes editable values without replacing independent speech preferences. */
 function sanitizeConfig(config: AppConfig): AppConfig {
-  const next = ensureSpeechDefaults(config);
+  const next = sanitizeProviderConfig(ensureSpeechDefaults(config));
   next.target_lang = next.target_lang.trim();
   next.ui.theme = next.ui.theme.trim();
   next.ui.language = next.ui.language.trim();
   next.ui.close_behavior = normalizeCloseBehavior(next.ui.close_behavior);
   next.hotkeys.screenshot = normalizeShortcutForConfig(next.hotkeys.screenshot);
   next.hotkeys.selection = normalizeShortcutForConfig(next.hotkeys.selection);
-  next.translator.provider = visibleProvider(next.translator.provider.trim());
-  next.translator.snaptext_cloud.endpoint = clientSnapTextCloudEndpoint();
-  // 选择并保存某个翻译服务即表示启用该服务，UI 不再提供额外开关。
-  next.translator.snaptext_cloud.enabled =
-    next.translator.provider === "snaptext_cloud";
-  next.translator.snaptext_cloud.device_id =
-    next.translator.snaptext_cloud.device_id.trim();
   next.translator.openai_compatible.base_url =
     next.translator.openai_compatible.base_url.trim();
   next.translator.openai_compatible.api_key = optionalTrim(
@@ -1506,10 +1194,6 @@ function sanitizeConfig(config: AppConfig): AppConfig {
   );
   next.translator.openai_compatible.model =
     next.translator.openai_compatible.model.trim();
-  next.translator.deepl.base_url = next.translator.deepl.base_url.trim();
-  next.translator.deepl.api_key = optionalTrim(next.translator.deepl.api_key);
-  next.translator.google.base_url = next.translator.google.base_url.trim();
-  next.translator.google.api_key = optionalTrim(next.translator.google.api_key);
   next.translator.local_http.endpoint =
     next.translator.local_http.endpoint.trim();
   next.speech.english_accents = normalizeSpeechAccents(next.speech.english_accents);

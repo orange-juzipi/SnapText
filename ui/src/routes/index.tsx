@@ -57,11 +57,8 @@ import type {
   VoiceInputPartialPayload,
 } from "@/lib/types";
 import { useWorkspaceState } from "@/app/workspace-state";
-import {
-  mergeProviderConfig,
-  ProviderDialog,
-  sanitizeProviderConfig,
-} from "@/components/provider-settings";
+import { ProviderDialog } from "@/components/provider-settings";
+import { mergeProviderConfig, sanitizeProviderConfig } from "@/lib/translation-provider";
 import { DictionaryPanel } from "@/components/dictionary-panel";
 import { LanguageCombobox } from "@/components/language-combobox";
 import { Button } from "@/components/ui/button";

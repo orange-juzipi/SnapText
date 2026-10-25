@@ -154,6 +154,9 @@ pub enum TranslatorProvider {
     OpenAiCompatible,
     DeepL,
     Google,
+    /// Experimental keyless Google Web requests sent directly from this device.
+    #[serde(alias = "google-web")]
+    GoogleWeb,
     LocalHttp,
 }
 
@@ -647,6 +650,7 @@ fn canonical_hotkey_signature(value: &str) -> String {
     modifiers.join("+")
 }
 
+/// Validates only the selected provider's configurable connection settings.
 fn validate_translator_config(config: &TranslatorConfig) -> Result<()> {
     match config.provider {
         TranslatorProvider::SnapTextCloud => {
@@ -654,6 +658,8 @@ fn validate_translator_config(config: &TranslatorConfig) -> Result<()> {
         }
         TranslatorProvider::DeepL => validate_deepl_config(&config.deepl)?,
         TranslatorProvider::Google => validate_google_config(&config.google)?,
+        // Google Web uses a fixed public endpoint and has no credentials to validate.
+        TranslatorProvider::GoogleWeb => {}
         // These providers are kept only so older config files can deserialize.
         // UI and runtime normalization migrate them to SnapText Cloud.
         TranslatorProvider::OpenAiCompatible | TranslatorProvider::LocalHttp => {}
@@ -1103,6 +1109,36 @@ ocr:
             serde_yaml::to_string(&provider).expect("serialize provider"),
             "snaptext_cloud\n"
         );
+    }
+
+    /// Keeps the keyless provider selectable without changing cloud defaults or adding config fields.
+    #[test]
+    fn google_web_provider_round_trips_without_additional_configuration() {
+        for name in ["google_web", "google-web"] {
+            let provider: TranslatorProvider = serde_yaml::from_str(name).expect("Google Web name");
+            assert_eq!(provider, TranslatorProvider::GoogleWeb);
+            assert_eq!(
+                serde_yaml::to_string(&provider).expect("serialize provider"),
+                "google_web\n"
+            );
+        }
+        let mut config = AppConfig::default();
+        assert_eq!(
+            config.translator.provider,
+            TranslatorProvider::SnapTextCloud
+        );
+        config.translator.provider = TranslatorProvider::GoogleWeb;
+        assert!(config.translator.google.api_key.is_none());
+        let normalized = config.normalized_for_save();
+        normalized.validate().expect("Google Web needs no API key");
+        assert_eq!(
+            normalized.translator.provider,
+            TranslatorProvider::GoogleWeb
+        );
+        let saved = serde_yaml::to_string(&normalized).expect("serialize configuration");
+        assert!(!saved.contains("google_web:"));
+        let restored: AppConfig = serde_yaml::from_str(&saved).expect("restore configuration");
+        assert_eq!(restored.translator.provider, TranslatorProvider::GoogleWeb);
     }
 
     #[test]

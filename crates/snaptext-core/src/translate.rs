@@ -23,6 +23,10 @@ pub const MAX_TRANSLATE_TOTAL_CHARS: usize = 24_000;
 pub const AUTO_TARGET_LANG: &str = "auto";
 pub const ENGLISH_TARGET_LANG: &str = "en";
 pub const CHINESE_TARGET_LANG: &str = "zh_cn";
+/// Matches the cloud Google Web adapter's per-request Unicode character limit.
+pub const MAX_GOOGLE_WEB_TEXT_CHARS: usize = 1_000;
+const GOOGLE_WEB_ENDPOINT: &str = "https://translate.googleapis.com/translate_a/single";
+const GOOGLE_WEB_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TranslateRequest {
@@ -103,6 +107,7 @@ impl TranslatorRegistry {
         &self.config.provider
     }
 
+    /// Dispatches to the selected provider without falling back to another service.
     pub async fn translate(&self, req: TranslateRequest) -> Result<TranslateResponse> {
         match self.config.provider {
             TranslatorProvider::SnapTextCloud => {
@@ -131,6 +136,7 @@ impl TranslatorRegistry {
                     .translate(req)
                     .await
             }
+            TranslatorProvider::GoogleWeb => GoogleWebTranslator::new()?.translate(req).await,
             TranslatorProvider::LocalHttp => {
                 LocalHttpTranslator::new(self.config.local_http.clone(), self.client.clone())
                     .translate(req)
@@ -192,6 +198,32 @@ pub struct GoogleTranslator {
 impl GoogleTranslator {
     pub fn new(config: GoogleConfig, client: Client) -> Self {
         Self { config, client }
+    }
+}
+
+/// Experimental keyless translation using this device's own network connection.
+#[derive(Debug, Clone)]
+pub struct GoogleWebTranslator {
+    /// Fixed public endpoint; a private field allows deterministic local HTTP tests.
+    endpoint: Url,
+    /// Native HTTP client, independent of browser CORS and SnapText Cloud routing.
+    client: Client,
+}
+
+impl GoogleWebTranslator {
+    /// Creates a direct client with no retries or redirects, without reading cloud credentials.
+    pub fn new() -> Result<Self> {
+        let client = Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(20))
+            .retry(reqwest::retry::never())
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(google_web_request_error)?;
+        Ok(Self {
+            endpoint: Url::parse(GOOGLE_WEB_ENDPOINT).expect("valid Google Web endpoint"),
+            client,
+        })
     }
 }
 
@@ -371,6 +403,63 @@ impl Translator for GoogleTranslator {
             translated_texts,
             dictionary_entries: Vec::new(),
             provider: TranslatorProvider::Google,
+        })
+    }
+}
+
+#[async_trait]
+impl Translator for GoogleWebTranslator {
+    /// Translates ordered inputs once each; rejects oversized text before sending any requests.
+    async fn translate(&self, req: TranslateRequest) -> Result<TranslateResponse> {
+        validate_translate_request(&req)?;
+        for text in &req.texts {
+            let count = text.chars().count();
+            if count > MAX_GOOGLE_WEB_TEXT_CHARS {
+                return Err(Error::Translate(format!(
+                    "Google Web Translate text is too long: {count} characters; maximum is {MAX_GOOGLE_WEB_TEXT_CHARS}"
+                )));
+            }
+        }
+        let source = req
+            .source
+            .as_ref()
+            .map(|source| google_web_language_code(&source.0))
+            .filter(|source| !source.is_empty())
+            .unwrap_or_else(|| "auto".to_owned());
+        let target = google_web_language_code(&req.target.0);
+        let mut translated_texts = Vec::with_capacity(req.texts.len());
+        // The web endpoint accepts one text. Keep input ordering and stop immediately on failure.
+        for text in &req.texts {
+            let response = self
+                .client
+                .get(google_web_url(&self.endpoint, text, &source, &target))
+                .timeout(Duration::from_secs(20))
+                .header(reqwest::header::USER_AGENT, GOOGLE_WEB_USER_AGENT)
+                .header(reqwest::header::ACCEPT, "application/json, text/plain, */*")
+                .header(reqwest::header::ACCEPT_LANGUAGE, "en-US,en;q=0.9")
+                .send()
+                .await
+                .map_err(google_web_request_error)?;
+            let status = response.status();
+            if status == StatusCode::TOO_MANY_REQUESTS {
+                return Err(Error::Translate(
+                    "Google Web Translate rate limited this device (HTTP 429); try again later"
+                        .to_owned(),
+                ));
+            }
+            if !status.is_success() {
+                return Err(Error::Translate(format!(
+                    "Google Web Translate request failed with HTTP {status}"
+                )));
+            }
+            let value: Value = response.json().await.map_err(google_web_request_error)?;
+            translated_texts.push(parse_google_web_translate_text(&value)?);
+        }
+        validate_translate_response_texts(&translated_texts, req.texts.len())?;
+        Ok(TranslateResponse {
+            translated_texts,
+            dictionary_entries: Vec::new(),
+            provider: TranslatorProvider::GoogleWeb,
         })
     }
 }
@@ -747,6 +836,76 @@ fn google_payload(req: &TranslateRequest, api_key: &str) -> Value {
     payload
 }
 
+/// Maps the same language aliases as the cloud Google Web adapter, including automatic detection.
+fn google_web_language_code(language: &str) -> String {
+    let normalized = google_language_code(language);
+    match normalized.to_ascii_lowercase().as_str() {
+        "zh" => "zh-CN".to_owned(),
+        "en-us" | "en-gb" => "en".to_owned(),
+        "jp" => "ja".to_owned(),
+        "pt-br" => "pt".to_owned(),
+        "auto" => "auto".to_owned(),
+        _ => normalized,
+    }
+}
+
+/// Encodes text as one query value and requests the cloud adapter's translation/dictionary format.
+fn google_web_url(endpoint: &Url, text: &str, source: &str, target: &str) -> Url {
+    let mut url = endpoint.clone();
+    url.query_pairs_mut()
+        .clear()
+        .append_pair("client", "gtx")
+        .append_pair("sl", source)
+        .append_pair("tl", target)
+        .append_pair("dt", "t")
+        .append_pair("dt", "bd")
+        .append_pair("strip", "1")
+        .append_pair("nonced", "1")
+        .append_pair("q", text);
+    url
+}
+
+/// Concatenates every translated segment without losing whitespace or accepting partial malformed output.
+fn parse_google_web_translate_text(value: &Value) -> Result<String> {
+    let chunks = value.get(0).and_then(Value::as_array).ok_or_else(|| {
+        Error::Translate("Google Web Translate response missing translation chunks".to_owned())
+    })?;
+    let mut translated = String::new();
+    for chunk in chunks {
+        let text = chunk
+            .as_array()
+            .and_then(|chunk| chunk.first())
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                Error::Translate(
+                    "Google Web Translate response contains an invalid translation chunk"
+                        .to_owned(),
+                )
+            })?;
+        translated.push_str(text);
+    }
+    if translated.trim().is_empty() {
+        return Err(Error::Translate(
+            "Google Web Translate response missing translated text".to_owned(),
+        ));
+    }
+    Ok(translated)
+}
+
+/// Avoids including the request URL or response body, either of which can contain private source text.
+fn google_web_request_error(error: reqwest::Error) -> Error {
+    let message = if error.is_timeout() {
+        "Google Web Translate request timed out"
+    } else if error.is_decode() {
+        "Google Web Translate returned invalid JSON"
+    } else if error.is_connect() {
+        "Google Web Translate could not connect; check this device's network"
+    } else {
+        "Google Web Translate request failed"
+    };
+    Error::Translate(message.to_owned())
+}
+
 fn join_url(base: &Url, path: &str) -> Result<Url> {
     let mut url = base.clone();
     let mut base_path = url.path().trim_end_matches('/').to_owned();
@@ -840,9 +999,13 @@ mod tests {
 
     #[derive(Debug)]
     struct RecordedRequest {
+        /// HTTP verb captured by the local test server.
         method: String,
+        /// Request path and encoded query captured without accessing the public network.
         path: String,
+        /// Case-normalized headers used to assert credentials are not sent.
         headers: HashMap<String, String>,
+        /// Request payload, empty for Google Web GET requests.
         body: String,
     }
 
@@ -857,14 +1020,25 @@ mod tests {
             Self::spawn_sequence(vec![response_body])
         }
 
+        /// Serves successful responses in input order for existing provider integration tests.
         fn spawn_sequence(response_bodies: Vec<&'static str>) -> Self {
+            Self::spawn_responses(
+                response_bodies
+                    .into_iter()
+                    .map(|body| (200, body))
+                    .collect(),
+            )
+        }
+
+        /// Serves deterministic status/body pairs to exercise provider failures without Google access.
+        fn spawn_responses(responses: Vec<(u16, &'static str)>) -> Self {
             let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
             let url = Url::parse(&format!("http://{}", listener.local_addr().expect("addr")))
                 .expect("mock server URL");
             let (requests_tx, requests_rx) = mpsc::channel();
 
             let handle = thread::spawn(move || {
-                for response_body in response_bodies {
+                for (status, response_body) in responses {
                     let (mut stream, _) = listener.accept().expect("accept request");
                     let request = read_http_request(&mut stream).expect("read request");
                     requests_tx.send(request).expect("record request");
@@ -873,7 +1047,7 @@ mod tests {
                     // exercise reqwest's JSON/status handling without depending on the network.
                     write!(
                         stream,
-                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                        "HTTP/1.1 {status} Mock\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
                         response_body.len(),
                         response_body
                     )
@@ -991,6 +1165,216 @@ mod tests {
         assert_eq!(payload["target"], "fr");
         assert_eq!(payload["format"], "text");
         assert_eq!(payload["key"], "key-123");
+    }
+
+    /// Exercises the direct provider's actual HTTP request, segment joining, and sequential batches.
+    #[tokio::test]
+    async fn google_web_translates_directly_without_cloud_or_api_credentials() {
+        let server = MockServer::spawn_sequence(vec![
+            r#"[[["你好 ","Hello "],["世界！","world!"]],null,"en"]"#,
+            r#"[[["第二段","Second"]],null,"en"]"#,
+        ]);
+        let mut translator = GoogleWebTranslator::new().expect("direct client");
+        translator.endpoint = server.endpoint("translate_a/single");
+        let original = "Hello & world!\n含中文 + ? #";
+        let response = translator
+            .translate(TranslateRequest {
+                texts: vec![original.to_owned(), "Second".to_owned()],
+                source: None,
+                target: Lang("zh_cn".to_owned()),
+            })
+            .await
+            .expect("direct translation");
+        assert_eq!(response.provider, TranslatorProvider::GoogleWeb);
+        assert_eq!(response.translated_texts, ["你好 世界！", "第二段"]);
+        assert!(response.dictionary_entries.is_empty());
+        for text in [original, "Second"] {
+            let request = server
+                .requests
+                .recv_timeout(Duration::from_secs(5))
+                .expect("direct request");
+            assert_eq!(request.method, "GET");
+            assert!(request.body.is_empty());
+            let url = server.url.join(&request.path).expect("query URL");
+            assert_eq!(url.path(), "/translate_a/single");
+            let pairs: Vec<_> = url.query_pairs().collect();
+            for (name, value) in [
+                ("client", "gtx"),
+                ("sl", "auto"),
+                ("tl", "zh-CN"),
+                ("q", text),
+            ] {
+                assert!(
+                    pairs
+                        .iter()
+                        .any(|(key, actual)| key == name && actual == value)
+                );
+            }
+            assert_eq!(pairs.iter().filter(|(key, _)| key == "q").count(), 1);
+            assert!(request.headers.contains_key("user-agent"));
+            assert!(
+                !request
+                    .headers
+                    .keys()
+                    .any(|name| name == "authorization" || name.starts_with("x-snaptext-"))
+            );
+            assert!(
+                !pairs
+                    .iter()
+                    .any(|(key, _)| key == "key" || key == "device_id")
+            );
+        }
+        server.handle.join().expect("server completed");
+    }
+
+    /// Keeps web language aliases aligned with the cloud adapter, including both Chinese scripts.
+    #[test]
+    fn google_web_maps_language_aliases() {
+        for (language, expected) in [
+            ("zh", "zh-CN"),
+            ("zh_cn", "zh-CN"),
+            ("zh-Hans", "zh-CN"),
+            ("zh_tw", "zh-TW"),
+            ("zh-Hant", "zh-TW"),
+            ("en_US", "en"),
+            ("en-gb", "en"),
+            ("jp", "ja"),
+            ("pt-br", "pt"),
+            ("auto", "auto"),
+        ] {
+            assert_eq!(google_web_language_code(language), expected);
+        }
+    }
+
+    /// Rejects malformed or empty translations rather than returning incomplete output as success.
+    #[test]
+    fn google_web_rejects_empty_and_malformed_segments() {
+        for value in [
+            json!(null),
+            json!({"error": "failure"}),
+            json!([]),
+            json!([[]]),
+            json!([[["  "]]]),
+            json!([[["valid"], [null]]]),
+        ] {
+            assert!(
+                parse_google_web_translate_text(&value).is_err(),
+                "accepted {value}"
+            );
+        }
+        assert_eq!(
+            parse_google_web_translate_text(&json!([[["first\n"], ["second"]]])).expect("segments"),
+            "first\nsecond"
+        );
+    }
+
+    /// An oversized batch must fail before sending even its first otherwise valid text.
+    #[tokio::test]
+    async fn google_web_validates_all_input_before_http() {
+        let mut translator = GoogleWebTranslator::new().expect("direct client");
+        // A dropped listener provides a local unused port; a connection attempt would have a different error.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("reserve local port");
+        translator.endpoint = Url::parse(&format!(
+            "http://{}",
+            listener.local_addr().expect("address")
+        ))
+        .expect("URL");
+        drop(listener);
+        let error = translator
+            .translate(TranslateRequest {
+                texts: vec![
+                    "short".to_owned(),
+                    "文".repeat(MAX_GOOGLE_WEB_TEXT_CHARS + 1),
+                ],
+                source: None,
+                target: Lang("en".to_owned()),
+            })
+            .await
+            .expect_err("oversized text")
+            .to_string();
+        assert!(error.contains("1001 characters"));
+        assert!(error.contains("maximum is 1000"));
+    }
+
+    /// Counts Unicode characters rather than UTF-8 bytes and sends explicit traditional Chinese source.
+    #[tokio::test]
+    async fn google_web_accepts_unicode_limit_and_explicit_source() {
+        let server = MockServer::spawn(r#"[[["translated"]]]"#);
+        let mut translator = GoogleWebTranslator::new().expect("direct client");
+        translator.endpoint = server.endpoint("translate_a/single");
+        let original = "文".repeat(MAX_GOOGLE_WEB_TEXT_CHARS);
+        translator
+            .translate(TranslateRequest {
+                texts: vec![original.clone()],
+                source: Some(Lang("zh_tw".to_owned())),
+                target: Lang("en_US".to_owned()),
+            })
+            .await
+            .expect("Unicode limit");
+        let request = server.take_request();
+        let url = Url::parse(&format!("http://localhost{}", request.path)).expect("request URL");
+        let query: HashMap<_, _> = url.query_pairs().collect();
+        assert_eq!(query.get("sl").map(|value| value.as_ref()), Some("zh-TW"));
+        assert_eq!(query.get("tl").map(|value| value.as_ref()), Some("en"));
+        assert_eq!(
+            query.get("q").map(|value| value.as_ref()),
+            Some(original.as_str())
+        );
+    }
+
+    /// HTTP and decoding failures stop the batch immediately and never include private request text.
+    #[tokio::test]
+    async fn google_web_reports_failures_without_retrying_or_leaking_input() {
+        for (status, body, expected) in [
+            (429, "PRIVATE_BODY", "HTTP 429"),
+            (403, "PRIVATE_BODY", "HTTP 403"),
+            (302, "PRIVATE_BODY", "HTTP 302"),
+            (200, "PRIVATE_BODY", "invalid JSON"),
+            (200, r#"[[[null]]]"#, "invalid translation chunk"),
+        ] {
+            let server = MockServer::spawn_responses(vec![(status, body)]);
+            let mut translator = GoogleWebTranslator::new().expect("direct client");
+            translator.endpoint = server.endpoint("translate_a/single");
+            let error = translator
+                .translate(TranslateRequest {
+                    texts: vec!["PRIVATE_SOURCE".to_owned(), "must not be sent".to_owned()],
+                    source: None,
+                    target: Lang("zh_cn".to_owned()),
+                })
+                .await
+                .expect_err("provider error")
+                .to_string();
+            assert!(error.contains(expected), "unexpected error: {error}");
+            assert!(
+                !error.contains("PRIVATE") && !error.contains("http://") && !error.contains("?q=")
+            );
+            let request = server.take_request();
+            assert!(request.path.contains("PRIVATE_SOURCE"));
+        }
+    }
+
+    /// Connection failures are sanitized because reqwest normally includes the source text query URL.
+    #[tokio::test]
+    async fn google_web_connection_error_excludes_the_query_url() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("reserve local port");
+        let mut translator = GoogleWebTranslator::new().expect("direct client");
+        translator.endpoint = Url::parse(&format!(
+            "http://{}",
+            listener.local_addr().expect("address")
+        ))
+        .expect("URL");
+        drop(listener);
+        let error = translator
+            .translate(TranslateRequest {
+                texts: vec!["PRIVATE_SOURCE".to_owned()],
+                source: None,
+                target: Lang("en".to_owned()),
+            })
+            .await
+            .expect_err("unavailable server")
+            .to_string();
+        assert!(error.contains("could not connect"));
+        assert!(!error.contains("PRIVATE_SOURCE") && !error.contains("http://"));
     }
 
     /// Ensures language choices emitted by the UI work for both external translation APIs.
