@@ -11,10 +11,9 @@ use block2::RcBlock;
 #[cfg(target_os = "macos")]
 use objc2::{AnyThread, rc::Retained};
 #[cfg(target_os = "macos")]
-use objc2_avf_audio::{
-    AVAudioApplication, AVAudioApplicationRecordPermission, AVAudioEngine, AVAudioNode,
-    AVAudioPCMBuffer, AVAudioTime,
-};
+use objc2_av_foundation::{AVAuthorizationStatus, AVCaptureDevice, AVMediaTypeAudio};
+#[cfg(target_os = "macos")]
+use objc2_avf_audio::{AVAudioEngine, AVAudioNode, AVAudioPCMBuffer, AVAudioTime};
 #[cfg(target_os = "macos")]
 use objc2_foundation::{NSLocale, NSString};
 #[cfg(target_os = "macos")]
@@ -39,12 +38,18 @@ const MICROPHONE_AUTH_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[cfg(target_os = "macos")]
 pub(crate) struct VoiceInputSession {
+    /// 当前运行的本机音频采集引擎。
     engine: Retained<AVAudioEngine>,
+    /// 接收麦克风缓冲区的语音识别请求。
     request: Retained<SFSpeechAudioBufferRecognitionRequest>,
+    /// 保持语音识别任务存活，直到会话停止。
     task: Retained<SFSpeechRecognitionTask>,
+    /// 保持识别结果回调存活，直到会话停止。
     result_handler: RcBlock<dyn Fn(*mut SFSpeechRecognitionResult, *mut objc2_foundation::NSError)>,
+    /// 保持音频采集回调存活，直到从输入节点移除。
     tap_block:
         RcBlock<dyn Fn(core::ptr::NonNull<AVAudioPCMBuffer>, core::ptr::NonNull<AVAudioTime>)>,
+    /// 回调线程共享的转写文本和错误信息。
     state: Arc<Mutex<VoiceInputRuntimeState>>,
 }
 
@@ -57,11 +62,15 @@ unsafe impl Send for VoiceInputSession {}
 #[cfg(target_os = "macos")]
 #[derive(Default)]
 struct VoiceInputRuntimeState {
+    /// 最近一次部分或最终转写文本。
     latest_text: String,
+    /// 最近一次已确认完成的转写文本。
     latest_final_text: String,
+    /// 识别框架报告的错误，在停止时返回给调用方。
     error: Option<String>,
 }
 
+/// 授权后启动麦克风采集和系统语音识别，并保存会话资源。
 #[cfg(target_os = "macos")]
 pub(crate) fn start_voice_input(state: &AppState, app: AppHandle, locale: String) -> Result<()> {
     ensure_speech_authorized()?;
@@ -168,6 +177,7 @@ pub(crate) fn start_voice_input(state: &AppState, app: AppHandle, locale: String
     Ok(())
 }
 
+/// 在尚不支持语音输入的平台返回明确错误。
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn start_voice_input(
     _state: &crate::state::AppState,
@@ -179,6 +189,7 @@ pub(crate) fn start_voice_input(
     ))
 }
 
+/// 停止采集并返回会话中最新的转写文本。
 #[cfg(target_os = "macos")]
 pub(crate) async fn stop_voice_input(state: &AppState) -> Result<String> {
     let session = {
@@ -215,6 +226,7 @@ pub(crate) async fn stop_voice_input(state: &AppState) -> Result<String> {
     Ok(text.to_owned())
 }
 
+/// 在尚不支持语音输入的平台返回明确错误。
 #[cfg(not(target_os = "macos"))]
 pub(crate) async fn stop_voice_input(_state: &crate::state::AppState) -> Result<String> {
     Err(Error::Speech(
@@ -222,6 +234,7 @@ pub(crate) async fn stop_voice_input(_state: &crate::state::AppState) -> Result<
     ))
 }
 
+/// 仅在系统尚未询问用户时请求语音识别授权。
 #[cfg(target_os = "macos")]
 fn ensure_speech_authorized() -> Result<()> {
     let status = unsafe { SFSpeechRecognizer::authorizationStatus() };
@@ -247,22 +260,22 @@ fn ensure_speech_authorized() -> Result<()> {
     }
 }
 
+/// 使用 macOS 10.14 起可用的采集权限 API，兼容应用支持的 macOS 10.15。
 #[cfg(target_os = "macos")]
 fn ensure_microphone_authorized() -> Result<()> {
-    let application = unsafe { AVAudioApplication::sharedInstance() };
-    let permission = unsafe { application.recordPermission() };
-    if permission == AVAudioApplicationRecordPermission::Granted {
+    // AVAudioApplication 仅在 macOS 14+ 可用；AVCaptureDevice 同时覆盖旧系统。
+    let media_type = unsafe { AVMediaTypeAudio }
+        .ok_or_else(|| Error::Speech("audio capture media type is unavailable".to_owned()))?;
+    let permission = unsafe { AVCaptureDevice::authorizationStatusForMediaType(media_type) };
+    if !microphone_authorization_requires_prompt(permission)? {
         return Ok(());
-    }
-    if permission == AVAudioApplicationRecordPermission::Denied {
-        return Err(Error::Speech("microphone permission was denied".to_owned()));
     }
 
     let (sender, receiver) = mpsc::channel();
     let block = RcBlock::new(move |granted: objc2::runtime::Bool| {
         let _ = sender.send(granted.as_bool());
     });
-    unsafe { AVAudioApplication::requestRecordPermissionWithCompletionHandler(&block) };
+    unsafe { AVCaptureDevice::requestAccessForMediaType_completionHandler(media_type, &block) };
     if receiver
         .recv_timeout(MICROPHONE_AUTH_TIMEOUT)
         .map_err(|_| Error::Speech("microphone authorization timed out".to_owned()))?
@@ -273,11 +286,33 @@ fn ensure_microphone_authorized() -> Result<()> {
     }
 }
 
+/// 将系统麦克风授权状态转换为是否需要首次询问，拒绝和受限状态不得重复弹窗。
+#[cfg(target_os = "macos")]
+fn microphone_authorization_requires_prompt(permission: AVAuthorizationStatus) -> Result<bool> {
+    if permission == AVAuthorizationStatus::Authorized {
+        Ok(false)
+    } else if permission == AVAuthorizationStatus::NotDetermined {
+        Ok(true)
+    } else if permission == AVAuthorizationStatus::Denied {
+        Err(Error::Speech("microphone permission was denied".to_owned()))
+    } else if permission == AVAuthorizationStatus::Restricted {
+        Err(Error::Speech(
+            "microphone access is restricted on this device".to_owned(),
+        ))
+    } else {
+        Err(Error::Speech(
+            "microphone permission status is unavailable".to_owned(),
+        ))
+    }
+}
+
+/// 在自动释放池内安全复制 Objective-C 字符串内容。
 #[cfg(target_os = "macos")]
 fn ns_string_to_string(value: &NSString) -> String {
     objc2::rc::autoreleasepool(|pool| unsafe { value.to_str(pool).to_owned() })
 }
 
+/// 为已拒绝、受限或未知的语音识别授权生成可读错误。
 #[cfg(target_os = "macos")]
 fn speech_authorization_error(status: SFSpeechRecognizerAuthorizationStatus) -> String {
     if status == SFSpeechRecognizerAuthorizationStatus::Denied {
@@ -286,5 +321,34 @@ fn speech_authorization_error(status: SFSpeechRecognizerAuthorizationStatus) -> 
         "speech recognition is restricted on this device".to_owned()
     } else {
         "speech recognition is not authorized".to_owned()
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+
+    /// 已授权无需弹窗，只有尚未决定的授权允许请求麦克风访问。
+    #[test]
+    fn microphone_permission_prompts_only_before_first_decision() {
+        assert!(
+            !microphone_authorization_requires_prompt(AVAuthorizationStatus::Authorized).unwrap()
+        );
+        assert!(
+            microphone_authorization_requires_prompt(AVAuthorizationStatus::NotDetermined).unwrap()
+        );
+    }
+
+    /// 已拒绝、受限制和未知状态必须在采集开始前返回错误。
+    #[test]
+    fn microphone_permission_errors_preserve_the_system_reason() {
+        for (status, expected) in [
+            (AVAuthorizationStatus::Denied, "denied"),
+            (AVAuthorizationStatus::Restricted, "restricted"),
+            (AVAuthorizationStatus(-1), "unavailable"),
+        ] {
+            let error = microphone_authorization_requires_prompt(status).unwrap_err();
+            assert!(error.to_string().contains(expected));
+        }
     }
 }
