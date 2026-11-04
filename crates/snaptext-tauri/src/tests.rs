@@ -825,3 +825,119 @@ fn mac_screenshot_selection_error_includes_status_or_stderr() {
         "screenshot selection failed: permission denied"
     );
 }
+
+/// 截图和划词走通用文字入口时，实际来源与 OCR 信息必须写入数据库。
+#[tokio::test]
+async fn translated_text_preserves_source_and_ocr_metadata_in_history() {
+    let state = AppState::new(
+        AppConfig::default(),
+        HistoryStore::in_memory().expect("history"),
+    )
+    .expect("state");
+    let lines = vec![TextLine {
+        text: "hello".into(),
+        bbox: snaptext_core::ocr::BBox {
+            x: 1,
+            y: 2,
+            width: 30,
+            height: 10,
+        },
+        confidence: 0.6,
+    }];
+    for source in [HistorySource::Screenshot, HistorySource::Selection] {
+        set_fake_translated_text(&state, "bonjour");
+        let result = translate_text_with_source_inner(
+            &state,
+            "hello".into(),
+            source.clone(),
+            Some("fr".into()),
+            None,
+            lines.clone(),
+        )
+        .await
+        .expect("translation");
+        assert_eq!(result.source, source);
+        assert_eq!(result.text_lines, lines);
+        let restored = state
+            .history
+            .lock()
+            .expect("history lock")
+            .recent(1)
+            .expect("history read");
+        assert_eq!(restored[0].source, source);
+        assert_eq!(restored[0].text_lines, lines);
+        assert_eq!(
+            history_record_to_translation_result(&restored[0]).text_lines,
+            lines
+        );
+    }
+}
+
+/// 图片翻译必须使用本次明确选择的语言，而不是配置中的默认目标。
+#[test]
+fn image_translation_honors_explicit_languages() {
+    let request = image_translate_request(
+        "hello",
+        Lang("auto".into()),
+        Some("fr".into()),
+        Some("en".into()),
+    );
+    assert_eq!(request.target, Lang("fr".into()));
+    assert_eq!(request.source, Some(Lang("en".into())));
+    let automatic =
+        image_translate_request("hello", Lang("auto".into()), None, Some("auto".into()));
+    assert_eq!(automatic.target, Lang("zh_cn".into()));
+    assert!(automatic.source.is_none());
+}
+
+/// 受控请求必须等前端确认，旧式原生调用仍保留既有结果事件。
+#[test]
+fn controlled_translation_never_publishes_automatically() {
+    assert!(!should_publish_translation(Some("request-1")));
+    assert!(should_publish_translation(None));
+}
+
+/// 开始、失败、成功事件都应携带同一个截图会话，失败必须保留错误详情。
+#[test]
+fn overlay_ocr_events_serialize_their_session_context() {
+    let region = snaptext_core::ocr::BBox {
+        x: 1,
+        y: 2,
+        width: 30,
+        height: 40,
+    };
+    let started = events::OverlayOcrStatusPayload {
+        session_id: "capture-1".into(),
+        region,
+        message: None,
+    };
+    let started_json = serde_json::to_value(&started).expect("started JSON");
+    assert_eq!(started_json["session_id"], "capture-1");
+    assert_eq!(started_json["region"]["width"], 30);
+    assert!(started_json.get("message").is_none());
+    let failed = events::OverlayOcrStatusPayload {
+        message: Some("OCR did not detect any text".into()),
+        ..started.clone()
+    };
+    let failed_json = serde_json::to_value(&failed).expect("failure JSON");
+    assert_eq!(failed_json["session_id"], "capture-1");
+    assert_eq!(failed_json["message"], "OCR did not detect any text");
+    let completed = events::OverlayOcrPayload {
+        session_id: started.session_id,
+        result: OcrTextResult {
+            source_text: "recognized".into(),
+            text_lines: Vec::new(),
+        },
+        region,
+        translate_after_ocr: true,
+    };
+    let completed_json = serde_json::to_value(&completed).expect("result JSON");
+    assert_eq!(completed_json["session_id"], "capture-1");
+    assert_eq!(completed_json["result"]["source_text"], "recognized");
+    let mut missing_session = completed_json;
+    missing_session
+        .as_object_mut()
+        .expect("object")
+        .remove("session_id");
+    assert!(serde_json::from_value::<events::OverlayOcrPayload>(missing_session).is_err());
+}

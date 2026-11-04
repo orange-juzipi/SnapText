@@ -26,6 +26,7 @@ import {
   unpinResultWindow,
   voiceInputSupported,
   events,
+  publishResultSnapshot,
 } from "@/lib/api";
 import { translatorProviderDetailLabel } from "@/lib/format";
 import { labelsForLanguage } from "@/lib/labels";
@@ -55,6 +56,7 @@ import type {
   TextLine,
   VoiceInputPartialPayload,
 } from "@/lib/types";
+import { runTranslationTask, translationContext } from "@/lib/translation-task";
 import { useWorkspaceState } from "@/app/workspace-state";
 import { ProviderDialog } from "@/components/provider-settings";
 import { mergeProviderConfig, sanitizeProviderConfig } from "@/lib/translation-provider";
@@ -385,29 +387,31 @@ export function WorkspacePage() {
     translationRunIdRef.current = runId;
     setTranslationError("");
     setFailedTranslation(null);
-    try {
-      const record = await translateTextMutation.mutateAsync({
+    await runTranslationTask({
+      id: runId,
+      isCurrent: (id) => mountedRef.current && workspace.isTranslationCurrent(id),
+      run: () => translateTextMutation.mutateAsync({
         sourceText,
         sourceLang,
         targetLang,
-      });
-      if (!mountedRef.current || !workspace.isTranslationCurrent(runId)) return;
-      lastAutoTranslatedKeyRef.current = autoTranslateKey(sourceText, sourceLang, targetLang);
-      workspace.setTranslationResultOnly(record);
-      workspace.setStatus(labels.textTranslated);
-    } catch (error) {
-      if (!mountedRef.current || !workspace.isTranslationCurrent(runId)) return;
-      const message = errorMessage(error);
-      setTranslationError(message);
-      setFailedTranslation({ sourceText, sourceLang, targetLang });
-      if (mode === "manual") {
-        workspace.showError(message);
-      } else {
-        workspace.setStatus(message);
-      }
-    } finally {
-      workspace.finishTranslation(runId);
-    }
+        ...translationContext(workspace.snapshot, sourceText),
+        requestId: crypto.randomUUID(),
+      }),
+      apply: (record) => {
+        lastAutoTranslatedKeyRef.current = autoTranslateKey(sourceText, sourceLang, targetLang);
+        workspace.setTranslationResultOnly(record);
+        void publishResultSnapshot(record).catch(() => undefined);
+        workspace.setStatus(labels.textTranslated);
+      },
+      fail: (error) => {
+        const message = errorMessage(error);
+        setTranslationError(message);
+        setFailedTranslation({ sourceText, sourceLang, targetLang });
+        if (mode === "manual") workspace.showError(message);
+        else workspace.setStatus(message);
+      },
+      finish: () => workspace.finishTranslation(runId),
+    });
   }
 
   /** Serializes automatic requests and keeps only the latest pending input. */
@@ -590,39 +594,57 @@ export function WorkspacePage() {
   ) {
     const input = inputOverride ?? imageInput;
     if (!input || imageProcessing) return;
+    const runId = workspace.beginTranslation();
+    translationRunIdRef.current = runId;
     setImageProcessing(true);
     workspace.setOcrLoading(true);
+    // OCR-only 模式仍拥有任务代次，但不显示翻译阶段的加载提示。
+    if (!translateAfterOcr) workspace.setTranslating(false);
     workspace.setStatus(labels.imageProcessing);
     const crop = cropOverride === undefined ? imageCrop : cropOverride;
-    const bbox = crop ?? {
-      x: 0,
-      y: 0,
-      width: input.width,
-      height: input.height,
-    };
+    const bbox = crop ?? { x: 0, y: 0, width: input.width, height: input.height };
+    const isCurrent = (id: number) => mountedRef.current && workspace.isTranslationCurrent(id);
     try {
       if (translateAfterOcr) {
-        const result = await translateImageMutation.mutateAsync({
-          base64Png: input.dataUrl,
-          bbox,
-          preprocessOptions: imagePreprocess,
+        await runTranslationTask({
+          id: runId,
+          isCurrent,
+          run: () => translateImageMutation.mutateAsync({
+            base64Png: input.dataUrl,
+            bbox,
+            preprocessOptions: imagePreprocess,
+            targetLang: workspace.targetLang,
+            sourceLang: resolveSourceLang("", workspace.sourceLang),
+            requestId: crypto.randomUUID(),
+          }),
+          apply: (result) => {
+            lastAutoTranslatedKeyRef.current = autoTranslateKey(result.source_text.trim(), resolveSourceLang(result.source_text, workspace.sourceLang) ?? AUTO_SOURCE_LANG, result.target_lang);
+            workspace.setResultFromTranslation(result);
+            void publishResultSnapshot(result).catch(() => undefined);
+            workspace.setStatus(labels.imageTranslated);
+            setImageSettingsOpen(false);
+          },
+          fail: (error) => workspace.showError(errorMessage(error)),
+          finish: () => workspace.finishTranslation(runId),
         });
-        workspace.setResultFromTranslation(result);
-        workspace.setStatus(labels.imageTranslated);
-        setImageSettingsOpen(false);
       } else {
-        skipNextAutoTranslateRef.current = true;
-        const result = await ocrImageRegion(input.dataUrl, bbox, imagePreprocess);
-        workspace.setOcrTextInput(result.source_text, "image", result.text_lines, true);
-        workspace.setStatus(labels.imageOcrReady);
-        setImageSettingsOpen(false);
+        await runTranslationTask({
+          id: runId,
+          isCurrent,
+          run: () => ocrImageRegion(input.dataUrl, bbox, imagePreprocess),
+          apply: (result) => {
+            skipNextAutoTranslateRef.current = true;
+            workspace.setOcrTextInput(result.source_text, "image", result.text_lines, true);
+            workspace.setStatus(labels.imageOcrReady);
+            setImageSettingsOpen(false);
+          },
+          fail: (error) => workspace.showError(errorMessage(error)),
+          finish: () => workspace.finishTranslation(runId),
+        });
       }
-    } catch (error) {
-      skipNextAutoTranslateRef.current = false;
-      workspace.showError(errorMessage(error));
     } finally {
-      workspace.setOcrLoading(false);
-      setImageProcessing(false);
+      // 这里只释放本页的按钮；全局加载状态必须由任务代次保护。
+      if (mountedRef.current) setImageProcessing(false);
     }
   }
 

@@ -2,7 +2,7 @@ import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Home, History, Settings } from "lucide-react";
 import { useCallback, useEffect, useRef } from "react";
-import { queryKeys, useConfigQuery, useUpdateConfigMutation } from "@/lib/queries";
+import { useConfigQuery, useUpdateConfigMutation } from "@/lib/queries";
 import { labelsForLanguage } from "@/lib/labels";
 import {
   AUTO_SOURCE_LANG,
@@ -12,7 +12,9 @@ import {
 } from "@/lib/language";
 import { errorMessage } from "@/lib/errors";
 import { visibleProvider } from "@/lib/translation-provider";
-import { translateText } from "@/lib/api";
+import { publishResultSnapshot, translateText } from "@/lib/api";
+import { runTranslationTask } from "@/lib/translation-task";
+import { isCurrentOcrSession, type OcrSession } from "@/lib/ocr-session";
 import { TabsLink, TabsNav } from "@/components/ui/tabs";
 import { Toast, ToastClose, ToastDescription, ToastTitle, ToastViewport } from "@/components/ui/toast";
 import { useWorkspaceState } from "@/app/workspace-state";
@@ -21,6 +23,7 @@ import { tauriListen } from "@/lib/tauri";
 import type {
   HistoryRecord,
   OverlayOcrPayload,
+  OverlayOcrStatusPayload,
   SelectionFailurePayload,
   SelectionTextPayload,
   TranslationResult,
@@ -36,6 +39,7 @@ export function AppShell() {
   const updateConfig = useUpdateConfigMutation();
   const labels = labelsForLanguage(configQuery.data?.ui.language);
   const workspace = useWorkspaceState();
+  const pendingOcrRef = useRef<OcrSession | null>(null);
   const liveContextRef = useRef({ pathname, labels, sourceLang: workspace.sourceLang, targetLang: workspace.targetLang });
   liveContextRef.current = { pathname, labels, sourceLang: workspace.sourceLang, targetLang: workspace.targetLang };
   const {
@@ -130,20 +134,22 @@ export function AppShell() {
       setStatus(liveContextRef.current.labels.selectionTextExtracted);
       const { sourceLang, targetLang } = liveContextRef.current;
       const runId = beginTranslation();
-      translateText(sourceText, resolveTargetLang(sourceText, targetLang), resolveSourceLang(sourceText, sourceLang) ?? AUTO_SOURCE_LANG)
-        .then((record) => {
-          if (disposed || !isTranslationCurrent(runId)) return;
-          setResultSnapshot({ ...record, source: "selection" });
+      void runTranslationTask({
+        id: runId,
+        isCurrent: (id) => !disposed && isTranslationCurrent(id),
+        run: () => translateText(sourceText, resolveTargetLang(sourceText, targetLang), resolveSourceLang(sourceText, sourceLang) ?? AUTO_SOURCE_LANG, {
+          source: "selection",
+          requestId: crypto.randomUUID(),
+        }),
+        apply: (record) => {
+          setResultSnapshot(record);
+          void publishResultSnapshot(record).catch(() => undefined);
           setStatus(liveContextRef.current.labels.textTranslated);
-          void queryClient.invalidateQueries({ queryKey: queryKeys.history(), exact: false });
-        })
-        .catch((error) => {
-          if (disposed || !isTranslationCurrent(runId)) return;
-          showError(errorMessage(error));
-        })
-        .finally(() => {
-          if (!disposed) finishTranslation(runId);
-        });
+          void queryClient.invalidateQueries({ queryKey: ["history"], exact: false });
+        },
+        fail: (error) => showError(errorMessage(error)),
+        finish: () => finishTranslation(runId),
+      });
     }));
     register(tauriListen<SelectionFailurePayload>(events.resultSelectionFailed, (event) => {
       if (disposed) return;
@@ -153,16 +159,18 @@ export function AppShell() {
       setOcrLoading(false);
       showError(errorMessage(event.payload.message));
     }));
-    register(tauriListen(events.overlayOcrStarted, () => {
+    register(tauriListen<OverlayOcrStatusPayload>(events.overlayOcrStarted, (event) => {
       if (disposed) return;
-      cancelTranslation();
+      const runId = beginTranslation();
+      pendingOcrRef.current = { sessionId: event.payload.session_id, runId };
       ensureWorkspaceRoute();
       setOcrLoading(true);
       setTranslating(false);
       setStatus(liveContextRef.current.labels.ocrSelectedRegion);
     }));
-    register(tauriListen<Partial<SelectionFailurePayload>>(events.overlayOcrFailed, (event) => {
-      if (disposed) return;
+    register(tauriListen<OverlayOcrStatusPayload>(events.overlayOcrFailed, (event) => {
+      if (disposed || !isCurrentOcrSession(pendingOcrRef.current, event.payload.session_id, isTranslationCurrent)) return;
+      pendingOcrRef.current = null;
       cancelTranslation();
       setOcrLoading(false);
       setTranslating(false);
@@ -170,7 +178,8 @@ export function AppShell() {
       if (event.payload?.message) showError(errorMessage(event.payload.message));
     }));
     register(tauriListen<OverlayOcrPayload>(events.overlayOcr, (event) => {
-      if (disposed) return;
+      if (disposed || !isCurrentOcrSession(pendingOcrRef.current, event.payload.session_id, isTranslationCurrent)) return;
+      pendingOcrRef.current = null;
       const sourceText = event.payload.result.source_text;
       setOcrLoading(false);
       setOcrTextInput(
@@ -187,20 +196,23 @@ export function AppShell() {
       }
       const { sourceLang, targetLang } = liveContextRef.current;
       const runId = beginTranslation();
-      translateText(sourceText, resolveTargetLang(sourceText, targetLang), resolveSourceLang(sourceText, sourceLang) ?? AUTO_SOURCE_LANG)
-        .then((record) => {
-          if (disposed || !isTranslationCurrent(runId)) return;
-          setResultSnapshot({ ...record, source: "screenshot" });
+      void runTranslationTask({
+        id: runId,
+        isCurrent: (id) => !disposed && isTranslationCurrent(id),
+        run: () => translateText(sourceText, resolveTargetLang(sourceText, targetLang), resolveSourceLang(sourceText, sourceLang) ?? AUTO_SOURCE_LANG, {
+          source: "screenshot",
+          textLines: event.payload.result.text_lines,
+          requestId: crypto.randomUUID(),
+        }),
+        apply: (record) => {
+          setResultSnapshot(record);
+          void publishResultSnapshot(record).catch(() => undefined);
           setStatus(liveContextRef.current.labels.regionTranslated);
-          void queryClient.invalidateQueries({ queryKey: queryKeys.history(), exact: false });
-        })
-        .catch((error) => {
-          if (disposed || !isTranslationCurrent(runId)) return;
-          showError(errorMessage(error));
-        })
-        .finally(() => {
-          if (!disposed) finishTranslation(runId);
-        });
+          void queryClient.invalidateQueries({ queryKey: ["history"], exact: false });
+        },
+        fail: (error) => showError(errorMessage(error)),
+        finish: () => finishTranslation(runId),
+      });
     }));
     register(tauriListen<boolean>(events.resultWindowState, (event) => {
       if (disposed) return;
@@ -209,6 +221,7 @@ export function AppShell() {
     return () => {
       // Disposed guards reject work from this listener generation without cancelling another owner's request.
       disposed = true;
+      pendingOcrRef.current = null;
       unlisteners.forEach((unlisten) => unlisten());
     };
   }, [

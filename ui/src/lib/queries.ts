@@ -12,7 +12,7 @@ import {
   translateText,
   updateConfig,
 } from "@/lib/api";
-import type { ImagePreprocessOptions, Region } from "@/lib/types";
+import type { ImagePreprocessOptions, Region, TextTranslationContext, ImageTranslationContext } from "@/lib/types";
 import { createConfigMutationOptions } from "@/lib/config-mutation";
 
 export const queryKeys = {
@@ -74,8 +74,15 @@ export function useUpdateConfigMutation() {
 export function useTranslateTextMutation() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ sourceText, targetLang, sourceLang }: { sourceText: string; targetLang?: string; sourceLang?: string }) =>
-      translateText(sourceText, targetLang, sourceLang),
+    /** 将当前工作区的来源信息和任务身份一并送往后端。 */
+    mutationFn: ({ sourceText, targetLang, sourceLang, ...context }: TextTranslationContext & {
+      /** 待翻译原文。 */
+      sourceText: string;
+      /** 目标语言。 */
+      targetLang?: string;
+      /** 明确指定的源语言。 */
+      sourceLang?: string;
+    }) => translateText(sourceText, targetLang, sourceLang, context),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["history"], exact: false });
     },
@@ -85,14 +92,15 @@ export function useTranslateTextMutation() {
 export function useTranslateImageMutation() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: {
+    /** 传递图片及当前语言设置。 */
+    mutationFn: (input: ImageTranslationContext & {
       /** Image data URL or raw base64 payload. */
       base64Png: string;
       /** Optional crop in source-image pixels. */
       bbox?: Region;
       /** Optional OCR preprocessing profile. */
       preprocessOptions?: ImagePreprocessOptions;
-    }) => translateImageBase64(input.base64Png, input.bbox, input.preprocessOptions),
+    }) => translateImageBase64(input.base64Png, input.bbox, input.preprocessOptions, { targetLang: input.targetLang, sourceLang: input.sourceLang, requestId: input.requestId }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["history"], exact: false });
     },

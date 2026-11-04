@@ -11,6 +11,8 @@ import type {
   TranslationResult,
   VoiceInputResult,
   PinnedResultPayload,
+  TextTranslationContext,
+  ImageTranslationContext,
 } from "@/lib/types";
 
 export const events = {
@@ -106,11 +108,13 @@ export function translateImageBase64(
   base64Png: string,
   bbox?: Region,
   preprocessOptions?: ImagePreprocessOptions,
+  context: ImageTranslationContext = {},
 ) {
   return tauriInvoke<TranslationResult>("translate_image_base64", {
     base64Png,
     bbox,
     preprocessOptions,
+    ...context,
   });
 }
 
@@ -151,8 +155,14 @@ export function translateSelection(text: string) {
   return tauriInvoke<HistoryRecord>("translate_selection", { text });
 }
 
-export function translateText(sourceText: string, targetLang?: string, sourceLang?: string) {
-  return tauriInvoke<HistoryRecord>("translate_text", { sourceText, targetLang, sourceLang });
+/** 传递语言、真实来源和 OCR 元信息；受控任务由前端确认后再发布结果。 */
+export function translateText(sourceText: string, targetLang?: string, sourceLang?: string, context: TextTranslationContext = {}) {
+  return tauriInvoke<HistoryRecord>("translate_text", { sourceText, targetLang, sourceLang, ...context });
+}
+
+/** 将已通过当前任务校验的结果同步给固钉窗口。 */
+export function publishResultSnapshot(snapshot: PinnedResultPayload) {
+  return tauriInvoke<void>("publish_result_snapshot", { snapshot });
 }
 
 export function retranslateResultText(request: TranslationRequest) {

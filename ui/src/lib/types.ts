@@ -113,6 +113,8 @@ export type Region = {
 };
 
 export type HistoryRecord = {
+  /** 随历史恢复的 OCR 行坐标与置信度。 */
+  text_lines?: TextLine[];
   id: number;
   created_at: number;
   source: string;
@@ -186,11 +188,24 @@ export type OverlayTranslationPayload = {
   region: Region;
 };
 
+/** 一次原生截图 OCR 开始或失败时的会话状态。 */
+export type OverlayOcrStatusPayload = {
+  /** 截图创建时分配的唯一会话标识。 */
+  session_id: string;
+  /** 选中的截图区域，使用物理像素。 */
+  region: Region;
+  /** OCR 失败时提供的错误详情。 */
+  message?: string;
+};
+
 export type OverlayOcrPayload = {
-  /** OCR region in screen coordinates. */
+  /** 与开始事件对应的截图会话标识。 */
+  session_id: string;
+  /** 识别出的文字、行坐标及置信度。 */
   result: OcrTextResult;
   /** Whether the overlay action should continue into translation. */
   translate_after_ocr: boolean;
+  /** 选中的截图区域，使用物理像素。 */
   region: Region;
 };
 
@@ -253,4 +268,24 @@ export type WorkspaceSnapshot = {
   textLines: TextLine[];
   /** Keeps OCR-only results from being translated before the user reviews them. */
   requiresReview: boolean;
+};
+
+/** 文本翻译附带的来源、OCR 复核信息和前端任务身份。 */
+export type TextTranslationContext = {
+  /** 原始内容来自文本、划词、截图或导入图片。 */
+  source?: string;
+  /** 与原文匹配的 OCR 行坐标和置信度。 */
+  textLines?: TextLine[];
+  /** 存在时禁止后端未经前端校验直接广播结果。 */
+  requestId?: string;
+};
+
+/** 图片翻译显式采用当前工作区语言和任务身份。 */
+export type ImageTranslationContext = {
+  /** 当前选择的目标语言，包括自动模式。 */
+  targetLang?: string;
+  /** 用户明确选择的源语言；自动时省略。 */
+  sourceLang?: string;
+  /** 存在时结果仅返回给发起任务。 */
+  requestId?: string;
 };

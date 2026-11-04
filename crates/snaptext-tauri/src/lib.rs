@@ -5,7 +5,7 @@ use snaptext_core::{
     Error, Result,
     config::{AppConfig, Lang},
     history::{HistoryRecord, HistorySource, HistoryStore, NewHistoryRecord},
-    ocr::OcrEngine,
+    ocr::{OcrEngine, TextLine},
     pipeline::{TranslationResult, first_translated_text},
     selection::{SelectionEvent, looks_like_garbled_selection, normalize_selection_text},
     translate::{DictionaryEntry, TranslateRequest, TranslatorRegistry, resolve_auto_target_lang},
@@ -182,6 +182,7 @@ pub fn run_tauri(config: AppConfig, history: HistoryStore) -> Result<()> {
             get_config,
             get_cloud_health,
             get_result_snapshot,
+            publish_result_snapshot,
             get_overlay_screenshot,
             clear_overlay_screenshot,
             screenshot_full,
@@ -570,7 +571,7 @@ async fn start_native_screenshot_selection_inner(
     restore_main_window_if_needed(app, restore_main_window)?;
 
     let (payload, image) = capture?;
-    emit_overlay_ocr_started(app, payload_to_full_region(&payload));
+    emit_overlay_ocr_started(app, &payload.session_id, payload_to_full_region(&payload));
     match ocr_dynamic_image_inner(state, image).await {
         Ok(result) => {
             let translate_after_ocr = state
@@ -580,13 +581,19 @@ async fn start_native_screenshot_selection_inner(
                 .unwrap_or(true);
             emit_overlay_ocr(
                 app,
+                &payload.session_id,
                 result,
                 payload_to_full_region(&payload),
                 translate_after_ocr,
             )
         }
         Err(err) => {
-            emit_overlay_ocr_failed(app, payload_to_full_region(&payload));
+            emit_overlay_ocr_failed(
+                app,
+                &payload.session_id,
+                payload_to_full_region(&payload),
+                &err,
+            );
             return Err(err);
         }
     }
@@ -677,19 +684,45 @@ async fn translate_selection(
     Ok(record)
 }
 
+/// 翻译文字并保留来源和 OCR 元信息；受控请求由前端确认后再发布。
 #[tauri::command]
-#[allow(dead_code)]
+#[allow(dead_code, clippy::too_many_arguments)]
 async fn translate_text(
     app: AppHandle,
     state: State<'_, AppState>,
     source_text: String,
     target_lang: Option<String>,
     source_lang: Option<String>,
+    source: Option<String>,
+    text_lines: Option<Vec<TextLine>>,
+    request_id: Option<String>,
 ) -> Result<HistoryRecord> {
-    let record = translate_text_inner(state.inner(), source_text, target_lang, source_lang).await?;
-    // Text commands do not necessarily emit a result event, so persist the snapshot here too.
-    remember_result_snapshot(&app, PinnedResultPayload::from(&record));
+    let source = parse_history_source(source.as_deref().unwrap_or("text"))?;
+    let record = translate_text_with_source_inner(
+        state.inner(),
+        source_text,
+        source,
+        target_lang,
+        source_lang,
+        text_lines.unwrap_or_default(),
+    )
+    .await?;
+    if should_publish_translation(request_id.as_deref()) {
+        remember_result_snapshot(&app, PinnedResultPayload::from(&record));
+    }
     Ok(record)
+}
+
+/// 受控请求的迟到结果不能主动覆盖独立窗口；只有前端确认的结果可发布。
+fn should_publish_translation(request_id: Option<&str>) -> bool {
+    request_id.is_none()
+}
+
+/// 发布主工作区已经确认仍有效的结果，只通知独立结果窗口。
+#[tauri::command]
+#[allow(dead_code)]
+fn publish_result_snapshot(app: AppHandle, snapshot: PinnedResultPayload) {
+    remember_result_snapshot(&app, snapshot);
 }
 
 #[tauri::command]
@@ -724,24 +757,32 @@ async fn retranslate_result_text(
     Ok(record)
 }
 
+/// 使用本次请求的语言翻译图片，受控请求不自动广播迟到结果。
 #[tauri::command]
-#[allow(dead_code)]
+#[allow(dead_code, clippy::too_many_arguments)]
 async fn translate_image_base64(
     app: AppHandle,
     state: State<'_, AppState>,
     base64_png: String,
     bbox: Option<snaptext_core::ocr::BBox>,
     preprocess_options: Option<ImagePreprocessOptions>,
+    target_lang: Option<String>,
+    source_lang: Option<String>,
+    request_id: Option<String>,
 ) -> Result<TranslationResult> {
-    let result = translate_base64_image_inner(
+    let result = translate_base64_image_with_languages_inner(
         state.inner(),
         base64_png,
         HistorySource::Image,
         bbox,
         preprocess_options,
+        target_lang,
+        source_lang,
     )
     .await?;
-    emit_result_translation(&app, &result);
+    if should_publish_translation(request_id.as_deref()) {
+        emit_result_translation(&app, &result);
+    }
     Ok(result)
 }
 
@@ -807,6 +848,7 @@ async fn ocr_overlay_selection(
     if overlay_session_is_current(state.inner(), &session.screenshot.session_id)? {
         emit_overlay_ocr(
             &app,
+            &session.screenshot.session_id,
             result.clone(),
             bbox,
             translate_after_ocr.unwrap_or(true),
@@ -906,28 +948,48 @@ fn unpin_result_window(app: AppHandle) -> Result<()> {
     Ok(())
 }
 
+/// 为原生单元测试保留普通文本调用入口及空 OCR 元信息。
+#[cfg(test)]
 async fn translate_text_inner(
     state: &AppState,
     text: String,
     target_lang: Option<String>,
     source_lang: Option<String>,
 ) -> Result<HistoryRecord> {
-    translate_text_with_source_inner(state, text, HistorySource::Text, target_lang, source_lang)
-        .await
+    translate_text_with_source_inner(
+        state,
+        text,
+        HistorySource::Text,
+        target_lang,
+        source_lang,
+        Vec::new(),
+    )
+    .await
 }
 
+/// 将划词原文交给统一翻译入口并保存划词来源。
 async fn translate_selection_inner(state: &AppState, text: String) -> Result<HistoryRecord> {
     let text = normalize_selection_text_for_translation(text)?;
 
-    translate_text_with_source_inner(state, text, HistorySource::Selection, None, None).await
+    translate_text_with_source_inner(
+        state,
+        text,
+        HistorySource::Selection,
+        None,
+        None,
+        Vec::new(),
+    )
+    .await
 }
 
+/// 按实际来源保存文字翻译，并将 OCR 与词典元信息一起持久化。
 async fn translate_text_with_source_inner(
     state: &AppState,
     text: String,
     source: HistorySource,
     target_lang: Option<String>,
     source_lang: Option<String>,
+    text_lines: Vec<TextLine>,
 ) -> Result<HistoryRecord> {
     let text = normalize_selection_text_for_translation(text)?;
 
@@ -965,17 +1027,16 @@ async fn translate_text_with_source_inner(
         .lock()
         .map_err(|err| Error::History(err.to_string()))?;
 
-    // Keep history writes behind the command boundary so every translated
-    // text request has the same persistence behavior as screenshot and image flows.
-    // 词典增强只附在本次返回 payload 上，历史表仍只保存稳定的译文文本。
-    let mut record = history.insert(NewHistoryRecord {
-        source,
-        source_text: text.clone(),
-        target_lang: target_lang.0,
-        translated_text: translation.translated_text,
-    })?;
-    record.dictionary_entries = translation.dictionary_entries;
-    Ok(record)
+    history.insert_with_metadata(
+        NewHistoryRecord {
+            source,
+            source_text: text,
+            target_lang: target_lang.0,
+            translated_text: translation.translated_text,
+        },
+        &translation.dictionary_entries,
+        &text_lines,
+    )
 }
 
 fn ensure_supported_target_lang_for_translation(target_lang: &Lang) -> Result<()> {
@@ -986,7 +1047,9 @@ fn ensure_supported_target_lang_for_translation(target_lang: &Lang) -> Result<()
 }
 
 struct HistoryTranslation {
+    /// 翻译服务返回的首条完整译文。
     translated_text: String,
+    /// 与译文一起返回的词典释义。
     dictionary_entries: Vec<DictionaryEntry>,
 }
 
@@ -1026,6 +1089,7 @@ fn normalize_selection_text_for_translation(text: String) -> Result<String> {
     Ok(text)
 }
 
+/// 重新翻译原文，并在新历史记录中保留来源与词典结果。
 async fn retranslate_result_text_inner(
     state: &AppState,
     source: HistorySource,
@@ -1066,18 +1130,20 @@ async fn retranslate_result_text_inner(
         .await?;
     let translated_text = first_translated_text(&translation.translated_texts)?;
 
-    let mut record = state
+    state
         .history
         .lock()
         .map_err(|err| Error::History(err.to_string()))?
-        .insert(NewHistoryRecord {
-            source,
-            source_text,
-            target_lang: target_lang.0,
-            translated_text,
-        })?;
-    record.dictionary_entries = translation.dictionary_entries;
-    Ok(record)
+        .insert_with_metadata(
+            NewHistoryRecord {
+                source,
+                source_text,
+                target_lang: target_lang.0,
+                translated_text,
+            },
+            &translation.dictionary_entries,
+            &[],
+        )
 }
 
 async fn translate_current_selection_inner(state: &AppState) -> Result<HistoryRecord> {
@@ -1255,12 +1321,35 @@ async fn ocr_screenshot_region_inner(
     ocr_dynamic_image_inner(state, DynamicImage::ImageRgba8(image)).await
 }
 
+/// 为未显式选择语言的原生图片入口保留配置默认值。
 async fn translate_base64_image_inner(
     state: &AppState,
     base64_png: String,
     source: HistorySource,
     bbox: Option<snaptext_core::ocr::BBox>,
     preprocess_options: Option<ImagePreprocessOptions>,
+) -> Result<TranslationResult> {
+    translate_base64_image_with_languages_inner(
+        state,
+        base64_png,
+        source,
+        bbox,
+        preprocess_options,
+        None,
+        None,
+    )
+    .await
+}
+
+/// 解码图片后按请求语言执行 OCR 和翻译。
+async fn translate_base64_image_with_languages_inner(
+    state: &AppState,
+    base64_png: String,
+    source: HistorySource,
+    bbox: Option<snaptext_core::ocr::BBox>,
+    preprocess_options: Option<ImagePreprocessOptions>,
+    target_lang: Option<String>,
+    source_lang: Option<String>,
 ) -> Result<TranslationResult> {
     let image = base64_image_to_dynamic_image(&base64_png)?;
     let image = if let Some(bbox) = bbox {
@@ -1269,13 +1358,26 @@ async fn translate_base64_image_inner(
         image
     };
     let image = preprocess_image(image, preprocess_options.as_ref())?;
-    translate_dynamic_image_inner(state, image, source).await
+    translate_dynamic_image_with_languages_inner(state, image, source, target_lang, source_lang)
+        .await
 }
 
+/// 为系统截图入口沿用配置中的语言设置。
 async fn translate_dynamic_image_inner(
     state: &AppState,
     image: DynamicImage,
     source: HistorySource,
+) -> Result<TranslationResult> {
+    translate_dynamic_image_with_languages_inner(state, image, source, None, None).await
+}
+
+/// 统一使用显式语言或配置默认值翻译 OCR 原文。
+async fn translate_dynamic_image_with_languages_inner(
+    state: &AppState,
+    image: DynamicImage,
+    source: HistorySource,
+    target_lang: Option<String>,
+    source_lang: Option<String>,
 ) -> Result<TranslationResult> {
     let target = {
         state
@@ -1300,15 +1402,11 @@ async fn translate_dynamic_image_inner(
     }
 
     let ocr_result = ocr_dynamic_image_inner(state, image).await?;
-    let target = resolve_auto_target_lang(&ocr_result.source_text, target);
-    let translation = translator
-        .translate(TranslateRequest {
-            texts: vec![ocr_result.source_text.clone()],
-            source: None,
-            target: target.clone(),
-        })
-        .await?;
-    let translated_text = first_translated_text(&translation.translated_texts)?;
+    let request =
+        image_translate_request(&ocr_result.source_text, target, target_lang, source_lang);
+    let target = request.target.clone();
+    let translation = translate_first_for_history(state, translator, request).await?;
+    let translated_text = translation.translated_text;
     let result = TranslationResult {
         source,
         source_text: ocr_result.source_text,
@@ -1322,9 +1420,34 @@ async fn translate_dynamic_image_inner(
         .history
         .lock()
         .map_err(|err| Error::History(err.to_string()))?
-        .insert(history_record)?;
+        .insert_with_metadata(
+            history_record,
+            &result.dictionary_entries,
+            &result.text_lines,
+        )?;
 
     Ok(result)
+}
+
+/// 显式语言优先于配置；自动源语言保持为空交给服务端识别。
+fn image_translate_request(
+    text: &str,
+    default_target: Lang,
+    target_lang: Option<String>,
+    source_lang: Option<String>,
+) -> TranslateRequest {
+    let target = target_lang
+        .map(|value| Lang(value.trim().to_owned()))
+        .filter(|value| !value.0.is_empty())
+        .unwrap_or(default_target);
+    let source = source_lang
+        .map(|value| Lang(value.trim().to_owned()))
+        .filter(|value| !value.0.is_empty() && !value.0.eq_ignore_ascii_case("auto"));
+    TranslateRequest {
+        texts: vec![text.to_owned()],
+        source,
+        target: resolve_auto_target_lang(text, target),
+    }
 }
 
 async fn ocr_dynamic_image_inner(state: &AppState, image: DynamicImage) -> Result<OcrTextResult> {

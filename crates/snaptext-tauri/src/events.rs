@@ -34,12 +34,27 @@ pub struct OverlayTranslationPayload {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct OverlayOcrPayload {
+    /// 截图会话标识，防止过期 OCR 结果替换当前工作区。
+    pub session_id: String,
     /// OCR output for the selected screen region.
     pub result: OcrTextResult,
     /// Whether the UI should start translation after showing the OCR text.
     pub translate_after_ocr: bool,
     /// Selected screen region in physical pixels.
     pub region: snaptext_core::ocr::BBox,
+}
+
+/// OCR 开始和失败事件共享的会话上下文。
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct OverlayOcrStatusPayload {
+    /// 本次截图的唯一会话标识。
+    pub session_id: String,
+    /// OCR 处理的实际截图区域。
+    pub region: snaptext_core::ocr::BBox,
+    /// 失败时的具体错误；开始事件不包含此字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -198,27 +213,51 @@ pub(crate) fn selection_failure_message(error: &Error) -> String {
     message
 }
 
+/// 发出包含会话标识的 OCR 开始事件。
 #[cfg(target_os = "macos")]
-pub(crate) fn emit_overlay_ocr_started(app: &AppHandle, region: snaptext_core::ocr::BBox) {
-    if let Err(err) = app.emit_to(MAIN_WINDOW_LABEL, OVERLAY_OCR_STARTED_EVENT, region) {
+pub(crate) fn emit_overlay_ocr_started(
+    app: &AppHandle,
+    session_id: &str,
+    region: snaptext_core::ocr::BBox,
+) {
+    let event = OverlayOcrStatusPayload {
+        session_id: session_id.to_owned(),
+        region,
+        message: None,
+    };
+    if let Err(err) = app.emit_to(MAIN_WINDOW_LABEL, OVERLAY_OCR_STARTED_EVENT, event) {
         tracing::warn!(error = %err, "failed to emit overlay OCR started");
     }
 }
 
+/// 发出可关联到原截图的 OCR 错误，供主窗口安全展示。
 #[cfg(target_os = "macos")]
-pub(crate) fn emit_overlay_ocr_failed(app: &AppHandle, region: snaptext_core::ocr::BBox) {
-    if let Err(err) = app.emit_to(MAIN_WINDOW_LABEL, OVERLAY_OCR_FAILED_EVENT, region) {
+pub(crate) fn emit_overlay_ocr_failed(
+    app: &AppHandle,
+    session_id: &str,
+    region: snaptext_core::ocr::BBox,
+    error: &Error,
+) {
+    let event = OverlayOcrStatusPayload {
+        session_id: session_id.to_owned(),
+        region,
+        message: Some(error.to_string()),
+    };
+    if let Err(err) = app.emit_to(MAIN_WINDOW_LABEL, OVERLAY_OCR_FAILED_EVENT, event) {
         tracing::warn!(error = %err, "failed to emit overlay OCR failure");
     }
 }
 
+/// 发出与原截图会话绑定的 OCR 结果。
 pub(crate) fn emit_overlay_ocr(
     app: &AppHandle,
+    session_id: &str,
     result: OcrTextResult,
     region: snaptext_core::ocr::BBox,
     translate_after_ocr: bool,
 ) {
     let event = OverlayOcrPayload {
+        session_id: session_id.to_owned(),
         result,
         translate_after_ocr,
         region,

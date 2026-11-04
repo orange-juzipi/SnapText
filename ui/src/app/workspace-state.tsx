@@ -174,6 +174,7 @@ export function WorkspaceStateProvider({ children }: {
   /** 同步抢占请求所有权，避免旧请求在 React 下一次渲染前写入。 */
   const beginTranslation = useCallback(() => {
     const id = ++translationEpochRef.current;
+    setOcrLoading(false);
     setTranslating(true);
     return id;
   }, []);
@@ -183,12 +184,16 @@ export function WorkspaceStateProvider({ children }: {
 
   /** 旧请求结束时不能停止新请求的加载提示。 */
   const finishTranslation = useCallback((id: number) => {
-    if (id === translationEpochRef.current) setTranslating(false);
+    if (id === translationEpochRef.current) {
+      setTranslating(false);
+      setOcrLoading(false);
+    }
   }, []);
 
   /** 内容被用户修改或替换后，旧翻译的结果和错误均不再有效。 */
   const cancelTranslation = useCallback(() => {
     translationEpochRef.current += 1;
+    setOcrLoading(false);
     setTranslating(false);
   }, []);
 

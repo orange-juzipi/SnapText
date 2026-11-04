@@ -123,7 +123,7 @@ export function OverlayApp() {
     setStatus(labels.ocrSelectedRegion);
     try {
       // The main window owns the input box, so announce OCR start before the blocking command.
-      await tauriEmit(events.overlayOcrStarted, region);
+      await tauriEmit(events.overlayOcrStarted, { session_id: screenshot.session_id, region });
       if (screenshotVersion !== screenshotVersionRef.current) return;
       await ocrOverlaySelection(region, translateAfterOcr, screenshot.session_id);
       if (screenshotVersion === screenshotVersionRef.current) await closeOverlay(screenshot.session_id);
@@ -131,7 +131,7 @@ export function OverlayApp() {
       if (screenshotVersion !== screenshotVersionRef.current) return;
       const message = error instanceof Error ? error.message : String(error);
       // 发送失败通知本身也可能失败，不能让它覆盖原始错误或形成未处理拒绝。
-      await tauriEmit(events.overlayOcrFailed, { ...region, message }).catch(() => undefined);
+      await tauriEmit(events.overlayOcrFailed, { session_id: screenshot.session_id, region, message }).catch(() => undefined);
       setStatus(message);
     } finally {
       if (screenshotVersion === screenshotVersionRef.current) {
