@@ -31,7 +31,6 @@ import { translatorProviderDetailLabel } from "@/lib/format";
 import { labelsForLanguage } from "@/lib/labels";
 import {
   AUTO_SOURCE_LANG,
-  DEFAULT_TARGET_LANG,
   detectSourceLang,
   languageDisplayName,
   looksLikeChinese,
@@ -705,7 +704,7 @@ export function WorkspacePage() {
     if (!nextTextInput || !canSwapTranslation) return;
     const previousSourceText = workspace.snapshot.sourceText.trim() || workspace.textInput;
     const nextSourceLang = normalizeTargetLang(workspace.snapshot.targetLang || workspace.targetLang);
-    const nextTargetLang = resolveSourceLang(previousSourceText, workspace.sourceLang) ?? DEFAULT_TARGET_LANG;
+    const nextTargetLang = resolveSourceSpeechLang(previousSourceText, workspace.sourceLang);
     const nextSourceRequestLang = resolveSourceLang(nextTextInput, nextSourceLang) ?? AUTO_SOURCE_LANG;
     stopSpeech();
     setActiveSpeechKey(null);
@@ -1766,8 +1765,11 @@ function readImageDimensions(dataUrl: string): Promise<{ width: number; height: 
   });
 }
 
+/** 用本地语言推断选择系统听写区域，独立于服务端翻译的自动检测。 */
 function nativeVoiceInputLocaleForLanguage(sourceLang: string, sourceText: string, uiLanguage?: string) {
-  const resolvedLang = resolveSourceLang(sourceText, sourceLang) ?? sourceLang;
+  const resolvedLang = sourceText.trim() || sourceLang !== AUTO_SOURCE_LANG
+    ? resolveSourceSpeechLang(sourceText, sourceLang)
+    : sourceLang;
   switch (resolvedLang) {
     case "zh_cn":
       return "zh-CN";

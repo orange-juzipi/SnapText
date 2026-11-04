@@ -478,6 +478,7 @@ export function detectSourceLang(text: string) {
 
   if (!/[A-Za-z]/u.test(sample)) return AUTO_SOURCE_LANG;
   const lowered = ` ${sample.toLowerCase().replace(/\s+/g, " ")} `;
+  /** 统计常见词命中数，仅用于界面提示和本机朗读的语言提示。 */
   const matches = (words: string[]) => words.reduce((count, word) => count + (lowered.includes(` ${word} `) ? 1 : 0), 0);
   const scores = [
     ["en", matches(["the", "and", "is", "are", "to", "of", "for", "with", "this", "that"])],
@@ -489,25 +490,32 @@ export function detectSourceLang(text: string) {
     ["nl", matches(["de", "het", "een", "en", "voor", "met", "niet", "dat", "van", "is"])],
   ] as const;
   const [bestCode, bestScore] = scores.reduce((best, current) => (current[1] > best[1] ? current : best), scores[0]);
-  return bestScore > 0 ? bestCode : "en";
+  // 短词、专名和多个语言相同的常见词不足以确定语言，保留待检测状态。
+  const hasUniqueBestScore = scores.filter(([, score]) => score === bestScore).length === 1;
+  return bestScore > 0 && hasUniqueBestScore ? bestCode : AUTO_SOURCE_LANG;
 }
 
-/** 尊重用户明确选择的源语言，仅在自动模式下使用文字推断。 */
-export function resolveSourceLang(sourceText: string, sourceLang: string) {
+/** 翻译请求仅指定用户明确选择的源语言，自动模式交给服务端检测。 */
+export function resolveSourceLang(_sourceText: string, sourceLang: string) {
   const normalized = normalizeLangCode(sourceLang);
   if (normalized && normalized !== AUTO_SOURCE_LANG) return normalized;
-  const detected = detectSourceLang(sourceText);
-  return detected === AUTO_SOURCE_LANG ? undefined : detected;
+  return undefined;
 }
 
+/** 本机朗读没有服务端检测步骤，使用明确语言或本地文字提示选择音色。 */
 export function resolveSourceSpeechLang(sourceText: string, sourceLang = AUTO_SOURCE_LANG) {
-  return resolveSourceLang(sourceText, sourceLang) ?? DEFAULT_TARGET_LANG;
+  const explicit = resolveSourceLang(sourceText, sourceLang);
+  if (explicit) return explicit;
+  const detected = detectSourceLang(sourceText);
+  return detected === AUTO_SOURCE_LANG ? DEFAULT_TARGET_LANG : detected;
 }
 
+/** 判断本地文字提示是否为中文，用于自动选择中英目标语言。 */
 export function looksLikeChinese(text: string) {
   return detectSourceLang(text) === "zh_cn";
 }
 
+/** 保留明确目标语言，自动模式在中英文之间切换。 */
 export function resolveTargetLang(sourceText: string, targetLang: string) {
   const normalized = normalizeTargetLang(targetLang);
   if (normalized !== AUTO_TARGET_LANG) return normalized;
