@@ -228,13 +228,14 @@ pub(crate) fn emit_overlay_ocr(
     }
 }
 
+/// 恢复历史记录中的译文和 OCR 元信息供结果工作区使用。
 pub(crate) fn history_record_to_translation_result(record: &HistoryRecord) -> TranslationResult {
     TranslationResult {
         source: record.source.clone(),
         source_text: record.source_text.clone(),
         translated_text: record.translated_text.clone(),
         target_lang: record.target_lang.clone(),
-        text_lines: Vec::new(),
+        text_lines: record.text_lines.clone(),
         dictionary_entries: record.dictionary_entries.clone(),
     }
 }

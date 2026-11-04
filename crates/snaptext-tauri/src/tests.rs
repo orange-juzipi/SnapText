@@ -505,6 +505,7 @@ fn parse_history_source_rejects_unknown_value() {
     assert!(err.to_string().contains("unsupported history source"));
 }
 
+/// 历史结果转换应保留原文、来源和目标语言。
 #[test]
 fn history_record_to_translation_result_preserves_snapshot_fields() {
     let record = HistoryRecord {
@@ -515,6 +516,7 @@ fn history_record_to_translation_result_preserves_snapshot_fields() {
         target_lang: String::from("ja"),
         translated_text: String::from("konnichiwa\nsekai"),
         dictionary_entries: Vec::new(),
+        text_lines: Vec::new(),
     };
 
     let result = history_record_to_translation_result(&record);

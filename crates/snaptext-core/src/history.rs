@@ -6,7 +6,7 @@ use std::{
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
-use crate::{Error, Result, translate::DictionaryEntry};
+use crate::{Error, Result, ocr::TextLine, translate::DictionaryEntry};
 
 const MAX_HISTORY_RECORDS: usize = 500;
 
@@ -15,18 +15,27 @@ pub struct HistoryStore {
     conn: Connection,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub struct HistoryRecord {
+    /// 数据库记录标识。
     pub id: i64,
+    /// 创建时间，单位为 Unix 毫秒。
     pub created_at: i64,
+    /// 原文的实际来源。
     pub source: HistorySource,
+    /// 完整原文。
     pub source_text: String,
+    /// 译文使用的目标语言。
     pub target_lang: String,
+    /// 完整译文。
     pub translated_text: String,
-    // 词典增强只随当次翻译结果展示，历史表暂不持久化，避免引入迁移。
+    /// 与这次翻译一起持久化的词典释义。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dictionary_entries: Vec<DictionaryEntry>,
+    /// OCR 行坐标和置信度；旧记录默认为空。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub text_lines: Vec<TextLine>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -65,19 +74,36 @@ impl HistoryStore {
         Ok(store)
     }
 
+    /// 保存不包含 OCR 或词典元信息的文本记录。
     pub fn insert(&self, record: NewHistoryRecord) -> Result<HistoryRecord> {
+        self.insert_with_metadata(record, &[], &[])
+    }
+
+    /// 将翻译内容及对应的 OCR、词典数据一起写入同一条记录。
+    pub fn insert_with_metadata(
+        &self,
+        record: NewHistoryRecord,
+        dictionary_entries: &[DictionaryEntry],
+        text_lines: &[TextLine],
+    ) -> Result<HistoryRecord> {
         validate_record(&record)?;
+        let dictionary_json = serde_json::to_string(dictionary_entries)
+            .map_err(|err| Error::History(err.to_string()))?;
+        let text_lines_json =
+            serde_json::to_string(text_lines).map_err(|err| Error::History(err.to_string()))?;
 
         let created_at = now_ms()?;
         self.conn.execute(
-            "INSERT INTO history (created_at, source, source_text, target_lang, translated_text)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO history (created_at, source, source_text, target_lang, translated_text, dictionary_json, text_lines_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 created_at,
                 source_to_str(&record.source),
                 record.source_text,
                 record.target_lang,
                 record.translated_text,
+                dictionary_json,
+                text_lines_json,
             ],
         )?;
         self.prune()?;
@@ -116,7 +142,7 @@ impl HistoryStore {
         }
 
         let mut stmt = self.conn.prepare(
-            "SELECT id, created_at, source, source_text, target_lang, translated_text
+            "SELECT id, created_at, source, source_text, target_lang, translated_text, dictionary_json, text_lines_json
              FROM history
              ORDER BY created_at DESC, id DESC
              LIMIT ?1",
@@ -168,6 +194,7 @@ impl HistoryStore {
         Ok(())
     }
 
+    /// 兼容升级现有历史数据库，并保留旧记录的空元信息默认值。
     fn migrate(&self) -> Result<()> {
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS history (
@@ -180,13 +207,24 @@ impl HistoryStore {
             );
             CREATE INDEX IF NOT EXISTS idx_history_created_at ON history(created_at DESC);",
         )?;
+        let mut statement = self.conn.prepare("PRAGMA table_info(history)")?;
+        let columns = statement
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        for column in ["dictionary_json", "text_lines_json"] {
+            if !columns.iter().any(|existing| existing == column) {
+                self.conn.execute_batch(&format!(
+                    "ALTER TABLE history ADD COLUMN {column} TEXT NOT NULL DEFAULT '[]'"
+                ))?;
+            }
+        }
         Ok(())
     }
 
     fn get(&self, id: i64) -> Result<Option<HistoryRecord>> {
         self.conn
             .query_row(
-                "SELECT id, created_at, source, source_text, target_lang, translated_text
+                "SELECT id, created_at, source, source_text, target_lang, translated_text, dictionary_json, text_lines_json
                  FROM history
                  WHERE id = ?1",
                 [id],
@@ -209,6 +247,7 @@ impl HistoryStore {
     }
 }
 
+/// 将数据库行及 JSON 元信息还原为完整历史记录。
 fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryRecord> {
     let source: String = row.get(2)?;
     Ok(HistoryRecord {
@@ -220,7 +259,19 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryRecord> {
         source_text: row.get(3)?,
         target_lang: row.get(4)?,
         translated_text: row.get(5)?,
-        dictionary_entries: Vec::new(),
+        dictionary_entries: parse_metadata(row, 6)?,
+        text_lines: parse_metadata(row, 7)?,
+    })
+}
+
+/// 将元信息解析错误关联到实际数据库列，避免静默丢弃坏数据。
+fn parse_metadata<T: serde::de::DeserializeOwned>(
+    row: &rusqlite::Row<'_>,
+    index: usize,
+) -> rusqlite::Result<T> {
+    let json: String = row.get(index)?;
+    serde_json::from_str(&json).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(index, rusqlite::types::Type::Text, Box::new(err))
     })
 }
 
@@ -517,5 +568,58 @@ mod tests {
         let err = store.recent(10).expect_err("invalid history source");
 
         assert!(err.to_string().contains("invalid history source"));
+    }
+    /// 原有数据库升级后仍可读取旧记录，新记录的元信息跨重新打开保存。
+    #[test]
+    fn legacy_history_migrates_and_metadata_survives_reopen() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("history.sqlite");
+        let connection = Connection::open(&path).expect("legacy connection");
+        connection
+            .execute_batch(
+                "CREATE TABLE history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL,
+            source TEXT NOT NULL, source_text TEXT NOT NULL,
+            target_lang TEXT NOT NULL, translated_text TEXT NOT NULL);
+            INSERT INTO history VALUES (1, 1, 'text', 'old', 'en', 'legacy');",
+            )
+            .expect("legacy schema");
+        drop(connection);
+        let store = HistoryStore::open(&path).expect("migrate history");
+        let legacy = store.recent(1).expect("legacy history");
+        assert!(legacy[0].text_lines.is_empty());
+        assert!(legacy[0].dictionary_entries.is_empty());
+        let line = TextLine {
+            text: "scanned".into(),
+            bbox: crate::ocr::BBox {
+                x: 2,
+                y: 3,
+                width: 70,
+                height: 12,
+            },
+            confidence: 0.72,
+        };
+        let entry = DictionaryEntry {
+            headword: "scanned".into(),
+            phonetic: None,
+            audio_url: None,
+            part_of_speech: "verb".into(),
+            translations: vec!["扫描".into()],
+            definitions: vec![],
+            source: "test".into(),
+        };
+        let inserted = store
+            .insert_with_metadata(
+                record(2),
+                std::slice::from_ref(&entry),
+                std::slice::from_ref(&line),
+            )
+            .expect("metadata insert");
+        drop(store);
+        let reopened = HistoryStore::open(&path).expect("reopen history");
+        let restored = reopened.recent(1).expect("restored history");
+        assert_eq!(restored[0].id, inserted.id);
+        assert_eq!(restored[0].text_lines, vec![line]);
+        assert_eq!(restored[0].dictionary_entries, vec![entry]);
     }
 }
