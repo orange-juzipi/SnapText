@@ -6,7 +6,7 @@ use std::{
 
 use image::{DynamicImage, GrayImage, Rgb, RgbImage, imageops::FilterType};
 use ndarray::{Array4, ArrayViewD, ShapeError};
-use ort::{session::Session, value::TensorRef};
+use ort::{environment::Environment, session::Session, value::TensorRef};
 use serde::{Deserialize, Serialize};
 
 use crate::{Error, Result};
@@ -610,11 +610,13 @@ impl OcrFileFingerprint {
 }
 
 impl OcrSessions {
+    /// 在同一个 ONNX Runtime 环境中加载三个 OCR 模型。
     pub fn from_manifest(manifest: &OcrModelManifest) -> Result<Self> {
+        let environment = ort::init().build()?;
         Ok(Self {
-            det: load_session_from_file(&manifest.det)?,
-            cls: load_session_from_file(&manifest.cls)?,
-            rec: load_session_from_file(&manifest.rec)?,
+            det: load_session_from_file(&environment, &manifest.det)?,
+            cls: load_session_from_file(&environment, &manifest.cls)?,
+            rec: load_session_from_file(&environment, &manifest.rec)?,
         })
     }
 
@@ -855,8 +857,9 @@ fn decode_classification_logits(probabilities: &[f32]) -> Result<ClassificationO
     })
 }
 
-fn load_session_from_file(path: &Path) -> Result<Session> {
-    Session::builder()?
+/// 使用共享的 ONNX Runtime 环境从本地文件创建模型会话。
+fn load_session_from_file(environment: &Environment, path: &Path) -> Result<Session> {
+    Session::builder(environment)?
         .commit_from_file(path)
         .map_err(Into::into)
 }
