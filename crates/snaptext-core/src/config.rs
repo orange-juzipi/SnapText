@@ -157,6 +157,8 @@ pub enum TranslatorProvider {
     /// Experimental keyless Google Web requests sent directly from this device.
     #[serde(alias = "google-web")]
     GoogleWeb,
+    /// B 站提供的免密钥实验性翻译服务，由桌面端直连。
+    IndexTranslate,
     LocalHttp,
 }
 
@@ -658,8 +660,8 @@ fn validate_translator_config(config: &TranslatorConfig) -> Result<()> {
         }
         TranslatorProvider::DeepL => validate_deepl_config(&config.deepl)?,
         TranslatorProvider::Google => validate_google_config(&config.google)?,
-        // Google Web uses a fixed public endpoint and has no credentials to validate.
-        TranslatorProvider::GoogleWeb => {}
+        // 直连服务使用固定公网地址，无需验证用户凭据。
+        TranslatorProvider::GoogleWeb | TranslatorProvider::IndexTranslate => {}
         // These providers are kept only so older config files can deserialize.
         // UI and runtime normalization migrate them to SnapText Cloud.
         TranslatorProvider::OpenAiCompatible | TranslatorProvider::LocalHttp => {}

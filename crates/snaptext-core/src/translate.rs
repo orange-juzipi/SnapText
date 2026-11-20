@@ -25,6 +25,10 @@ pub const ENGLISH_TARGET_LANG: &str = "en";
 pub const CHINESE_TARGET_LANG: &str = "zh_cn";
 /// Matches the cloud Google Web adapter's per-request Unicode character limit.
 pub const MAX_GOOGLE_WEB_TEXT_CHARS: usize = 1_000;
+const INDEX_TRANSLATE_ENDPOINT: &str = "https://index-translate.bilibili.com/v1/chat/completions";
+const INDEX_TRANSLATE_MODEL: &str = "Index-Translate-35B-A3B";
+const INDEX_TRANSLATE_USER_AGENT: &str = "Index-Translate-Client/1.0";
+const INDEX_TRANSLATE_TIMEOUT: Duration = Duration::from_secs(30);
 const GOOGLE_WEB_ENDPOINT: &str = "https://translate.googleapis.com/translate_a/single";
 const GOOGLE_WEB_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 
@@ -137,6 +141,9 @@ impl TranslatorRegistry {
                     .await
             }
             TranslatorProvider::GoogleWeb => GoogleWebTranslator::new()?.translate(req).await,
+            TranslatorProvider::IndexTranslate => {
+                IndexTranslateTranslator::new()?.translate(req).await
+            }
             TranslatorProvider::LocalHttp => {
                 LocalHttpTranslator::new(self.config.local_http.clone(), self.client.clone())
                     .translate(req)
@@ -224,6 +231,36 @@ impl GoogleWebTranslator {
             endpoint: Url::parse(GOOGLE_WEB_ENDPOINT).expect("valid Google Web endpoint"),
             client,
         })
+    }
+}
+
+/// 将文本直接发送到 B 站的免密钥翻译服务。
+struct IndexTranslateTranslator {
+    /// 生产环境使用固定 HTTPS 地址，测试可替换为回环地址。
+    endpoint: Url,
+    /// 独立客户端，避免重试、重定向或携带 SnapText Cloud 凭据。
+    client: Client,
+}
+
+impl IndexTranslateTranslator {
+    /// 使用独立的直连客户端，保证每条请求的等待时间有上限。
+    fn new() -> Result<Self> {
+        Ok(Self {
+            endpoint: Url::parse(INDEX_TRANSLATE_ENDPOINT).expect("valid Index-Translate endpoint"),
+            client: Self::client(INDEX_TRANSLATE_TIMEOUT)?,
+        })
+    }
+
+    /// 构建直连客户端，测试可用较短超时覆盖网络等待失败。
+    fn client(timeout: Duration) -> Result<Client> {
+        Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(timeout)
+            .retry(reqwest::retry::never())
+            .redirect(reqwest::redirect::Policy::none())
+            .user_agent(INDEX_TRANSLATE_USER_AGENT)
+            .build()
+            .map_err(index_translate_request_error)
     }
 }
 
@@ -460,6 +497,47 @@ impl Translator for GoogleWebTranslator {
             translated_texts,
             dictionary_entries: Vec::new(),
             provider: TranslatorProvider::GoogleWeb,
+        })
+    }
+}
+
+#[async_trait]
+impl Translator for IndexTranslateTranslator {
+    /// 按顺序翻译每条原文，任一请求失败时不返回部分结果。
+    async fn translate(&self, req: TranslateRequest) -> Result<TranslateResponse> {
+        validate_translate_request(&req)?;
+        let mut translated_texts = Vec::with_capacity(req.texts.len());
+        for text in &req.texts {
+            let response = self
+                .client
+                .post(self.endpoint.clone())
+                .json(&index_translate_payload(&req, text))
+                .send()
+                .await
+                .map_err(index_translate_request_error)?;
+            let status = response.status();
+            if status == StatusCode::TOO_MANY_REQUESTS {
+                return Err(Error::Translate(
+                    "Index-Translate was rate limited (HTTP 429). Try again later.".to_owned(),
+                ));
+            }
+            if !status.is_success() {
+                // 错误正文可能回显原文，只保留 HTTP 状态。
+                return Err(Error::Translate(format!(
+                    "Index-Translate is unavailable (HTTP {}). Try again later or switch translation services.",
+                    status.as_u16(),
+                )));
+            }
+            let value: Value = response
+                .json()
+                .await
+                .map_err(index_translate_request_error)?;
+            translated_texts.push(parse_index_translate_text(&value)?);
+        }
+        Ok(TranslateResponse {
+            translated_texts,
+            dictionary_entries: Vec::new(),
+            provider: TranslatorProvider::IndexTranslate,
         })
     }
 }
@@ -754,6 +832,93 @@ fn target_is_not_chinese(target: &Lang) -> bool {
 fn contains_chinese(text: &str) -> bool {
     text.chars()
         .any(|ch| ('\u{3400}'..='\u{9fff}').contains(&ch))
+}
+
+/// 构造官方单条纯文本翻译提示，避免模型回显 JSON 请求结构。
+fn index_translate_payload(req: &TranslateRequest, text: &str) -> Value {
+    let target = index_translate_language(&resolve_auto_target_lang(text, req.target.clone()).0);
+    let source = req
+        .source
+        .as_ref()
+        .filter(|lang| !lang.0.trim().is_empty() && !is_auto_lang(lang))
+        .map(|lang| index_translate_language(&lang.0))
+        .unwrap_or_default();
+    let prompt = format!(
+        "请将以下{source}文本翻译为{target}，直接输出翻译结果，不要进行任何解释。\n\n{text}"
+    );
+
+    json!({
+        "model": INDEX_TRANSLATE_MODEL,
+        "messages": [{ "role": "user", "content": prompt }],
+        "temperature": 0,
+        "max_tokens": 4096,
+        "stream": false,
+        "chat_template_kwargs": { "enable_thinking": false },
+    })
+}
+
+/// 使用官方提示中的语言名，其余语言沿用应用提供的语言代码。
+fn index_translate_language(code: &str) -> String {
+    let normalized = code.trim().to_ascii_lowercase().replace('_', "-");
+    match normalized.as_str() {
+        "zh" | "zh-cn" | "zh-hans" | "zh-sg" => "简体中文".to_owned(),
+        "zh-tw" | "zh-hant" | "zh-hk" | "zh-mo" => "繁體中文".to_owned(),
+        "en" => "英语".to_owned(),
+        "ja" => "日语".to_owned(),
+        "ko" => "韩语".to_owned(),
+        "fr" => "法语".to_owned(),
+        "de" => "德语".to_owned(),
+        "es" => "西班牙语".to_owned(),
+        _ => normalized,
+    }
+}
+
+/// 只接受正常结束的纯译文，保留段落内部换行。
+fn parse_index_translate_text(value: &Value) -> Result<String> {
+    match value
+        .pointer("/choices/0/finish_reason")
+        .and_then(Value::as_str)
+    {
+        Some("stop") => {}
+        Some("length") => {
+            return Err(Error::Translate(
+                "Index-Translate truncated the translation. Shorten the text and try again."
+                    .to_owned(),
+            ));
+        }
+        _ => {
+            return Err(Error::Translate(
+                "Index-Translate did not complete the translation. Try again or switch translation services."
+                    .to_owned(),
+            ));
+        }
+    }
+    value
+        .pointer("/choices/0/message/content")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            Error::Translate(
+                "Index-Translate returned no translation. Try again or switch translation services."
+                    .to_owned(),
+            )
+        })
+}
+
+/// 将网络错误转换成固定文案，避免将原文或上游正文带入界面与日志。
+fn index_translate_request_error(error: reqwest::Error) -> Error {
+    let message = if error.is_timeout() {
+        "Index-Translate timed out. Try again or shorten the text."
+    } else if error.is_connect() {
+        "Could not connect to Index-Translate. Check your network and try again."
+    } else if error.is_decode() {
+        "Index-Translate returned an invalid response. Try again later or switch translation services."
+    } else {
+        "The Index-Translate request failed. Try again or switch translation services."
+    };
+    Error::Translate(message.to_owned())
 }
 
 fn openai_payload(config: &OpenAiCompatibleConfig, req: &TranslateRequest) -> Value {
@@ -1073,6 +1238,26 @@ mod tests {
                 .expect("mock request");
             self.handle.join().expect("mock server thread");
             request
+        }
+    }
+
+    /// 捕获单条请求并保持连接打开，直到超时的客户端关闭连接。
+    fn stalled_index_translate_server() -> MockServer {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind stalled server");
+        let url = Url::parse(&format!("http://{}", listener.local_addr().expect("addr")))
+            .expect("stalled server URL");
+        let (requests_tx, requests) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            let request = read_http_request(&mut stream).expect("read request");
+            requests_tx.send(request).expect("record request");
+            let mut byte = [0];
+            let _ = stream.read(&mut byte);
+        });
+        MockServer {
+            url,
+            requests,
+            handle,
         }
     }
 
@@ -1554,6 +1739,169 @@ mod tests {
             Some("prəˈfaʊnd")
         );
         assert_eq!(response.dictionary_entries[0].definitions, ["深刻", "深奥"]);
+    }
+
+    /// 验证应用的语言代码在官方纯文本提示中正确区分简繁和自动检测。
+    #[test]
+    fn index_translate_payload_resolves_languages() {
+        let mut req = TranslateRequest {
+            texts: vec!["Hello".to_owned()],
+            source: Some(Lang("AUTO".to_owned())),
+            target: Lang("auto".to_owned()),
+        };
+        let payload = index_translate_payload(&req, "Hello");
+        assert_eq!(
+            payload["messages"][0]["content"],
+            "请将以下文本翻译为简体中文，直接输出翻译结果，不要进行任何解释。\n\nHello"
+        );
+        let payload = index_translate_payload(&req, "你好");
+        assert!(
+            payload["messages"][0]["content"]
+                .as_str()
+                .expect("prompt")
+                .contains("翻译为英语")
+        );
+        req.source = Some(Lang("en".to_owned()));
+        req.target = Lang("zh_tw".to_owned());
+        let payload = index_translate_payload(&req, "First line\nSecond line");
+        assert!(
+            payload["messages"][0]["content"]
+                .as_str()
+                .expect("prompt")
+                .starts_with("请将以下英语文本翻译为繁體中文")
+        );
+    }
+
+    /// 验证纯译文保留换行，空译文及未正常结束的响应不会进入结果。
+    #[test]
+    fn index_translate_requires_a_complete_nonempty_translation() {
+        let complete = json!({"choices": [{
+            "finish_reason": "stop",
+            "message": {"content": "  第一行\n第二行  "}
+        }]});
+        assert_eq!(
+            parse_index_translate_text(&complete).expect("complete"),
+            "第一行\n第二行"
+        );
+        for (reason, content, expected_error) in [
+            ("stop", json!(null), "no translation"),
+            ("stop", json!(" \n "), "no translation"),
+            ("length", json!("first half"), "truncated"),
+            ("content_filter", json!("partial"), "did not complete"),
+        ] {
+            let value = json!({"choices": [{
+                "finish_reason": reason,
+                "message": {"content": content}
+            }]});
+            let error = parse_index_translate_text(&value).expect_err("invalid response");
+            assert!(error.to_string().contains(expected_error));
+        }
+    }
+
+    /// 使用回环服务验证每条原文只请求一次，无鉴权，并按输入顺序返回译文。
+    #[tokio::test]
+    #[ignore = "requires loopback listener; run through scripts/verify_translator_providers.py"]
+    async fn index_translate_posts_public_api_requests_in_input_order() {
+        let server = MockServer::spawn_sequence(vec![
+            r#"{"choices":[{"finish_reason":"stop","message":{"content":"第一行\n第二行"}}]}"#,
+            r#"{"choices":[{"finish_reason":"stop","message":{"content":"第三行"}}]}"#,
+        ]);
+        let mut translator = IndexTranslateTranslator::new().expect("direct client");
+        assert_eq!(translator.endpoint.as_str(), INDEX_TRANSLATE_ENDPOINT);
+        translator.endpoint = server.endpoint("v1/chat/completions");
+        let texts = ["First line\nSecond line", "Third line"];
+        let response = translator
+            .translate(TranslateRequest {
+                texts: texts.map(str::to_owned).to_vec(),
+                source: None,
+                target: Lang("zh_cn".to_owned()),
+            })
+            .await
+            .expect("translation succeeds");
+        assert_eq!(response.translated_texts, ["第一行\n第二行", "第三行"]);
+        assert_eq!(response.provider, TranslatorProvider::IndexTranslate);
+        assert!(response.dictionary_entries.is_empty());
+
+        for text in texts {
+            let request = server
+                .requests
+                .recv_timeout(Duration::from_secs(5))
+                .expect("request");
+            assert_eq!(request.method, "POST");
+            assert_eq!(request.path, "/v1/chat/completions");
+            assert_eq!(request.headers["user-agent"], INDEX_TRANSLATE_USER_AGENT);
+            assert!(!request.headers.contains_key("authorization"));
+            let body: Value = serde_json::from_str(&request.body).expect("request body");
+            assert_eq!(body["model"], INDEX_TRANSLATE_MODEL);
+            assert_eq!(body["temperature"], 0);
+            assert_eq!(body["stream"], false);
+            assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false);
+            assert_eq!(body["messages"].as_array().expect("messages").len(), 1);
+            assert_eq!(body["messages"][0]["role"], "user");
+            assert!(
+                body["messages"][0]["content"]
+                    .as_str()
+                    .expect("content")
+                    .ends_with(&format!("\n\n{text}"))
+            );
+        }
+        server.handle.join().expect("mock server thread");
+    }
+
+    /// 回环模拟 HTTP 错误和异常译文，确保提示不会暴露原文或响应正文。
+    #[tokio::test]
+    #[ignore = "requires loopback listener; run through scripts/verify_translator_providers.py"]
+    async fn index_translate_reports_failures_without_exposing_text() {
+        for (status, body, expected_error) in [
+            (429, "PRIVATE_UPSTREAM", "rate limited"),
+            (503, "PRIVATE_UPSTREAM", "HTTP 503"),
+            (200, "not JSON: PRIVATE_UPSTREAM", "invalid response"),
+            (
+                200,
+                r#"{"choices":[{"finish_reason":"stop","message":{"content":""}}],"debug":"PRIVATE_UPSTREAM"}"#,
+                "no translation",
+            ),
+            (
+                200,
+                r#"{"choices":[{"finish_reason":"length","message":{"content":"PRIVATE_UPSTREAM"}}]}"#,
+                "truncated",
+            ),
+        ] {
+            let server = MockServer::spawn_responses(vec![(status, body)]);
+            let mut translator = IndexTranslateTranslator::new().expect("direct client");
+            translator.endpoint = server.endpoint("v1/chat/completions");
+            let error = translator
+                .translate(TranslateRequest {
+                    texts: vec!["PRIVATE_INPUT".to_owned(), "must not be sent".to_owned()],
+                    ..sample_request()
+                })
+                .await
+                .expect_err("first request fails")
+                .to_string();
+            assert!(error.contains(expected_error), "unexpected error: {error}");
+            assert!(!error.contains("PRIVATE_"));
+            let request = server.take_request();
+            assert!(request.body.contains("PRIVATE_INPUT"));
+            assert!(!request.body.contains("must not be sent"));
+        }
+    }
+
+    /// 回环服务在接收请求后不响应，验证超时提示与错误清理。
+    #[tokio::test]
+    #[ignore = "requires loopback listener; run through scripts/verify_translator_providers.py"]
+    async fn index_translate_times_out_waiting_for_a_response() {
+        let server = stalled_index_translate_server();
+        let translator = IndexTranslateTranslator {
+            endpoint: server.endpoint("v1/chat/completions"),
+            client: IndexTranslateTranslator::client(Duration::from_millis(500))
+                .expect("direct client"),
+        };
+        let error = translator
+            .translate(sample_request())
+            .await
+            .expect_err("request timed out");
+        assert!(error.to_string().contains("Index-Translate timed out"));
+        assert_eq!(server.take_request().path, "/v1/chat/completions");
     }
 
     #[test]

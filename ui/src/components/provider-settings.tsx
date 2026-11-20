@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Eye, EyeOff } from "lucide-react";
+import { Check, Eye, EyeOff, Languages } from "lucide-react";
 import { labelsForLanguage } from "@/lib/labels";
 import { translatorProviderLabel } from "@/lib/format";
 import { PROVIDER_IDS, providerRequiresApiKey, visibleProvider, type ProviderId } from "@/lib/translation-provider";
@@ -42,9 +42,7 @@ export function ProviderSummary({
   return (
     <div className="settings-provider-summary">
       <div className="settings-provider-summary-main">
-        <span className={`settings-provider-logo settings-provider-logo-${providerId}`}>
-          <img src={meta.icon} alt="" aria-hidden="true" />
-        </span>
+        <ProviderLogo provider={providerId} icon={meta.icon} />
         <div className="settings-provider-summary-copy">
           <span className="settings-provider-eyebrow">{labels.currentProvider}</span>
           <strong>{meta.name}</strong>
@@ -88,6 +86,7 @@ export function ProviderDialog({
   const selectedProvider = visibleProvider(localConfig.translator.provider);
   const selectedMeta = providerMeta(selectedProvider, labels);
   const requiresApiKey = providerRequiresApiKey(selectedProvider);
+  const isDirectProvider = selectedProvider === "google_web" || selectedProvider === "index_translate";
   const apiKey = selectedProvider === "deepl"
     ? localConfig.translator.deepl.api_key ?? ""
     : selectedProvider === "google"
@@ -148,9 +147,7 @@ export function ProviderDialog({
                   disabled={saving}
                   onClick={() => selectProvider(provider)}
                 >
-                  <span className={`settings-provider-logo settings-provider-logo-${provider}`}>
-                    <img src={meta.icon} alt="" aria-hidden="true" />
-                  </span>
+                  <ProviderLogo provider={provider} icon={meta.icon} />
                   <span className="settings-provider-card-copy">
                     <strong>{meta.name}</strong>
                   </span>
@@ -162,16 +159,14 @@ export function ProviderDialog({
 
           <div className="settings-provider-config-panel">
             <div className="settings-provider-config-heading">
-              <span className={`settings-provider-logo settings-provider-logo-${selectedProvider}`}>
-                <img src={selectedMeta.icon} alt="" aria-hidden="true" />
-              </span>
+              <ProviderLogo provider={selectedProvider} icon={selectedMeta.icon} />
               <div>
                 <h3>{selectedMeta.name}</h3>
-                {selectedProvider !== "google_web" ? <p>{selectedMeta.description}</p> : null}
+                {!isDirectProvider ? <p>{selectedMeta.description}</p> : null}
               </div>
             </div>
 
-            {selectedProvider === "google_web" ? (
+            {isDirectProvider ? (
               <div className="settings-provider-empty-config">
                 <strong>{labels.noApiKeyRequired}</strong>
                 <span>{selectedMeta.description}</span>
@@ -269,9 +264,23 @@ export function ProviderDialog({
   );
 }
 
+/** 统一显示品牌图标，未提供品牌资源的服务使用翻译图标。 */
+function ProviderLogo({ provider, icon }: {
+  /** 用于选择对应的图标样式。 */
+  provider: ProviderId;
+  /** 可选的本地品牌资源地址。 */
+  icon?: string;
+}) {
+  return (
+    <span className={`settings-provider-logo settings-provider-logo-${provider}`} aria-hidden="true">
+      {icon ? <img src={icon} alt="" /> : <Languages size={20} />}
+    </span>
+  );
+}
+
 type ProviderMetadata = {
-  /** 服务对应的本地图标。 */
-  icon: string;
+  /** 服务对应的可选本地品牌图标。 */
+  icon?: string;
   /** 区分官方 API 与网页直连的本地化服务名称。 */
   name: string;
   /** 当前服务的密钥要求、连接方式和使用限制。 */
@@ -290,6 +299,8 @@ function providerMeta(provider: ProviderId, labels: ReturnType<typeof labelsForL
       return { icon: googleTranslateProviderIcon, name, description: labels.googleProviderDescription };
     case "google_web":
       return { icon: googleTranslateProviderIcon, name, description: labels.googleWebProviderDescription };
+    case "index_translate":
+      return { name, description: labels.indexTranslateProviderDescription };
   }
 }
 

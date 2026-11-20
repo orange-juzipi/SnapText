@@ -1,11 +1,11 @@
 import { clientSnapTextCloudEndpoint } from "@/lib/snaptext-cloud";
 import type { AppConfig } from "@/lib/types";
 
-/** 客户端可选择的翻译服务；网页直连与 Google 官方 API 独立保存。 */
-export type ProviderId = "snaptext_cloud" | "deepl" | "google" | "google_web";
+/** 客户端可选择并保存的翻译服务标识。 */
+export type ProviderId = "snaptext_cloud" | "deepl" | "google" | "google_web" | "index_translate";
 
 /** 两处设置入口共用同一组服务，保持默认官方源与现有 API 的顺序。 */
-export const PROVIDER_IDS: readonly ProviderId[] = ["snaptext_cloud", "deepl", "google", "google_web"];
+export const PROVIDER_IDS: readonly ProviderId[] = ["snaptext_cloud", "deepl", "google", "google_web", "index_translate"];
 
 /** 保留支持的服务标识，旧版或未知配置仍展示默认官方源。 */
 export function visibleProvider(provider?: string): ProviderId {
@@ -13,7 +13,7 @@ export function visibleProvider(provider?: string): ProviderId {
   return PROVIDER_IDS.includes(normalized as ProviderId) ? normalized as ProviderId : "snaptext_cloud";
 }
 
-/** 网页直连与官方源无需密钥，只有收费 API 服务检查密钥。 */
+/** 只有 DeepL 和 Google 官方 API 需要用户填写密钥。 */
 export function providerRequiresApiKey(provider: ProviderId): boolean {
   return provider === "deepl" || provider === "google";
 }
@@ -28,7 +28,7 @@ export function mergeProviderConfig(current: AppConfig, providerDraft: AppConfig
   return next;
 }
 
-/** 清理服务草稿，不为免密钥网页直连新增地址或密钥配置。 */
+/** 清理服务草稿，免密钥直连仅保存服务标识。 */
 export function sanitizeProviderConfig(config: AppConfig): AppConfig {
   const next = structuredClone(config);
   next.translator.provider = visibleProvider(next.translator.provider.trim());

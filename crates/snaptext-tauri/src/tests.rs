@@ -325,6 +325,48 @@ fn update_config_persists_close_behavior() {
     );
 }
 
+/// 验证切换服务立即更新桌面翻译路由，并能在重新加载配置后保持选择。
+#[test]
+fn index_translate_is_applied_to_runtime_and_restored_after_restart() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let config_path = tempdir.path().join("config.yaml");
+    let state = AppState::with_config_path(
+        AppConfig::default(),
+        HistoryStore::in_memory().expect("history store"),
+        Some(config_path.clone()),
+    )
+    .expect("app state");
+    let mut config = get_config_inner(&state).expect("default config");
+    assert_eq!(
+        config.translator.provider,
+        TranslatorProvider::SnapTextCloud
+    );
+    config.translator.provider = TranslatorProvider::IndexTranslate;
+    let updated = update_config_inner(&state, config).expect("update config");
+    assert_eq!(
+        updated.translator.provider,
+        TranslatorProvider::IndexTranslate
+    );
+    assert_eq!(
+        state.translator.read().expect("translator").provider(),
+        &TranslatorProvider::IndexTranslate
+    );
+
+    let yaml = std::fs::read_to_string(&config_path).expect("saved config");
+    assert!(yaml.contains("provider: index_translate"));
+    let restored = AppConfig::load_or_default(Some(config_path)).expect("restored config");
+    let registry = translator_registry_for_config(&restored).expect("restored registry");
+    assert_eq!(registry.provider(), &TranslatorProvider::IndexTranslate);
+
+    let mut config = restored;
+    config.translator.provider = TranslatorProvider::SnapTextCloud;
+    update_config_inner(&state, config).expect("switch back to cloud");
+    assert_eq!(
+        state.translator.read().expect("translator").provider(),
+        &TranslatorProvider::SnapTextCloud
+    );
+}
+
 #[test]
 fn app_state_migrates_removed_translator_providers() {
     let mut config = AppConfig::default();

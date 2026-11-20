@@ -58,3 +58,27 @@ test("normalizes Google Web aliases and distinguishes both Google choices in bot
     expect(labels.googleWebProvider).not.toBe(labels.googleApiProvider);
   }
 });
+
+/** 验证 B 站直连只切换服务标识，并保留其他服务配置及自动翻译设置。 */
+test("enables Index-Translate without credentials and preserves auto-translate preferences", () => {
+  const current = configuration();
+  current.ui.auto_translate = false;
+  const draft = configuration();
+  draft.ui.auto_translate = true;
+  draft.translator.provider = "index_translate";
+  const saved = sanitizeProviderConfig(mergeProviderConfig(current, draft));
+
+  expect(visibleProvider(" index_translate ")).toBe("index_translate");
+  expect(saved.translator.provider).toBe("index_translate");
+  expect(saved.translator.snaptext_cloud.enabled).toBe(false);
+  expect(saved.translator.snaptext_cloud.privacy_sensitive).toBe(true);
+  expect(saved.translator.deepl.api_key).toBe("deepl-key");
+  expect(saved.ui.auto_translate).toBe(false);
+  expect(providerRequiresApiKey("index_translate")).toBe(false);
+
+  for (const language of ["zh_cn", "en"]) {
+    const labels = labelsForLanguage(language);
+    expect(translatorProviderLabel("index_translate", labels)).toBe(labels.indexTranslateProvider);
+    expect(labels.indexTranslateProvider).not.toBe(labels.snaptextCloudProvider);
+  }
+});

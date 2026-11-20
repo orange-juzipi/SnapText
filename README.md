@@ -23,9 +23,12 @@ SnapText 是一个跨平台桌面 OCR 翻译工作台：截取屏幕区域、导
 | DeepL | DeepL 翻译 API | API Key |
 | Google Cloud Translation | 官方翻译 API，由本机直接请求 | API Key |
 | Google 网页翻译（本机直连） | 实验性网页接口，由本机网络直接请求 Google | 无需 API Key，单条原文最多 1000 字符 |
+| Index-Translate（B 站实验服务） | 本机直连 B 站的免费文本翻译 API | 无需 API Key，需主动选择并保存 |
 | Local HTTP | 本地开发和 mock 验收 | 仅用于开发配置 |
 
 在主页点击当前翻译服务，或进入“设置 → 翻译服务 → 更换或配置”，选择“Google 网页翻译（本机直连）”并保存即可使用。该选项不经过 SnapText Cloud，也不会在请求失败时自动切回云端；网络出口 IP 取决于本机网络、代理或 VPN。用户需要能够从本机访问 Google，网页接口可能出现限流或服务变更，遇到错误时会直接提示。
+
+在同一个服务选择弹窗中选择“Index-Translate（B 站实验服务）”，点击“保存并启用”即可使用。免费 API 供测试和体验，可能限流、调整或停用。遇到问题时可稍后重试，或手动切回 SnapText 官方源。
 
 ## 支持平台
 
@@ -102,6 +105,7 @@ make dev-local
 - 截图、图片解码、OCR、配置和历史记录默认在本机处理或保存。
 - 选择 OpenAI-compatible、DeepL、Google 或 SnapText Cloud 后，识别文本会按所选 provider 的接口发送到对应服务。
 - Google 网页翻译由桌面程序直接向 Google 发送原文，这次翻译不经过 SnapText Cloud 的设备注册或翻译接口；朗读来源单独配置。
+- Index-Translate 从桌面端直接向 B 站发送待翻译文本和语言信息。截图和导入图片先在本机 OCR，仅发送识别出的文本。开启自动翻译时，输入的原文也会发送。请避免使用该实验服务翻译敏感内容。
 - SnapText Cloud 还会注册设备 ID、公钥、应用版本、操作系统和系统版本，用于设备认证和请求签名。
 - API key 和云端设备私钥只保存在用户应用数据目录。当前版本不会额外使用系统密钥链加密 API key；不要把密钥、设备私钥、用户历史或未脱敏日志提交到仓库。
 

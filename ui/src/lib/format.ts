@@ -50,7 +50,7 @@ export function historyItemMeta(item: HistoryRecord, labels: Labels) {
   return item.target_lang.trim() ? `${source} -> ${languageDisplayName(item.target_lang)}` : source;
 }
 
-/** 使用本地化名称区分 Google 官方 API、网页直连与云端服务。 */
+/** 返回服务的本地化名称，兼容历史配置中的标识。 */
 export function translatorProviderLabel(provider: string | undefined, labels: Labels): string {
   switch (provider?.trim()) {
     case "deepl":
@@ -60,6 +60,8 @@ export function translatorProviderLabel(provider: string | undefined, labels: La
     case "google_web":
     case "google-web":
       return labels.googleWebProvider;
+    case "index_translate":
+      return labels.indexTranslateProvider;
     case "snaptext_cloud":
     case "openai_compatible":
     case "local_http":
