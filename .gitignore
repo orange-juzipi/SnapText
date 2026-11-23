@@ -62,7 +62,9 @@ models/manifest.json
 #.idea/
 
 
-goal
+# Local documentation and planning directories
+/docs/
+/goal/
 .playwright-mcp
 .env
 .env.*
