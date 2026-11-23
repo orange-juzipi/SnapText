@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -61,6 +64,41 @@ def write_fake_installed_models(model_dir: Path) -> dict[str, str]:
         path.write_text(payload, encoding="utf-8")
         hashes[name] = sha256_file(path)
     return hashes
+
+
+def check_make_install_onnx(root: Path) -> None:
+    """Check that Make validates existing models and leaves partial installs intact."""
+    make = shutil.which("make")
+    if make is None or shutil.which("sh") is None:
+        print("Skipping Make target check because Make or a POSIX shell is unavailable.")
+        return
+
+    scripts_dir = root / "scripts"
+    scripts_dir.mkdir()
+    shutil.copy2(ROOT / "scripts" / "verify_ocr_models.py", scripts_dir)
+    command = [
+        make,
+        "-f",
+        str(ROOT / "Makefile"),
+        "install-onnx",
+        f'PADDLE_PYTHON="{Path(sys.executable).as_posix()}"',
+    ]
+    env = {**os.environ, "PIP_NO_INDEX": "1", "PIP_DISABLE_PIP_VERSION_CHECK": "1"}
+    valid = subprocess.run(
+        command, cwd=root, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+    )
+    assert_success(valid)
+    assert_contains(valid.stdout, "OCR model file and checksum verification passed.")
+    assert not (root / ".venv-paddle").exists()
+
+    (root / "models" / "rec.onnx").unlink()
+    partial = subprocess.run(
+        command, cwd=root, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+    )
+    assert partial.returncode != 0
+    assert_contains(partial.stdout, "Missing OCR model files")
+    assert not (root / "models" / "rec.onnx").exists()
+    assert not (root / ".venv-paddle").exists()
 
 
 def main() -> int:
@@ -145,6 +183,8 @@ def main() -> int:
         for name, digest in hashes.items():
             assert manifest["files"][name]["sha256"] == digest
             assert manifest["files"][name]["url"].startswith("file://")
+
+        check_make_install_onnx(root)
 
     print("PaddleOCR ONNX installer self-test passed.")
     return 0

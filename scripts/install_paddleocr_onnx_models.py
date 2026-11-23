@@ -357,7 +357,8 @@ def write_model_manifest(
 
 
 def verify_models(model_dir: Path, skip_smoke_test: bool) -> None:
-    command = ["python3", "scripts/verify_ocr_models.py", str(model_dir), "--require-sha256"]
+    """Validate the installed models with the installer’s Python interpreter."""
+    command = [sys.executable, "scripts/verify_ocr_models.py", str(model_dir), "--require-sha256"]
     if skip_smoke_test:
         command.append("--skip-smoke-test")
     run(command)

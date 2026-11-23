@@ -76,7 +76,13 @@ models/rec.onnx
 models/rec_dict.txt
 ```
 
-仓库不提交真实模型。最小的 manifest 安装流程如下，真实 URL 和 SHA-256 需要由维护者按发布版本填写：
+安装 Python 3.12 后，在仓库根目录一键下载、转换和校验 PaddleOCR ONNX 模型。
+
+```bash
+make install-onnx
+```
+
+仓库不提交真实模型。如果要安装已经转换好的模型，可以使用 manifest，真实 URL 和 SHA-256 由维护者按发布版本填写。
 
 ```bash
 cp models/manifest.example.json models/manifest.json

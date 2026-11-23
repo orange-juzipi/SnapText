@@ -13,12 +13,22 @@ SnapText 的桌面 OCR 流程要求 `models/` 目录包含 PP-OCRv6 multilingual
 
 1. 四个文件必须位于 `models/` 根目录。
 2. `rec_dict.txt` 不能为空。
-3. 四个 ONNX 文件必须能被 `ort` 正常加载。
+3. 三个 ONNX 文件必须能被 `ort` 正常加载。
 4. 正式发布必须同时提供 `manifest.json` 和 `SHA256SUMS`，用于固定本次交付的模型来源和资产版本。
 
 ## 安装方式
 
-推荐先使用官方 PaddleOCR 推理模型自动落地脚本。该脚本默认下载 PP-OCRv6 tiny 检测、识别和方向分类模型，使用 PaddleX/Paddle2ONNX 转为 ONNX，再写入 SnapText 需要的四个固定文件：
+安装 Python 3.12 后，在仓库根目录运行以下命令。
+
+```bash
+make install-onnx
+```
+
+首次运行会创建 `.venv-paddle` 并安装转换依赖，再下载官方 PP-OCRv6 tiny 检测、识别和方向分类模型，转换成 ONNX 并写入 `models/`。命令会校验模型文件、`manifest.json` 和 `SHA256SUMS`。再次运行时会校验已有文件，发现缺失或校验失败时会报错。完整 OCR 测试可以按下文的校验步骤单独运行。
+
+可通过 `make install-onnx PADDLE_PYTHON=python3.11` 指定创建环境的解释器。Windows 请在支持 POSIX shell 的 Make 环境中运行，默认使用 `py -3.12`。
+
+如果需要切换精度、使用镜像或显式覆盖已有模型，可以手动运行转换脚本。
 
 ```bash
 python3.12 -m venv .venv-paddle
