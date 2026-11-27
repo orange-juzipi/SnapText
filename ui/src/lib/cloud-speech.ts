@@ -62,6 +62,15 @@ export type SpeechStreamEvent = {
 export function getSpeechCapabilities(): Promise<SpeechCapabilities> {
   return tauriInvoke("get_speech_capabilities");
 }
+
+/** 试听和播放共享短期目录缓存，同时发起的查询也只走一次 IPC。 */
+export const speechCapabilitiesQuery = {
+  queryKey: ["speech-capabilities"] as const,
+  queryFn: getSpeechCapabilities,
+  staleTime: 30_000,
+  retry: false,
+  networkMode: "always" as const,
+};
 /** 获取当前设备的语音剩余额度。 */
 export function getSpeechQuota(): Promise<SpeechQuota> {
   return tauriInvoke("get_speech_quota");

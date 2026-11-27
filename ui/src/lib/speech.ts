@@ -3,7 +3,8 @@ import { listen } from "@tauri-apps/api/event";
 import type { SpeechConfig } from "@/lib/types";
 import type { LocalSpeechAudio } from "@/lib/types";
 import { tauriInvoke } from "@/lib/tauri";
-import { getSpeechCapabilities, type SpeechStreamEvent } from "@/lib/cloud-speech";
+import { queryClient } from "@/app/query-client";
+import { speechCapabilitiesQuery, type SpeechStreamEvent } from "@/lib/cloud-speech";
 import { PcmStreamPlayer, decodeAudioFrame } from "@/lib/pcm-player";
 
 /** 所有朗读入口共享的参数。 */
@@ -18,6 +19,8 @@ type SpeakTextInput = {
   englishAccent?: string;
   /** 词典提供的真人发音优先于合成。 */
   audioUrl?: string;
+  /** 当前会话首次开始播放时更新界面，主动取消不会触发。 */
+  onStart?: () => void;
   /** 播放结束或主动停止。 */
   onEnd?: () => void;
   /** 播放失败，含已脱敏的提示。 */
@@ -35,6 +38,12 @@ type Session = {
   mode: "pending" | "dictionary" | "cloud" | "local" | "system";
   /** 会话是否已经清理。 */
   stopped: boolean;
+  /** 已向调用方报告首段音频开始播放。 */
+  started: boolean;
+  /** 云端音频或系统启动事件的等待期限。 */
+  timer?: ReturnType<typeof setTimeout>;
+  /** 保留当前系统语句，清理时只取消本会话提交的朗读。 */
+  utterance?: SpeechSynthesisUtterance;
   /** 流式播放器，在点击手势内初始化。 */
   player?: PcmStreamPlayer;
   /** 当前词典音频。 */
@@ -50,6 +59,9 @@ type Session = {
 };
 let active: Session | null = null;
 let stopListener: Promise<void> | undefined;
+const CLOUD_START_TIMEOUT_MS = 8_000;
+const CLOUD_IDLE_TIMEOUT_MS = 12_000;
+const SYSTEM_START_TIMEOUT_MS = 5_000;
 
 /** 按所选引擎判断环境是否具备播放能力。 */
 export function isSpeechSupported(config?: SpeechConfig): boolean {
@@ -64,7 +76,7 @@ export function speakText(input: SpeakTextInput): Promise<void> {
   if (input.config?.enabled === false) return Promise.reject(new Error("语音朗读未启用"));
   stopSpeech();
   return new Promise<void>((resolve, reject) => {
-    const session: Session = { id: crypto.randomUUID(), input: { ...input, text }, mode: "pending", stopped: false, resolve, reject };
+    const session: Session = { id: crypto.randomUUID(), input: { ...input, text }, mode: "pending", stopped: false, started: false, resolve, reject };
     active = session;
     // 音频权限必须在点击手势内取得，不能等 HTTP 或 IPC 完成后才创建。
     if (input.config?.engine === "snaptext_cloud" && typeof AudioContext !== "undefined") {
@@ -88,7 +100,6 @@ export function speakAudioUrl(audioUrl: string, onEnd?: () => void, onError?: ()
 /** 立即清理本地音频，异步取消对应原生请求，不影响新会话。 */
 export function stopSpeech(): void {
   if (active) finish(active);
-  else if (canUseSystemSpeech()) window.speechSynthesis.cancel();
 }
 
 /** 跨窗口停止事件只作用于匹配的会话，不携带音频或文本。 */
@@ -128,7 +139,9 @@ async function beginSession(session: Session): Promise<void> {
       void startEngine(session).catch((error: unknown) => fail(session, error));
     };
     audio.onerror = fallback;
-    void audio.play().then(() => { if (isCurrent(session)) session.resolve(); }).catch(fallback);
+    void audio.play().then(() => {
+      if (isCurrent(session) && session.mode === "dictionary") markStarted(session);
+    }).catch(fallback);
     return;
   }
   await startEngine(session);
@@ -144,11 +157,12 @@ async function startEngine(session: Session): Promise<void> {
   }
   if (session.input.config?.engine !== "snaptext_cloud") { startSystem(session); return; }
   session.mode = "cloud";
+  session.timer = setTimeout(() => cloudFailed(session, new Error("等待云端首段语音超时")), CLOUD_START_TIMEOUT_MS);
   try {
     const language = normalizedCloudLanguage(session.input.lang);
     if (!language) throw new Error("此语言暂不支持 AI 朗读");
     if (!session.player || !isTauri()) throw new Error("当前环境不支持 AI 音频播放");
-    const capabilities = await getSpeechCapabilities();
+    const capabilities = await queryClient.fetchQuery(speechCapabilitiesQuery);
     if (!isCurrent(session) || session.mode !== "cloud") return;
     if (!capabilities.enabled) throw new Error("云端 AI 朗读暂未启用");
     if (!capabilities.languages.includes(language)) throw new Error("此语言暂不支持 AI 朗读");
@@ -172,9 +186,13 @@ async function startEngine(session: Session): Promise<void> {
       if (!cloudId || event.request_id !== cloudId) throw new Error("语音会话不匹配");
       if (event.type === "audio") {
         if (event.sequence !== sequence++ || typeof event.data !== "string") throw new Error("语音分片顺序错误");
-        await session.player!.enqueue(decodeAudioFrame(event.data));
+        const scheduled = await session.player!.enqueue(decodeAudioFrame(event.data));
         if (!isCurrent(session) || session.mode !== "cloud") return;
-        session.resolve();
+        if (scheduled) {
+          markStarted(session);
+          clearTimeout(session.timer);
+          session.timer = setTimeout(() => cloudFailed(session, new Error("云端语音播放中断，请重试")), CLOUD_IDLE_TIMEOUT_MS);
+        }
         await tauriInvoke("acknowledge_speech", { sessionId: session.id, sequence: event.sequence });
       } else if (event.type === "error") {
         terminal = true;
@@ -240,7 +258,7 @@ async function startLocalSpeech(session: Session): Promise<void> {
       finish(session);
     };
     source.start();
-    session.resolve();
+    markStarted(session);
   } catch (error) {
     if (isCurrent(session)) fail(session, error);
   }
@@ -251,6 +269,7 @@ function cloudFailed(session: Session, error: unknown): void {
   if (!isCurrent(session) || session.mode !== "cloud") return;
   const message = error instanceof Error ? error.message : "云端语音暂不可用";
   if (session.player?.hasStarted) { fail(session, new Error(message)); return; }
+  clearTimeout(session.timer);
   session.mode = "system";
   session.player?.cancel(); session.player = undefined;
   // 只中止网络流，保留播放权，避免停止事件误杀接下来的系统朗读。
@@ -272,10 +291,23 @@ function startSystem(session: Session): void {
   utterance.volume = clamp(input.config?.volume ?? 1, 0, 1);
   const voice = bestVoiceForLang(utterance.lang);
   if (voice) utterance.voice = voice;
+  session.utterance = utterance;
+  session.timer = setTimeout(() => fail(session, new Error("系统朗读未能启动，请重试")), SYSTEM_START_TIMEOUT_MS);
+  utterance.onstart = () => {
+    clearTimeout(session.timer);
+    markStarted(session);
+  };
   utterance.onend = () => finish(session);
   utterance.onerror = () => fail(session, new Error("系统朗读失败"));
   window.speechSynthesis.speak(utterance);
+}
+
+/** 仅报告当前会话的首次播放，避免停止或迟到的事件点亮旧按钮。 */
+function markStarted(session: Session): void {
+  if (!isCurrent(session) || session.started) return;
+  session.started = true;
   session.resolve();
+  session.input.onStart?.();
 }
 
 /** 失败提示与开始阶段的 Promise 拒绝保持一致。 */
@@ -287,6 +319,7 @@ function fail(session: Session, error: unknown): void {
 function finish(session: Session, error?: Error): void {
   if (!isCurrent(session)) return;
   session.stopped = true; active = null;
+  clearTimeout(session.timer);
   session.player?.cancel();
   if (session.localSource) {
     session.localSource.onended = null;
@@ -299,7 +332,10 @@ function finish(session: Session, error?: Error): void {
     session.localContext = undefined;
   }
   if (session.audio) { session.audio.onended = null; session.audio.onerror = null; session.audio.pause(); }
-  if (canUseSystemSpeech()) window.speechSynthesis.cancel();
+  if (session.utterance) {
+    session.utterance.onstart = session.utterance.onend = session.utterance.onerror = null;
+    window.speechSynthesis.cancel();
+  }
   if (isTauri()) void tauriInvoke("cancel_speech", { sessionId: session.id }).catch(() => undefined);
   if (error) { session.reject(error); session.input.onError?.(error.message); }
   else { session.resolve(); session.input.onEnd?.(); }

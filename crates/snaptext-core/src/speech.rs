@@ -8,7 +8,16 @@ use crate::{
 };
 use futures_util::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, pin::Pin, time::Duration};
+use std::{collections::BTreeMap, pin::Pin, sync::LazyLock, time::Duration};
+
+/// 目录、额度和合成共用连接池，首次合成也能复用刚查询目录的 HTTPS 连接。
+static SPEECH_CLIENT: LazyLock<reqwest::Result<reqwest::Client>> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .read_timeout(Duration::from_secs(125))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+});
 
 /// 独立的云端朗读请求，不受翻译 provider 选择影响。
 #[derive(Clone, Serialize, Deserialize)]
@@ -123,14 +132,19 @@ pub type SpeechStream = Pin<Box<dyn Stream<Item = Result<SpeechEvent>> + Send>>;
 
 /// 获取 cloud 语音能力，独立于翻译开关。
 pub async fn capabilities(config: &SnapTextCloudConfig) -> Result<SpeechCapabilities> {
-    let response = send_signed(
-        config,
-        reqwest::Method::GET,
-        "v1/speech/capabilities",
-        Vec::new(),
-    )
-    .await?;
-    let bytes = bounded_body(response).await?;
+    // 目录是小型 JSON；注册、响应头或响应体迟迟未到时都应允许下次点击重试。
+    let bytes = tokio::time::timeout(Duration::from_secs(6), async {
+        let response = send_signed(
+            config,
+            reqwest::Method::GET,
+            "v1/speech/capabilities",
+            Vec::new(),
+        )
+        .await?;
+        bounded_body(response).await
+    })
+    .await
+    .map_err(|_| Error::Speech("云端音色目录响应超时".into()))??;
     serde_json::from_slice(&bytes).map_err(|_| Error::Speech("云端语音能力响应无效".into()))
 }
 /// 拉取当前设备的语音配额，供设置页显示。
@@ -194,16 +208,13 @@ async fn send_signed(
     path: &str,
     body: Vec<u8>,
 ) -> Result<reqwest::Response> {
-    let client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(10))
-        .read_timeout(Duration::from_secs(125))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
+    let client = SPEECH_CLIENT
+        .as_ref()
         .map_err(|_| Error::Speech("无法初始化云连接".into()))?;
     let identity = CloudDeviceIdentity::load_or_create(config)?;
     tokio::time::timeout(
         Duration::from_secs(20),
-        ensure_snaptext_cloud_registered(config, &client, &identity, false),
+        ensure_snaptext_cloud_registered(config, client, &identity, false),
     )
     .await
     .map_err(|_| Error::Speech("云设备注册超时".into()))??;
@@ -241,7 +252,7 @@ async fn send_signed(
         {
             tokio::time::timeout(
                 Duration::from_secs(20),
-                ensure_snaptext_cloud_registered(config, &client, &identity, true),
+                ensure_snaptext_cloud_registered(config, client, &identity, true),
             )
             .await
             .map_err(|_| Error::Speech("云设备注册超时".into()))??;

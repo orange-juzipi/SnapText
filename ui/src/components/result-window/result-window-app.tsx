@@ -1,6 +1,6 @@
 import type * as React from "react";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
-import { Copy, Volume2, X } from "lucide-react";
+import { Copy, LoaderCircle, Volume2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { events, getConfig, getResultSnapshot, unpinResultWindow } from "@/lib/api";
 import { sourceLabel, targetLangLabel } from "@/lib/format";
@@ -34,6 +34,7 @@ export function ResultWindowApp() {
   const [dictionaryEntries, setDictionaryEntries] = useState<DictionaryEntry[]>([]);
   const [config, setConfig] = useState<AppConfig | null>(null);
   const latestSpeechConfigRef = useRef<AppConfig["speech"] | null>(null);
+  const [speechPreparing, setSpeechPreparing] = useState(false);
   const [activeSpeechKey, setActiveSpeechKey] = useState<string | null>(null);
   const labels = labelsForLanguage(config?.ui.language);
   const labelsRef = useRef(labels);
@@ -237,21 +238,33 @@ export function ResultWindowApp() {
       return;
     }
     try {
+      setSpeechPreparing(true);
       setActiveSpeechKey(key);
       const speechInput = {
         text,
         lang,
         config: config?.speech,
         englishAccent: accent,
-        onEnd: () => setActiveSpeechKey((current) => (current === key ? null : current)),
+        /** 收到可播放的音频后才结束按钮的等待提示。 */
+        onStart: () => {
+          setSpeechPreparing(false);
+          setStatus((current) => current === labels.speechPreparing ? labels.speechStarted : current);
+        },
+        /** 取消或正常结束时恢复空闲文案，保留回退和故障说明。 */
+        onEnd: () => {
+          setActiveSpeechKey((current) => current === key ? null : current);
+          setStatus((current) => current === labels.speechPreparing || current === labels.speechStarted ? labels.ready : current);
+        },
         onNotice: (message: string) => setStatus(message),
         onError: (message?: string) => {
           setActiveSpeechKey((current) => (current === key ? null : current));
           if (message) setStatus(message);
         },
       };
-      setStatus(labels.speechStarted);
-      await speakText({ ...speechInput, audioUrl: audioUrl ?? undefined });
+      const playback = speakText({ ...speechInput, audioUrl: audioUrl ?? undefined });
+      // speakText 会同步停止旧会话，在它的结束回调之后设置新状态。
+      setStatus(labels.speechPreparing);
+      await playback;
     } catch (error) {
       setActiveSpeechKey((current) => (current === key ? null : current));
       setStatus(error instanceof Error ? error.message : String(error));
@@ -276,6 +289,7 @@ export function ResultWindowApp() {
           {englishAccents.includes("american") ? (
             <SpeechButton
               active={activeSpeechKey === `${scope}:american`}
+              preparingLabel={speechPreparing ? labels.speechPreparing : undefined}
               accentLabel="美"
               ariaLabel={disabled ? tooltipLabel : `${label}：美式发音`}
               disabled={disabled}
@@ -286,6 +300,7 @@ export function ResultWindowApp() {
           {englishAccents.includes("british") ? (
             <SpeechButton
               active={activeSpeechKey === `${scope}:british`}
+              preparingLabel={speechPreparing ? labels.speechPreparing : undefined}
               accentLabel="英"
               ariaLabel={disabled ? tooltipLabel : `${label}：英式发音`}
               disabled={disabled}
@@ -299,6 +314,7 @@ export function ResultWindowApp() {
     return (
       <SpeechButton
         active={activeSpeechKey === `${scope}:default`}
+        preparingLabel={speechPreparing ? labels.speechPreparing : undefined}
         ariaLabel={tooltipLabel}
         disabled={disabled}
         onClick={() => handleSpeak(text, lang, `${scope}:default`)}
@@ -371,6 +387,7 @@ export function ResultWindowApp() {
 /** Renders a speech control with a tonal active state instead of a primary-action fill. */
 function SpeechButton({
   active,
+  preparingLabel,
   accentLabel,
   ariaLabel,
   disabled,
@@ -379,6 +396,8 @@ function SpeechButton({
 }: {
   /** 当前按钮是否正在朗读。 */
   active: boolean;
+  /** 等待首段音频时，在已点选按钮上展示的提示。 */
+  preparingLabel?: string;
   /** 英语口音的可选短标签。 */
   accentLabel?: string;
   /** 提供给辅助技术的操作名称。 */
@@ -394,13 +413,15 @@ function SpeechButton({
     <IconTooltipButton
       className={active ? "workspace-speech-button-active" : undefined}
       onClick={onClick}
-      label={tooltipLabel ?? ariaLabel}
+      label={active && preparingLabel ? preparingLabel : tooltipLabel ?? ariaLabel}
       pressed={active}
       variant="secondary"
       size={accentLabel ? "sm" : "icon"}
       disabled={disabled}
     >
-      <Volume2 size={15} />
+      {active && preparingLabel
+        ? <LoaderCircle size={15} className="motion-safe:animate-spin" aria-hidden="true" />
+        : <Volume2 size={15} />}
       {accentLabel ? <span>{accentLabel}</span> : null}
     </IconTooltipButton>
   );

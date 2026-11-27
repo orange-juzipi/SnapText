@@ -131,6 +131,7 @@ export function WorkspacePage() {
   const translateImageMutation = useTranslateImageMutation();
   const updateConfigMutation = useUpdateConfigMutation();
   const pinMutation = usePinResultMutation();
+  const [speechPreparing, setSpeechPreparing] = useState(false);
   const [activeSpeechKey, setActiveSpeechKey] = useState<string | null>(null);
   const [voiceInputActive, setVoiceInputActive] = useState(false);
   const [voiceInputAvailable, setVoiceInputAvailable] = useState(false);
@@ -788,20 +789,29 @@ export function WorkspacePage() {
       return;
     }
     try {
+      setSpeechPreparing(true);
       setActiveSpeechKey(key);
+      let playbackStarted = false;
       const speechInput = {
         text,
         lang,
         config: configQuery.data?.speech,
         englishAccent: accent,
+        /** 收到可播放的音频后才结束按钮的等待提示。 */
+        onStart: () => {
+          playbackStarted = true;
+          setSpeechPreparing(false);
+          workspace.setStatus(labels.speechStarted);
+        },
         onEnd: () => setActiveSpeechKey((current) => (current === key ? null : current)),
-        onNotice: (message: string) => workspace.setStatus(message),
+        onNotice: (message: string) => workspace.showToast(message),
         onError: (message?: string) => {
           setActiveSpeechKey((current) => (current === key ? null : current));
-          if (message) workspace.setStatus(message);
+          // 启动前的错误由下方 catch 提示，开始播放后的中断由此回调提示。
+          if (playbackStarted && message) workspace.showError(message);
         },
       };
-      workspace.setStatus(labels.speechStarted);
+      workspace.setStatus(labels.speechPreparing);
       await speakText({ ...speechInput, audioUrl: audioUrl ?? undefined });
     } catch (error) {
       setActiveSpeechKey((current) => (current === key ? null : current));
@@ -893,6 +903,7 @@ export function WorkspacePage() {
           {englishAccents.includes("american") ? (
             <SpeechButton
               active={activeSpeechKey === `${scope}:american`}
+              preparingLabel={speechPreparing ? labels.speechPreparing : undefined}
               accentLabel={labels.englishAccentAmericanShort}
               ariaLabel={disabled ? tooltipLabel : `${label}: ${labels.englishAccentAmerican}`}
               disabled={disabled}
@@ -903,6 +914,7 @@ export function WorkspacePage() {
           {englishAccents.includes("british") ? (
             <SpeechButton
               active={activeSpeechKey === `${scope}:british`}
+              preparingLabel={speechPreparing ? labels.speechPreparing : undefined}
               accentLabel={labels.englishAccentBritishShort}
               ariaLabel={disabled ? tooltipLabel : `${label}: ${labels.englishAccentBritish}`}
               disabled={disabled}
@@ -916,6 +928,7 @@ export function WorkspacePage() {
     return (
       <SpeechButton
         active={activeSpeechKey === `${scope}:default`}
+        preparingLabel={speechPreparing ? labels.speechPreparing : undefined}
         ariaLabel={tooltipLabel}
         disabled={disabled}
         onClick={() => handleSpeak(text, lang, `${scope}:default`)}
@@ -1546,6 +1559,7 @@ export function WorkspacePage() {
 /** Renders a speech control with a tonal active state instead of a primary-action fill. */
 function SpeechButton({
   active,
+  preparingLabel,
   accentLabel,
   ariaLabel,
   disabled,
@@ -1553,6 +1567,8 @@ function SpeechButton({
   tooltipLabel,
 }: {
   active: boolean;
+  /** 等待首段音频时，在已点选按钮上展示的提示。 */
+  preparingLabel?: string;
   accentLabel?: string;
   ariaLabel: string;
   disabled: boolean;
@@ -1563,13 +1579,15 @@ function SpeechButton({
     <IconTooltipButton
       className={active ? "workspace-speech-button-active" : undefined}
       onClick={onClick}
-      label={tooltipLabel ?? ariaLabel}
+      label={active && preparingLabel ? preparingLabel : tooltipLabel ?? ariaLabel}
       pressed={active}
       variant="secondary"
       size={accentLabel ? "md" : "icon"}
       disabled={disabled}
     >
-      <Volume2 size={16} />
+      {active && preparingLabel
+        ? <LoaderCircle size={16} className="motion-safe:animate-spin" aria-hidden="true" />
+        : <Volume2 size={16} />}
       {accentLabel ? <span>{accentLabel}</span> : null}
     </IconTooltipButton>
   );

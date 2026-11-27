@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Field, FieldHint, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
-import { getSpeechCapabilities, getSpeechQuota } from "@/lib/cloud-speech";
+import { getSpeechQuota, speechCapabilitiesQuery } from "@/lib/cloud-speech";
 import { speakText, stopSpeech } from "@/lib/speech";
 import type { SpeechConfig } from "@/lib/types";
 
@@ -17,7 +17,7 @@ export function SpeechSettingsFields({ config, onChange }: {
 }) {
   const cloud = config.engine === "snaptext_cloud";
   const local = config.engine === "local_openai_compatible";
-  const capabilities = useQuery({ queryKey: ["speech-capabilities"], queryFn: getSpeechCapabilities, enabled: cloud && config.enabled, retry: false, staleTime: 30_000, refetchInterval: 30_000 });
+  const capabilities = useQuery({ ...speechCapabilitiesQuery, enabled: cloud && config.enabled, refetchInterval: 30_000 });
   const quota = useQuery({ queryKey: ["speech-quota"], queryFn: getSpeechQuota, enabled: cloud && config.enabled, retry: false, refetchInterval: 30_000 });
   const cloudStatus = !config.enabled
     ? "off"

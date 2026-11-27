@@ -63,13 +63,13 @@ export class PcmStreamPlayer {
     return this.firstTime !== null && this.context.currentTime >= this.firstTime;
   }
 
-  /** 解码后按顺序调度一帧，队列已满时让生产者等待。 */
-  async enqueue(bytes: Uint8Array): Promise<void> {
+  /** 调度至少一个完整采样时返回 true，队列已满时让生产者等待。 */
+  async enqueue(bytes: Uint8Array): Promise<boolean> {
     if (bytes.byteLength > 48_000) throw new Error("语音分片过大");
     await this.ready;
     this.assertActive();
     const samples = this.decoder.decode(bytes);
-    if (!samples.length) return;
+    if (!samples.length) return false;
     while (this.nextTime - this.context.currentTime > 2.5) await this.tick();
     this.assertActive();
     const buffer = this.context.createBuffer(1, samples.length, 24_000);
@@ -84,6 +84,7 @@ export class PcmStreamPlayer {
     /** 节点播放结束后及时断开，释放已经消费的音频内存。 */
     source.onended = () => { this.sources.delete(source); source.disconnect(); };
     source.start(start);
+    return true;
   }
 
   /** 等待已排队音频真正播放完，网络 done 不能提前清空 UI。 */

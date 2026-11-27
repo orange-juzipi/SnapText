@@ -1,4 +1,5 @@
-import { beforeEach, afterEach, expect, mock, test } from 'bun:test';
+import { beforeEach, afterEach, expect, jest, mock, test } from 'bun:test';
+import { queryClient } from '../src/app/query-client';
 import { FakeAudioContext, settle } from './audio-fixture';
 /** 测试 IPC 管道，实际 PCM 由真实播放器消费。 */
 class TestChannel { /** 原生消息回调。 */ onmessage = (_message: any) => {}; }
@@ -6,6 +7,8 @@ class TestChannel { /** 原生消息回调。 */ onmessage = (_message: any) => 
 const commands: Array<{ command: string; args: any }> = [];
 /** 系统朗读记录。 */
 const utterances: any[] = [];
+/** 模拟系统引擎接收了请求但一直没有开始播放。 */
+let autoStartSystem = true;
 /** 跨窗口停止订阅。 */
 let stopHandler: (event: any) => void;
 /** 首次窗口启动时模拟一次临时监听注册失败。 */
@@ -42,27 +45,42 @@ class DictionaryAudio {
 }
 Object.assign(globalThis, {
   AudioContext: FakeAudioContext, SpeechSynthesisUtterance: Utterance, Audio: DictionaryAudio,
-  window: { Audio: DictionaryAudio, SpeechSynthesisUtterance: Utterance, addEventListener() {}, speechSynthesis: { cancel() {}, getVoices: () => [], speak: (value: any) => utterances.push(value) } },
+  window: { Audio: DictionaryAudio, SpeechSynthesisUtterance: Utterance, addEventListener() {}, speechSynthesis: { cancel() {}, getVoices: () => [],
+    /** 记录系统语句，按用例决定是否触发真正的开始事件。 */
+    speak(value: any) { utterances.push(value); if (autoStartSystem) value.onstart?.(); },
+  } },
 });
 const { speakText, stopSpeech } = await import('../src/lib/speech');
 /** 本地偏好中没有厂商凭据。 */
 const config = { enabled: true, engine: 'snaptext_cloud' as const, rate: 1, volume: 1, english_accent: 'american', english_accents: ['american'], cloud_voice_by_lang: { en: 'Mia', zh_cn: '冰糖' }, local_ai: { endpoint: '', api_key: null, model: '', voice: '', response_format: 'wav' as const } };
 /** 清理记录并恢复正常能力接口。 */
 beforeEach(() => {
+  queryClient.clear();
+  autoStartSystem = true;
   commands.length = 0; utterances.length = 0; stream = undefined; FakeAudioContext.instances.length = 0;
   capabilities = async () => ({ enabled: true, languages: ['zh_cn', 'en'], max_chars_per_request: 2000, voices: [{ id: 'Mia', language: 'en' }], default_voices: { en: 'Mia' } });
 });
 /** 关闭剩余会话。 */
-afterEach(() => { stopSpeech(); stream?.resolve(); });
+afterEach(() => { stopSpeech(); stream?.resolve(); jest.useRealTimers(); });
+/** 等待本轮微任务全部完成；IPC 交付独立于测试推进的播放时钟。 */
+async function flushSpeechEvents() {
+  const { port1, port2 } = new MessageChannel();
+  await new Promise<void>((resolve) => {
+    port1.onmessage = () => resolve();
+    port2.postMessage(null);
+  });
+  port1.close();
+  port2.close();
+}
 /** 按顺序投递一条原生流事件。 */
 async function send(event: object) {
   stream!.channel.onmessage({ session_id: stream!.sessionId, event: { request_id: 'cloud-fixture', ...event } });
-  await settle();
+  await flushSpeechEvents();
 }
 /** 等待能力请求和所有权注册。 */
 async function begin(options: Record<string, unknown> = {}) {
   const ready = speakText({ text: 'hello', lang: 'en', config, ...options });
-  await settle();
+  await flushSpeechEvents();
   return { ready };
 }
 /** 一次临时 IPC 注册失败不能使此窗口后续所有朗读永久失败。 */
@@ -141,4 +159,72 @@ test('unsupported language uses system', async () => {
   await speakText({ text: 'bonjour', lang: 'fr', config });
   expect(utterances[0].lang).toBe('fr-FR');
   expect(commands.some((call) => call.command === 'start_cloud_speech')).toBe(false);
+});
+
+/** 快速切换口音时共享正在获取的目录，随后重播也复用已返回的目录。 */
+test('accent switches share one capabilities request and keep separate synthesis', async () => {
+  const catalog = await capabilities();
+  const pending = Promise.withResolvers<typeof catalog>();
+  capabilities = () => pending.promise;
+  const first = await begin({ englishAccent: 'american' });
+  const second = await begin({ englishAccent: 'british' });
+  pending.resolve(catalog);
+  await first.ready;
+  await settle();
+  const third = await begin({ englishAccent: 'american' });
+  await second.ready;
+  stopSpeech();
+  await third.ready;
+  expect(commands.filter((call) => call.command === 'get_speech_capabilities')).toHaveLength(1);
+  expect(commands.filter((call) => call.command === 'start_cloud_speech')
+    .map((call) => call.args.request.english_accent)).toEqual(['british', 'american']);
+});
+
+/** 只有 meta 和半个采样时仍在等待，超时回退后丢弃迟到的音频。 */
+test('first playable audio deadline falls back once and ignores late frames', async () => {
+  jest.useFakeTimers();
+  const onStart = mock();
+  const onNotice = mock();
+  const { ready } = await begin({ onStart, onNotice });
+  await send({ type: 'meta', format: 'pcm16le', sample_rate: 24000, channels: 1 });
+  await send({ type: 'audio', sequence: 0, data: 'AA==' });
+  expect(onStart).not.toHaveBeenCalled();
+  jest.advanceTimersByTime(8_000);
+  await ready;
+  expect(utterances).toHaveLength(1);
+  expect(onNotice).toHaveBeenCalledTimes(1);
+  expect(onStart).toHaveBeenCalledTimes(1);
+  expect(commands.some((call) => call.command === 'cancel_speech' && call.args.streamOnly)).toBe(true);
+  await send({ type: 'audio', sequence: 1, data: 'AAAAAA==' });
+  expect(FakeAudioContext.instances[0].sources).toHaveLength(0);
+});
+
+/** 已发声后上游不再交付分片，应退出播放状态并保留已播放部分。 */
+test('stalled stream after playback reports an error without repeating the text', async () => {
+  jest.useFakeTimers();
+  const onError = mock();
+  const { ready } = await begin({ onError });
+  await send({ type: 'meta', format: 'pcm16le', sample_rate: 24000, channels: 1 });
+  await send({ type: 'audio', sequence: 0, data: 'AAAAAA==' });
+  await ready;
+  FakeAudioContext.instances[0].advance(1);
+  jest.advanceTimersByTime(12_000);
+  expect(onError).toHaveBeenCalledTimes(1);
+  expect(utterances).toHaveLength(0);
+});
+
+/** 系统引擎不发开始事件时拒绝等待，下次点击仍能正常朗读。 */
+test('silent system engine times out and permits another click', async () => {
+  jest.useFakeTimers();
+  autoStartSystem = false;
+  const system = { ...config, engine: 'system' as const };
+  const onStart = mock();
+  const { ready } = await begin({ config: system, onStart });
+  const failure = ready.catch((error: Error) => error.message);
+  jest.advanceTimersByTime(5_000);
+  expect(await failure).toContain('系统朗读未能启动');
+  expect(onStart).not.toHaveBeenCalled();
+  autoStartSystem = true;
+  await speakText({ text: 'retry', lang: 'en', config: system, onStart });
+  expect(onStart).toHaveBeenCalledTimes(1);
 });
